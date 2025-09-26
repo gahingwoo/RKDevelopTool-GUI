@@ -1,4 +1,4 @@
-## rkdeveloptool gui
+## RKDevelopTool GUI
 
 ### 项目介绍 | Project Introduction
 
