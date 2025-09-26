@@ -1,9 +1,9 @@
-## RKDevelopTool GUI
+## rkdeveloptool gui
 
 ### 项目介绍 | Project Introduction
 
-由于目前市面上缺乏适用于 macOS 和 Linux 系统的、功能完善且易于使用的 `rkdeveloptool` GUI 工具，因此我特此开发了这款跨平台的图形化界面软件。  
-As there is currently a lack of fully-featured and user-friendly `rkdeveloptool` GUI tools for macOS and Linux, so I have developed this cross-platform graphical interface application.
+由于目前市面上缺乏适用于 macOS 和 Linux 系统的、功能完善且易于使用的 rkdeveloptool gui 工具，因此我特此开发了这款跨平台的图形化界面软件。  
+As there is currently a lack of fully-featured and user-friendly rkdeveloptool gui tools for macOS and Linux, so I have developed this cross-platform graphical interface application.
 
 ![项目界面截图](images/home_zh.png)  
 *RKDevelopTool GUI 主界面*
