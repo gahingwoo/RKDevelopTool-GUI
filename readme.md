@@ -2,8 +2,8 @@
 
 ### 项目介绍 | Project Introduction
 
-#### RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端。
-#### RKDevelopTool GUI is a graphical front-end for Rockchip's official rkdeveloptool.
+**RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端。**
+**RKDevelopTool GUI is a graphical front-end for Rockchip's official rkdeveloptool.**
 
 👉 项目主页｜ Project homepage : [https://gahingwoo.github.io/RKDevelopTool-GUI/](https://gahingwoo.github.io/RKDevelopTool-GUI/)
 
