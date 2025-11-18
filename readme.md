@@ -53,3 +53,11 @@ This software aims to provide an intuitive and user-friendly interface, turning 
   **`rkdeveloptool`:** Core dependency. Please install and configure it in your system environment variable `PATH`.
   * **安装教程地址 (rkdeveloptool)：** [https://docs.radxa.com/zero/zero3/low-level-dev/rkdeveloptool](https://docs.radxa.com/zero/zero3/low-level-dev/rkdeveloptool)  
     **Installation Guide of rkdeveloptool:** [https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool)
+
+### 编译 | Compilation 
+
+```bash
+pip install nuitka PyQt6
+python build_nuitka.py
+exec dist/rkdeveloptool-gui
+```

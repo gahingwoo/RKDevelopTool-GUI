@@ -113,7 +113,7 @@ class DeviceWorker(QThread):
 
     def get_chip_info(self):
         try:
-            result = subprocess.run([RKTOOL, "cc"], capture_output=True, text=True, timeout=3)
+            result = subprocess.run([RKTOOL, "rci"], capture_output=True, text=True, timeout=3)
             if result.returncode == 0:
                 return result.stdout.strip()
         except Exception:
@@ -828,19 +828,19 @@ class RKDevToolGUI(QMainWindow):
         self.progress_label.setText(self.tr("ready_status"))
 
     def enter_maskrom_mode(self):
-        self.run_command([RKTOOL, "rf"], "rebooting")
+        self.run_command([RKTOOL, "db"], "rebooting")
 
     def enter_loader_mode(self):
         self.run_command([RKTOOL, "ul"], "loading_loader")
 
     def reset_device(self):
-        self.run_command([RKTOOL, "rb"], "rebooting")
+        self.run_command([RKTOOL, "rd"], "rebooting")
 
     def read_device_info(self):
-        self.run_command([RKTOOL, "ri"], "reading_device_info")
+        self.run_command([RKTOOL, "rcb"], "reading_device_info")
 
     def read_partition_table(self):
-        self.run_command([RKTOOL, "gpt"], "reading_partitions")
+        self.run_command([RKTOOL, "ppt"], "reading_partitions")
 
     # TODO: Implement full firmware backup functionality
     def backup_firmware(self):
@@ -901,7 +901,7 @@ class RKDevToolGUI(QMainWindow):
             self.show_message("Warning", "select_partition", "Warning")
             return
         address = match.group(1)
-        self.run_command([RKTOOL, "wl", address, partition_path], "burning")
+        self.run_command([RKTOOL, "wlx", address, partition_path], "burning")
         
     def backup_partition(self):
         selected_partition = self.partition_combo.currentText()
@@ -921,7 +921,7 @@ class RKDevToolGUI(QMainWindow):
         self.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
         
     def get_detailed_device_info(self):
-        self.run_command([RKTOOL, "ri"], "reading_device_info")
+        self.run_command([RKTOOL, "rcb"], "reading_device_info")
 
     def upgrade_firmware(self):
         firmware_path = self.upgrade_file_path.text()
@@ -938,7 +938,7 @@ class RKDevToolGUI(QMainWindow):
             self.run_command([RKTOOL, "ef", "all"], "erase_flash")
             
     def test_device(self):
-        self.run_command([RKTOOL, "test"], "test_connection")
+        self.run_command([RKTOOL, "td"], "test_connection")
 
     def format_flash(self):
         reply = QMessageBox.question(self, self.tr("format_flash_warning_title"),
