@@ -24,7 +24,6 @@ def build_with_nuitka():
         "--standalone",
         "--onefile", 
         "--follow-imports",
-        "--enable-plugin=pyqt6",
         "--remove-output",
         "--assume-yes-for-downloads",
         "--output-filename=rkdeveloptool-gui",
@@ -39,7 +38,11 @@ def build_with_nuitka():
         cmd.extend([
             "--macos-create-app-bundle",
             "--macos-app-name=RKDevelopTool-GUI",
+            "--macos-app-icon=none",
+            "--enable-plugin=pyside6",
         ])
+    else:  # Linux
+        cmd.append("--enable-plugin=pyqt6")
     
     # Include necessary files
     if os.path.exists("i18n.py"):
