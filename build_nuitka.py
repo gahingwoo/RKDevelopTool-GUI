@@ -22,9 +22,9 @@ def build_with_nuitka():
     cmd = [
         sys.executable, "-m", "nuitka",
         "--standalone",
-        "--onefile", 
+        "--onefile",
         "--follow-imports",
-        "--enable-plugin=pyqt6",
+        "--enable-plugin=pyside6",
         "--remove-output",
         "--assume-yes-for-downloads",
         "--output-filename=rkdeveloptool-gui",
@@ -39,6 +39,7 @@ def build_with_nuitka():
         cmd.extend([
             "--macos-create-app-bundle",
             "--macos-app-name=RKDevelopTool-GUI",
+            "--macos-app-icon=none",
         ])
     
     # Include necessary files

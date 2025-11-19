@@ -47,8 +47,8 @@ This software aims to provide an intuitive and user-friendly interface, turning 
 ### 系统依赖 | System Requirements
 
 * **Python 3.x**
-* **PyQt6：** 用于构建用户界面。  
-  **PyQt6:** Used for building the user interface.
+* **PySide6：** 用于构建用户界面。  
+  **PySide6:** Used for building the user interface.
 * **`rkdeveloptool`：** 核心依赖工具，请务必自行安装并配置到系统环境变量 `PATH` 中。  
   **`rkdeveloptool`:** Core dependency. Please install and configure it in your system environment variable `PATH`.
   * **安装教程地址 (rkdeveloptool)：** [https://docs.radxa.com/zero/zero3/low-level-dev/rkdeveloptool](https://docs.radxa.com/zero/zero3/low-level-dev/rkdeveloptool)  

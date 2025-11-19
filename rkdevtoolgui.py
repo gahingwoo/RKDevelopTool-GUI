@@ -6,15 +6,66 @@ import hashlib
 import tempfile
 import math
 
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt6.QtGui import QFont, QFontDatabase
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, Signal, Qt, QTimer
+from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QFileDialog, QLabel, QLineEdit,
     QProgressBar, QMessageBox, QComboBox, QGroupBox, QGridLayout, QCheckBox,
     QSplitter, QTableWidget, QTableWidgetItem, QSpinBox, QTextBrowser,
     QScrollArea, QHeaderView
 )
+
+
+def _safe_slot(fn):
+    """Return a safer wrapper for signal slots.
+
+    Strategy:
+    - Try calling the target with the provided args/kwargs.
+    - If that raises a TypeError (signature mismatch), attempt to call
+      the function with a truncated positional-arg list matching the
+      target's positional parameter count.
+    - If that fails, fall back to calling with no arguments.
+
+    This approach avoids unhandled TypeError exceptions originating
+    from signature mismatches when PySide6's post-load instrumentation
+    inspects or connects slots in packaged runtimes.
+    """
+    import inspect
+    import functools
+
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        sig = None
+
+    @functools.wraps(fn)
+    def slot(*a, **k):
+        # 1) try full call
+        try:
+            return fn(*a, **k)
+        except TypeError:
+            pass
+
+        # 2) try truncated positional args based on signature
+        if sig is not None:
+            try:
+                pos_params = [p for p in sig.parameters.values()
+                              if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+                num_pos = len(pos_params)
+                try_args = a[:num_pos]
+                return fn(*try_args)
+            except Exception:
+                pass
+
+        # 3) try calling without args
+        try:
+            return fn()
+        except Exception:
+            # Last resort: swallow to avoid crashing the patched connect
+            return None
+
+    return slot
 
 from i18n import TRANSLATIONS
 
@@ -76,8 +127,8 @@ class TranslationManager:
 
 class DeviceWorker(QThread):
     """设备检测工作线程"""
-    device_found = pyqtSignal(list, str, str)  # devices, mode, chip_info
-    device_lost = pyqtSignal()
+    device_found = Signal(list, str, str)  # devices, mode, chip_info
+    device_lost = Signal()
 
     def __init__(self, manager):
         super().__init__()
@@ -110,8 +161,8 @@ class DeviceWorker(QThread):
                     
             except Exception:
                 self.device_lost.emit()
-                
-            self.msleep(2000)
+            # Sleep between detection attempts
+            QThread.msleep(2000)
 
     def get_chip_info(self):
         try:
@@ -127,9 +178,9 @@ class DeviceWorker(QThread):
 
 class CommandWorker(QThread):
     """命令执行工作线程"""
-    progress = pyqtSignal(int)
-    log = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str)
+    progress = Signal(int)
+    log = Signal(str)
+    finished_signal = Signal(bool, str)
 
     def __init__(self, cmd, description_key, manager):
         super().__init__()
@@ -156,6 +207,11 @@ class CommandWorker(QThread):
                 text=True,
                 bufsize=1
             )
+            # expose process for external termination requests
+            try:
+                self._process = process
+            except Exception:
+                self._process = None
             
             for line in iter(process.stdout.readline, ''):
                 if not line:
@@ -183,6 +239,18 @@ class CommandWorker(QThread):
             
         self.progress.emit(100 if success else 0)
         self.finished_signal.emit(success, error_msg)
+
+    def terminate_process(self):
+        """Attempt to terminate the running subprocess if any."""
+        try:
+            proc = getattr(self, '_process', None)
+            if proc and proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 class RKDevToolGUI(QMainWindow):
     def __init__(self, manager):
@@ -307,12 +375,12 @@ class RKDevToolGUI(QMainWindow):
         mode_layout = QVBoxLayout()
         self.enter_maskrom_btn = QPushButton()
         self.enter_maskrom_btn.setProperty("class", "warning")
-        self.enter_maskrom_btn.clicked.connect(self.enter_maskrom_mode)
+        self.enter_maskrom_btn.clicked.connect(_safe_slot(self.enter_maskrom_mode))
         self.enter_loader_btn = QPushButton()  
         self.enter_loader_btn.setProperty("class", "primary")
-        self.enter_loader_btn.clicked.connect(self.enter_loader_mode)
+        self.enter_loader_btn.clicked.connect(_safe_slot(self.enter_loader_mode))
         self.reset_device_btn = QPushButton()
-        self.reset_device_btn.clicked.connect(self.reset_device)
+        self.reset_device_btn.clicked.connect(_safe_slot(self.reset_device))
         mode_layout.addWidget(self.enter_maskrom_btn)
         mode_layout.addWidget(self.enter_loader_btn)
         mode_layout.addWidget(self.reset_device_btn)
@@ -321,12 +389,12 @@ class RKDevToolGUI(QMainWindow):
         quick_layout = QVBoxLayout()
         self.read_info_btn = QPushButton()
         self.read_info_btn.setProperty("class", "primary")
-        self.read_info_btn.clicked.connect(self.read_device_info)
+        self.read_info_btn.clicked.connect(_safe_slot(self.read_device_info))
         self.read_partitions_btn = QPushButton()
-        self.read_partitions_btn.clicked.connect(self.read_partition_table)
+        self.read_partitions_btn.clicked.connect(_safe_slot(self.read_partition_table))
         self.backup_firmware_btn = QPushButton()
         self.backup_firmware_btn.setProperty("class", "success")
-        self.backup_firmware_btn.clicked.connect(self.backup_firmware)
+        self.backup_firmware_btn.clicked.connect(_safe_slot(self.backup_firmware))
         quick_layout.addWidget(self.read_info_btn)
         quick_layout.addWidget(self.read_partitions_btn)
         quick_layout.addWidget(self.backup_firmware_btn)
@@ -503,9 +571,9 @@ class RKDevToolGUI(QMainWindow):
         log_layout = QVBoxLayout()
         log_controls = QHBoxLayout()
         self.clear_log_btn = QPushButton()
-        self.clear_log_btn.clicked.connect(self.clear_log)
+        self.clear_log_btn.clicked.connect(_safe_slot(self.clear_log))
         self.save_log_btn = QPushButton()
-        self.save_log_btn.clicked.connect(self.save_log)
+        self.save_log_btn.clicked.connect(_safe_slot(self.save_log))
         log_controls.addWidget(self.clear_log_btn)
         log_controls.addWidget(self.save_log_btn)
         log_controls.addStretch()
@@ -529,10 +597,10 @@ class RKDevToolGUI(QMainWindow):
         self.firmware_label = QLabel()
         self.firmware_path = QLineEdit()
         self.firmware_browse_btn = QPushButton()
-        self.firmware_browse_btn.clicked.connect(lambda: self.browse_file(self.firmware_path, "file_dialog_firmware"))
+        self.firmware_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.firmware_path, "file_dialog_firmware")))
         self.onekey_burn_btn = QPushButton()
         self.onekey_burn_btn.setProperty("class", "success")
-        self.onekey_burn_btn.clicked.connect(self.onekey_burn)
+        self.onekey_burn_btn.clicked.connect(_safe_slot(self.onekey_burn))
         onekey_layout.addWidget(self.firmware_label, 0, 0)
         onekey_layout.addWidget(self.firmware_path, 0, 1)
         onekey_layout.addWidget(self.firmware_browse_btn, 0, 2)
@@ -543,11 +611,11 @@ class RKDevToolGUI(QMainWindow):
         self.loader_label = QLabel()
         self.loader_path = QLineEdit()
         self.loader_browse_btn = QPushButton()
-        self.loader_browse_btn.clicked.connect(lambda: self.browse_file(self.loader_path, "file_dialog_loader"))
+        self.loader_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.loader_path, "file_dialog_loader")))
         self.auto_load_loader = QCheckBox()
         self.load_loader_btn = QPushButton()
         self.load_loader_btn.setProperty("class", "primary")
-        self.load_loader_btn.clicked.connect(self.load_loader)
+        self.load_loader_btn.clicked.connect(_safe_slot(self.load_loader))
         loader_layout.addWidget(self.loader_label, 0, 0)
         loader_layout.addWidget(self.loader_path, 0, 1)
         loader_layout.addWidget(self.loader_browse_btn, 0, 2)
@@ -559,15 +627,15 @@ class RKDevToolGUI(QMainWindow):
         self.image_label = QLabel()
         self.image_path = QLineEdit()
         self.image_browse_btn = QPushButton()
-        self.image_browse_btn.clicked.connect(lambda: self.browse_file(self.image_path, "file_dialog_image"))
+        self.image_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.image_path, "file_dialog_image")))
         self.address_label = QLabel()
         self.address_combo = QComboBox()
-        self.address_combo.currentTextChanged.connect(self.on_address_changed)
+        self.address_combo.currentTextChanged.connect(_safe_slot(self.on_address_changed))
         self.custom_address = QLineEdit()
         self.custom_address.setEnabled(False)
         self.burn_image_btn = QPushButton()
         self.burn_image_btn.setProperty("class", "success")
-        self.burn_image_btn.clicked.connect(self.burn_image)
+        self.burn_image_btn.clicked.connect(_safe_slot(self.burn_image))
         image_layout.addWidget(self.image_label, 0, 0)
         image_layout.addWidget(self.image_path, 0, 1)
         image_layout.addWidget(self.image_browse_btn, 0, 2)
@@ -591,7 +659,7 @@ class RKDevToolGUI(QMainWindow):
         self.partition_table.setColumnCount(4)
         self.partition_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.refresh_partitions_btn = QPushButton()
-        self.refresh_partitions_btn.clicked.connect(self.refresh_partition_table)
+        self.refresh_partitions_btn.clicked.connect(_safe_slot(self.refresh_partition_table))
         partition_list_layout.addWidget(self.partition_table)
         partition_list_layout.addWidget(self.refresh_partitions_btn)
         self.partition_list_group.setLayout(partition_list_layout)
@@ -603,13 +671,13 @@ class RKDevToolGUI(QMainWindow):
         self.partition_file_path = QLineEdit()
         self.partition_file_browse_btn = QPushButton()
         self.partition_file_browse_btn.clicked.connect(
-            lambda: self.browse_file(self.partition_file_path, "file_dialog_image"))
+            _safe_slot(lambda: self.browse_file(self.partition_file_path, "file_dialog_image")))
         self.burn_partition_btn = QPushButton()
         self.burn_partition_btn.setProperty("class", "success")
-        self.burn_partition_btn.clicked.connect(self.burn_partition)
+        self.burn_partition_btn.clicked.connect(_safe_slot(self.burn_partition))
         self.backup_partition_btn = QPushButton()
         self.backup_partition_btn.setProperty("class", "primary")
-        self.backup_partition_btn.clicked.connect(self.backup_partition)
+        self.backup_partition_btn.clicked.connect(_safe_slot(self.backup_partition))
         partition_ops_layout.addWidget(self.select_partition_label, 0, 0)
         partition_ops_layout.addWidget(self.partition_combo, 0, 1)
         partition_ops_layout.addWidget(self.partition_file_label, 1, 0)
@@ -658,7 +726,7 @@ class RKDevToolGUI(QMainWindow):
         self.device_info_text = QTextBrowser()
         self.device_info_text.setMaximumHeight(150)
         self.get_device_info_btn = QPushButton()
-        self.get_device_info_btn.clicked.connect(self.get_detailed_device_info)
+        self.get_device_info_btn.clicked.connect(_safe_slot(self.get_detailed_device_info))
         device_info_layout.addWidget(self.device_info_text)
         device_info_layout.addWidget(self.get_device_info_btn)
         self.device_info_group.setLayout(device_info_layout)
@@ -677,10 +745,10 @@ class RKDevToolGUI(QMainWindow):
         self.upgrade_file_path = QLineEdit()
         self.upgrade_browse_btn = QPushButton()
         self.upgrade_browse_btn.clicked.connect(
-            lambda: self.browse_file(self.upgrade_file_path, "file_dialog_firmware"))
+            _safe_slot(lambda: self.browse_file(self.upgrade_file_path, "file_dialog_firmware")))
         self.upgrade_btn = QPushButton()
         self.upgrade_btn.setProperty("class", "warning")
-        self.upgrade_btn.clicked.connect(self.upgrade_firmware)
+        self.upgrade_btn.clicked.connect(_safe_slot(self.upgrade_firmware))
         upgrade_layout.addWidget(self.upgrade_label, 0, 0)
         upgrade_layout.addWidget(self.upgrade_file_path, 0, 1)
         upgrade_layout.addWidget(self.upgrade_browse_btn, 0, 2)
@@ -697,12 +765,12 @@ class RKDevToolGUI(QMainWindow):
         flash_ops_layout = QGridLayout()
         self.erase_flash_btn = QPushButton()
         self.erase_flash_btn.setProperty("class", "danger")
-        self.erase_flash_btn.clicked.connect(self.erase_flash)
+        self.erase_flash_btn.clicked.connect(_safe_slot(self.erase_flash))
         self.test_device_btn = QPushButton()
-        self.test_device_btn.clicked.connect(self.test_device)
+        self.test_device_btn.clicked.connect(_safe_slot(self.test_device))
         self.format_flash_btn = QPushButton()
         self.format_flash_btn.setProperty("class", "danger")
-        self.format_flash_btn.clicked.connect(self.format_flash)
+        self.format_flash_btn.clicked.connect(_safe_slot(self.format_flash))
         flash_ops_layout.addWidget(self.erase_flash_btn, 0, 0)
         flash_ops_layout.addWidget(self.test_device_btn, 0, 1)
         flash_ops_layout.addWidget(self.format_flash_btn, 1, 0)
@@ -716,10 +784,10 @@ class RKDevToolGUI(QMainWindow):
         self.read_save_path_label = QLabel()
         self.read_save_path = QLineEdit()
         self.read_browse_btn = QPushButton()
-        self.read_browse_btn.clicked.connect(self.browse_save_path)
+        self.read_browse_btn.clicked.connect(_safe_slot(self.browse_save_path))
         self.read_flash_btn = QPushButton()
         self.read_flash_btn.setProperty("class", "primary")
-        self.read_flash_btn.clicked.connect(self.read_flash)
+        self.read_flash_btn.clicked.connect(_safe_slot(self.read_flash))
         rw_ops_layout.addWidget(self.read_address_label, 0, 0)
         rw_ops_layout.addWidget(self.read_address, 0, 1)
         rw_ops_layout.addWidget(self.read_length_label, 0, 2)
@@ -734,22 +802,22 @@ class RKDevToolGUI(QMainWindow):
         self.verify_file_label = QLabel()
         self.verify_file_path = QLineEdit()
         self.verify_browse_btn = QPushButton()
-        self.verify_browse_btn.clicked.connect(lambda: self.browse_file(self.verify_file_path, "file_dialog_all"))
+        self.verify_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.verify_file_path, "file_dialog_all")))
         self.verify_address_label = QLabel()
         self.verify_address = QLineEdit()
         self.verify_address.setPlaceholderText("校验地址 (如: 0x0)")
         self.verify_btn = QPushButton()
         self.verify_btn.setProperty("class", "success")
-        self.verify_btn.clicked.connect(self.verify_flash)
+        self.verify_btn.clicked.connect(_safe_slot(self.verify_flash))
         self.calculate_md5_btn = QPushButton()
-        self.calculate_md5_btn.clicked.connect(self.calculate_md5)
+        self.calculate_md5_btn.clicked.connect(_safe_slot(self.calculate_md5))
         # Sector size selection for verification (512/4096/custom)
         self.verify_sector_label = QLabel()
         self.verify_sector_combo = QComboBox()
         self.verify_sector_combo.addItem("512 B", "512")
         self.verify_sector_combo.addItem("4096 B", "4096")
         self.verify_sector_combo.addItem("自定义", "custom")
-        self.verify_sector_combo.currentIndexChanged.connect(self.on_verify_sector_changed)
+        self.verify_sector_combo.currentIndexChanged.connect(_safe_slot(self.on_verify_sector_changed))
         self.verify_sector_custom = QLineEdit()
         self.verify_sector_custom.setEnabled(False)
         verify_layout.addWidget(self.verify_file_label, 0, 0)
@@ -766,11 +834,11 @@ class RKDevToolGUI(QMainWindow):
         self.debug_group = QGroupBox()
         debug_layout = QGridLayout()
         self.enable_debug_log = QCheckBox()
-        self.enable_debug_log.stateChanged.connect(self.toggle_debug_log)
+        self.enable_debug_log.stateChanged.connect(_safe_slot(self.toggle_debug_log))
         self.export_log_btn = QPushButton()
-        self.export_log_btn.clicked.connect(self.export_system_log)
+        self.export_log_btn.clicked.connect(_safe_slot(self.export_system_log))
         self.show_usb_info_btn = QPushButton()
-        self.show_usb_info_btn.clicked.connect(self.show_usb_info)
+        self.show_usb_info_btn.clicked.connect(_safe_slot(self.show_usb_info))
         debug_layout.addWidget(self.enable_debug_log, 0, 0, 1, 2)
         debug_layout.addWidget(self.export_log_btn, 1, 0)
         debug_layout.addWidget(self.show_usb_info_btn, 1, 1)
@@ -781,13 +849,13 @@ class RKDevToolGUI(QMainWindow):
 
         # Read identifiers/info
         self.read_flash_id_btn = QPushButton()
-        self.read_flash_id_btn.clicked.connect(self.read_flash_id)
+        self.read_flash_id_btn.clicked.connect(_safe_slot(self.read_flash_id))
         self.read_flash_info_btn = QPushButton()
-        self.read_flash_info_btn.clicked.connect(self.read_flash_info)
+        self.read_flash_info_btn.clicked.connect(_safe_slot(self.read_flash_info))
         self.read_chip_info_btn = QPushButton()
-        self.read_chip_info_btn.clicked.connect(self.read_chip_info)
+        self.read_chip_info_btn.clicked.connect(_safe_slot(self.read_chip_info))
         self.read_capability_btn = QPushButton()
-        self.read_capability_btn.clicked.connect(self.read_capability)
+        self.read_capability_btn.clicked.connect(_safe_slot(self.read_capability))
 
         # Change storage (cs)
         self.change_storage_label = QLabel()
@@ -797,44 +865,44 @@ class RKDevToolGUI(QMainWindow):
         self.change_storage_combo.addItem("SD", "2")
         self.change_storage_combo.addItem("SPINOR", "9")
         self.change_storage_btn = QPushButton()
-        self.change_storage_btn.clicked.connect(self.change_storage)
+        self.change_storage_btn.clicked.connect(_safe_slot(self.change_storage))
 
         # Pack / Unpack bootloader
         self.pack_label = QLabel()
         self.pack_output_path = QLineEdit()
         self.pack_browse_btn = QPushButton()
-        self.pack_browse_btn.clicked.connect(lambda: self.browse_file(self.pack_output_path, "file_dialog_all"))
+        self.pack_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.pack_output_path, "file_dialog_all")))
         self.pack_btn = QPushButton()
-        self.pack_btn.clicked.connect(self.pack_bootloader)
+        self.pack_btn.clicked.connect(_safe_slot(self.pack_bootloader))
 
         self.unpack_label = QLabel()
         self.unpack_input_path = QLineEdit()
         self.unpack_browse_btn = QPushButton()
-        self.unpack_browse_btn.clicked.connect(lambda: self.browse_file(self.unpack_input_path, "file_dialog_all"))
+        self.unpack_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.unpack_input_path, "file_dialog_all")))
         self.unpack_btn = QPushButton()
-        self.unpack_btn.clicked.connect(self.unpack_bootloader)
+        self.unpack_btn.clicked.connect(_safe_slot(self.unpack_bootloader))
 
         # Write GPT and Parameter
         self.gpt_label = QLabel()
         self.gpt_path = QLineEdit()
         self.gpt_browse_btn = QPushButton()
-        self.gpt_browse_btn.clicked.connect(lambda: self.browse_file(self.gpt_path, "file_dialog_all"))
+        self.gpt_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.gpt_path, "file_dialog_all")))
         self.gpt_btn = QPushButton()
-        self.gpt_btn.clicked.connect(self.write_gpt)
+        self.gpt_btn.clicked.connect(_safe_slot(self.write_gpt))
 
         self.prm_label = QLabel()
         self.prm_text = QLineEdit()
         self.prm_btn = QPushButton()
-        self.prm_btn.clicked.connect(self.write_parameter)
+        self.prm_btn.clicked.connect(_safe_slot(self.write_parameter))
 
         # Tag SPL
         self.tagspl_tag = QLineEdit()
         self.tagspl_label = QLabel()
         self.tagspl_spl_path = QLineEdit()
         self.tagspl_browse_btn = QPushButton()
-        self.tagspl_browse_btn.clicked.connect(lambda: self.browse_file(self.tagspl_spl_path, "file_dialog_all"))
+        self.tagspl_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.tagspl_spl_path, "file_dialog_all")))
         self.tagspl_btn = QPushButton()
-        self.tagspl_btn.clicked.connect(self.tag_spl)
+        self.tagspl_btn.clicked.connect(_safe_slot(self.tag_spl))
 
         # Layout placement (compact)
         misc_layout.addWidget(self.read_flash_id_btn, 0, 0)
@@ -890,7 +958,7 @@ class RKDevToolGUI(QMainWindow):
         self.lang_combo.view().setMinimumWidth(120)
     
         self.lang_combo.setCurrentIndex(0)
-        self.lang_combo.currentTextChanged.connect(self.on_language_changed)
+        self.lang_combo.currentTextChanged.connect(_safe_slot(self.on_language_changed))
         self.statusBar().addPermanentWidget(self.lang_combo)
     
         self.connection_status = QLabel()
@@ -905,8 +973,8 @@ class RKDevToolGUI(QMainWindow):
     def start_device_detection(self):
         if not self.device_worker:
             self.device_worker = DeviceWorker(self.manager)
-            self.device_worker.device_found.connect(self.on_device_found)
-            self.device_worker.device_lost.connect(self.on_device_lost)
+            self.device_worker.device_found.connect(_safe_slot(self.on_device_found))
+            self.device_worker.device_lost.connect(_safe_slot(self.on_device_lost))
             self.device_worker.start()
 
     def stop_device_detection(self):
@@ -934,6 +1002,30 @@ class RKDevToolGUI(QMainWindow):
         self.chip_info = "unknown_chip"
         self.device_list.clear()
         self.update_device_status()
+
+    def cleanup(self):
+        """Stop background workers and running subprocesses before application exit."""
+        try:
+            # Stop device detection
+            if self.device_worker:
+                try:
+                    self.device_worker.stop()
+                    self.device_worker.wait(1000)
+                except Exception:
+                    pass
+
+            # Terminate running command worker subprocess if any
+            if self.command_worker:
+                try:
+                    # request subprocess termination
+                    if hasattr(self.command_worker, 'terminate_process'):
+                        self.command_worker.terminate_process()
+                    # wait briefly for thread to finish
+                    self.command_worker.wait(1000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def update_device_status(self):
         if self.current_device:
@@ -985,9 +1077,12 @@ class RKDevToolGUI(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_label.setText(self.tr('ready'))
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
-        self.command_worker.progress.connect(self.progress_bar.setValue)
-        self.command_worker.log.connect(self.log_message)
-        self.command_worker.finished_signal.connect(self.on_command_finished)
+        # Wrap connections to avoid connecting signals directly to C-level method
+        # descriptors (which can trigger post-load introspection errors in some
+        # PySide6 packaging/runtime scenarios). Use small Python wrappers instead.
+        self.command_worker.progress.connect(lambda v: self.progress_bar.setValue(v))
+        self.command_worker.log.connect(_safe_slot(self.log_message))
+        self.command_worker.finished_signal.connect(_safe_slot(self.on_command_finished))
         self.command_worker.start()
 
     def on_command_finished(self, success, error_msg):
@@ -1373,5 +1468,8 @@ if __name__ == '__main__':
     # If the tool is found, proceed to launch the GUI
     manager = TranslationManager()
     main_window = RKDevToolGUI(manager)
+    # Ensure background workers are stopped cleanly on quit to avoid
+    # "QThread: Destroyed while thread '' is still running" errors.
+    app.aboutToQuit.connect(_safe_slot(lambda: main_window.cleanup()))
     main_window.show()
     sys.exit(app.exec())
