@@ -57,7 +57,22 @@ This software aims to provide an intuitive and user-friendly interface, turning 
 ### 编译 | Compilation 
 
 ```bash
-pip install nuitka PyQt6
+pip install -r requirements.txt
 python build_nuitka.py
-exec dist/rkdeveloptool-gui
+./rkdeveloptool-gui
+```
+
+### 安装 | Install
+
+#### Arch Linux
+
+[![Packaging status](https://repology.org/badge/vertical-allrepos/rkdeveloptool-gui.svg)](https://repology.org/project/rkdeveloptool-gui/versions)
+
+通过 [AUR 仓库](https://aur.archlinux.org/packages/rkdeveloptool-gui)或[自建源仓库](https://github.com/taotieren/aur-repo)安装。
+
+```bash
+# AUR
+yay -Syu rkdeveloptool-gui
+# 或自建源
+sudo pacman -Syu rkdeveloptool-gui
 ```

@@ -3,6 +3,8 @@ import subprocess
 import re
 import os
 import hashlib
+import tempfile
+import math
 
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QFont, QFontDatabase
@@ -22,12 +24,12 @@ PARTITION_PRESETS = {
     "parameter": {"address": "0x2000", "zh": "参数分区", "en": "Parameter"},
     "uboot": {"address": "0x4000", "zh": "U-Boot", "en": "U-Boot"},
     "trust": {"address": "0x6000", "zh": "Trust", "en": "Trust"},
-    "boot": {"address": "0x8000", "zh": "Boot内核", "en": "Boot Kernel"},
+    "boot": {"address": "0x8000", "zh": "Boot 内核", "en": "Boot Kernel"},
     "recovery": {"address": "0x10000", "zh": "Recovery", "en": "Recovery"},
     "backup": {"address": "0x18000", "zh": "备份分区", "en": "Backup Partition"},
-    "system": {"address": "0x20000", "zh": "System系统", "en": "System"},
+    "system": {"address": "0x20000", "zh": "System 系统", "en": "System"},
     "vendor": {"address": "0x120000", "zh": "Vendor", "en": "Vendor"},
-    "oem": {"address": "0x140000", "zh": "OEM定制", "en": "OEM Custom"},
+    "oem": {"address": "0x140000", "zh": "OEM 定制", "en": "OEM Custom"},
     "userdata": {"address": "0x160000", "zh": "用户数据", "en": "Userdata"}
 }
 
@@ -273,112 +275,15 @@ class RKDevToolGUI(QMainWindow):
         """)
 
     def update_ui_text(self):
-        self.setWindowTitle(self.tr("app_title"))
-        self.device_group.setTitle(self.tr("device_status_group"))
-        self.device_status_label.setText(self.tr("detecting_device"))
-        self.chip_info_label.setText(f"{self.tr('chip')}: {self.tr(self.chip_info)}")
-        self.connected_devices_label.setText(self.tr("connected_devices"))
-        self.mode_group.setTitle(self.tr("mode_control_group"))
-        self.enter_maskrom_btn.setText(self.tr("enter_maskrom_btn"))
-        self.enter_loader_btn.setText(self.tr("enter_loader_btn"))
-        self.reset_device_btn.setText(self.tr("reset_device_btn"))
-        self.quick_group.setTitle(self.tr("quick_actions_group"))
-        self.read_info_btn.setText(self.tr("read_info_btn"))
-        self.read_partitions_btn.setText(self.tr("read_partitions_btn"))
-        self.backup_firmware_btn.setText(self.tr("backup_firmware_btn"))
-        self.tab_widget.setTabText(0, self.tr("download_tab"))
-        self.tab_widget.setTabText(1, self.tr("partition_tab"))
-        self.tab_widget.setTabText(2, self.tr("parameter_tab"))
-        self.tab_widget.setTabText(3, self.tr("upgrade_tab"))
-        self.tab_widget.setTabText(4, self.tr("advanced_tab"))
-        self.log_group.setTitle(self.tr("log_progress_group"))
-        self.clear_log_btn.setText(self.tr("clear_log_btn"))
-        self.save_log_btn.setText(self.tr("save_log_btn"))
-        self.progress_label.setText(self.tr("ready"))
-        self.onekey_group.setTitle(self.tr("onekey_burn_group"))
-        self.firmware_label.setText(self.tr("firmware_file_placeholder"))
-        self.firmware_path.setPlaceholderText(self.tr("firmware_file_placeholder"))
-        self.firmware_browse_btn.setText(self.tr("browse_btn"))
-        self.onekey_burn_btn.setText(self.tr("start_burn_btn"))
-        self.loader_group.setTitle(self.tr("loader_config_group"))
-        self.loader_label.setText(self.tr("loader_file_placeholder"))
-        self.loader_path.setPlaceholderText(self.tr("loader_file_placeholder"))
-        self.loader_browse_btn.setText(self.tr("browse_btn"))
-        self.auto_load_loader.setText(self.tr("auto_load_loader"))
-        self.load_loader_btn.setText(self.tr("load_loader_btn"))
-        self.image_group.setTitle(self.tr("custom_image_group"))
-        self.image_label.setText(self.tr("image_file_placeholder"))
-        self.image_path.setPlaceholderText(self.tr("image_file_placeholder"))
-        self.image_browse_btn.setText(self.tr("browse_btn"))
-        self.address_label.setText(self.tr("target_address"))
-        self.custom_address.setPlaceholderText(self.tr("custom_address_placeholder"))
-        self.burn_image_btn.setText(self.tr("burn_image_btn"))
-        self.address_combo.clear()
-        self.address_combo.addItem(self.tr("address_full_firmware"))
-        self.address_combo.addItem(self.tr("address_parameter"))
-        self.address_combo.addItem(self.tr("address_uboot"))
-        self.address_combo.addItem(self.tr("address_trust"))
-        self.address_combo.addItem(self.tr("address_boot"))
-        self.address_combo.addItem(self.tr("address_recovery"))
-        self.address_combo.addItem(self.tr("address_system"))
-        self.address_combo.addItem(self.tr("custom_address"))
-        self.partition_list_group.setTitle(self.tr("partition_info_group"))
-        self.partition_table.setHorizontalHeaderLabels([self.tr("partition_name"), self.tr("start_address"), self.tr("size"), self.tr("action")])
-        self.refresh_partitions_btn.setText(self.tr("refresh_partitions_btn"))
-        self.partition_ops_group.setTitle(self.tr("partition_ops_group"))
-        self.select_partition_label.setText(self.tr("select_partition"))
-        self.partition_file_label.setText(self.tr("file_path"))
-        self.partition_file_path.setPlaceholderText(self.tr("file_path"))
-        self.partition_file_browse_btn.setText(self.tr("browse_btn"))
-        self.burn_partition_btn.setText(self.tr("burn_partition_btn"))
-        self.backup_partition_btn.setText(self.tr("backup_partition_btn"))
-        self.partition_combo.clear()
-        for key, value in PARTITION_PRESETS.items():
-            self.partition_combo.addItem(f"{self.tr(value.get(self.manager.lang, key))} ({value['address']})", key)
-        self.burn_params_group.setTitle(self.tr("burn_params_group"))
-        self.verify_after_burn.setText(self.tr("verify_after_burn"))
-        self.erase_before_burn.setText(self.tr("erase_before_burn"))
-        self.reset_after_burn.setText(self.tr("reset_after_burn"))
-        self.advanced_params_group.setTitle(self.tr("advanced_params_group"))
-        self.timeout_label.setText(self.tr("command_timeout"))
-        self.timeout_spinbox.setSuffix(f" {self.tr('seconds')}")
-        self.retry_count_label.setText(self.tr("retry_count"))
-        self.retry_count_spinbox.setSuffix(f" {self.tr('times')}")
-        self.device_info_group.setTitle(self.tr("device_info_group"))
-        self.get_device_info_btn.setText(self.tr("get_detailed_info_btn"))
-        self.upgrade_group.setTitle(self.tr("firmware_upgrade_group"))
-        self.upgrade_label.setText(self.tr("upgrade_file_placeholder"))
-        self.upgrade_file_path.setPlaceholderText(self.tr("upgrade_file_placeholder"))
-        self.upgrade_browse_btn.setText(self.tr("browse_btn"))
-        self.upgrade_btn.setText(self.tr("start_upgrade_btn"))
-        self.flash_ops_group.setTitle(self.tr("flash_ops_group"))
-        self.erase_flash_btn.setText(self.tr("erase_flash_btn"))
-        self.test_device_btn.setText(self.tr("test_device_btn"))
-        self.format_flash_btn.setText(self.tr("format_flash_btn"))
-        self.rw_ops_group.setTitle(self.tr("rw_ops_group"))
-        self.read_address_label.setText(self.tr("start_address"))
-        self.read_address.setPlaceholderText(self.tr("start_address_placeholder"))
-        self.read_length_label.setText(self.tr("read_length_placeholder"))
-        self.read_length.setPlaceholderText(self.tr("read_length_placeholder"))
-        self.read_save_path_label.setText(self.tr("save_path_placeholder"))
-        self.read_save_path.setPlaceholderText(self.tr("save_path_placeholder"))
-        self.read_browse_btn.setText(self.tr("browse_btn"))
-        self.read_flash_btn.setText(self.tr("read_flash_btn"))
-        self.verify_group.setTitle(self.tr("verify_tools_group"))
-        self.verify_file_label.setText(self.tr("verify_file_placeholder"))
-        self.verify_file_path.setPlaceholderText(self.tr("verify_file_placeholder"))
-        self.verify_browse_btn.setText(self.tr("browse_btn"))
-        self.verify_address_label.setText(self.tr("verify_address_placeholder"))
-        self.verify_address.setPlaceholderText(self.tr("verify_address_placeholder"))
-        self.verify_btn.setText(self.tr("verify_file_btn"))
-        self.calculate_md5_btn.setText(self.tr("calculate_md5_btn"))
-        self.debug_group.setTitle(self.tr("debug_tools_group"))
-        self.enable_debug_log.setText(self.tr("enable_debug_log"))
-        self.export_log_btn.setText(self.tr("export_system_log_btn"))
-        self.show_usb_info_btn.setText(self.tr("show_usb_info_btn"))
-        self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{self.tr('not_connected_status')}")
-        self.connection_status.setText(f"⚪ {self.tr('not_connected')}")
-        self.update_device_status()
+        # Broken into smaller helpers to keep translations organized and readable
+        self._update_window_and_device_texts()
+        self._update_download_tab_texts()
+        self._update_partition_tab_texts()
+        self._update_parameter_tab_texts()
+        self._update_upgrade_tab_texts()
+        self._update_advanced_tab_texts()
+        self._update_misc_texts()
+        self._update_statusbar_texts()
 
 
     def create_left_panel(self):
@@ -431,6 +336,158 @@ class RKDevToolGUI(QMainWindow):
         layout.addWidget(self.quick_group)
         layout.addStretch()
         return panel
+
+    # --- UI text helper methods (split from update_ui_text) ---
+    def _update_window_and_device_texts(self):
+        self.setWindowTitle(self.tr("app_title"))
+        self.device_group.setTitle(self.tr("device_status_group"))
+        self.device_status_label.setText(self.tr("detecting_device"))
+        self.chip_info_label.setText(f"{self.tr('chip')}: {self.tr(self.chip_info)}")
+        self.connected_devices_label.setText(self.tr("connected_devices"))
+        self.mode_group.setTitle(self.tr("mode_control_group"))
+        self.enter_maskrom_btn.setText(self.tr("enter_maskrom_btn"))
+        self.enter_loader_btn.setText(self.tr("enter_loader_btn"))
+        self.reset_device_btn.setText(self.tr("reset_device_btn"))
+        self.quick_group.setTitle(self.tr("quick_actions_group"))
+        self.read_info_btn.setText(self.tr("read_info_btn"))
+        self.read_partitions_btn.setText(self.tr("read_partitions_btn"))
+        self.backup_firmware_btn.setText(self.tr("backup_firmware_btn"))
+
+    def _update_download_tab_texts(self):
+        self.tab_widget.setTabText(0, self.tr("download_tab"))
+        self.log_group.setTitle(self.tr("log_progress_group"))
+        self.clear_log_btn.setText(self.tr("clear_log_btn"))
+        self.save_log_btn.setText(self.tr("save_log_btn"))
+        self.progress_label.setText(self.tr("ready"))
+        self.onekey_group.setTitle(self.tr("onekey_burn_group"))
+        self.firmware_label.setText(self.tr("firmware_file_placeholder"))
+        self.firmware_path.setPlaceholderText(self.tr("firmware_file_placeholder"))
+        self.firmware_browse_btn.setText(self.tr("browse_btn"))
+        self.onekey_burn_btn.setText(self.tr("start_burn_btn"))
+        self.loader_group.setTitle(self.tr("loader_config_group"))
+        self.loader_label.setText(self.tr("loader_file_placeholder"))
+        self.loader_path.setPlaceholderText(self.tr("loader_file_placeholder"))
+        self.loader_browse_btn.setText(self.tr("browse_btn"))
+        self.auto_load_loader.setText(self.tr("auto_load_loader"))
+        self.load_loader_btn.setText(self.tr("load_loader_btn"))
+        self.image_group.setTitle(self.tr("custom_image_group"))
+        self.image_label.setText(self.tr("image_file_placeholder"))
+        self.image_path.setPlaceholderText(self.tr("image_file_placeholder"))
+        self.image_browse_btn.setText(self.tr("browse_btn"))
+        self.address_label.setText(self.tr("target_address"))
+        self.custom_address.setPlaceholderText(self.tr("custom_address_placeholder"))
+        self.burn_image_btn.setText(self.tr("burn_image_btn"))
+        # address combo
+        self.address_combo.clear()
+        self.address_combo.addItem(self.tr("address_full_firmware"))
+        self.address_combo.addItem(self.tr("address_parameter"))
+        self.address_combo.addItem(self.tr("address_uboot"))
+        self.address_combo.addItem(self.tr("address_trust"))
+        self.address_combo.addItem(self.tr("address_boot"))
+        self.address_combo.addItem(self.tr("address_recovery"))
+        self.address_combo.addItem(self.tr("address_system"))
+        self.address_combo.addItem(self.tr("custom_address"))
+
+    def _update_partition_tab_texts(self):
+        self.tab_widget.setTabText(1, self.tr("partition_tab"))
+        self.partition_list_group.setTitle(self.tr("partition_info_group"))
+        self.partition_table.setHorizontalHeaderLabels([self.tr("partition_name"), self.tr("start_address"), self.tr("size"), self.tr("action")])
+        self.refresh_partitions_btn.setText(self.tr("refresh_partitions_btn"))
+        self.partition_ops_group.setTitle(self.tr("partition_ops_group"))
+        self.select_partition_label.setText(self.tr("select_partition"))
+        self.partition_file_label.setText(self.tr("file_path"))
+        self.partition_file_path.setPlaceholderText(self.tr("file_path"))
+        self.partition_file_browse_btn.setText(self.tr("browse_btn"))
+        self.burn_partition_btn.setText(self.tr("burn_partition_btn"))
+        self.backup_partition_btn.setText(self.tr("backup_partition_btn"))
+        self.partition_combo.clear()
+        for key, value in PARTITION_PRESETS.items():
+            self.partition_combo.addItem(f"{self.tr(value.get(self.manager.lang, key))} ({value['address']})", key)
+
+    def _update_parameter_tab_texts(self):
+        self.tab_widget.setTabText(2, self.tr("parameter_tab"))
+        self.burn_params_group.setTitle(self.tr("burn_params_group"))
+        self.verify_after_burn.setText(self.tr("verify_after_burn"))
+        self.erase_before_burn.setText(self.tr("erase_before_burn"))
+        self.reset_after_burn.setText(self.tr("reset_after_burn"))
+        self.advanced_params_group.setTitle(self.tr("advanced_params_group"))
+        self.timeout_label.setText(self.tr("command_timeout"))
+        self.timeout_spinbox.setSuffix(f" {self.tr('seconds')}")
+        self.retry_count_label.setText(self.tr("retry_count"))
+        self.retry_count_spinbox.setSuffix(f" {self.tr('times')}")
+        self.device_info_group.setTitle(self.tr("device_info_group"))
+        self.get_device_info_btn.setText(self.tr("get_detailed_info_btn"))
+
+    def _update_upgrade_tab_texts(self):
+        self.tab_widget.setTabText(3, self.tr("upgrade_tab"))
+        self.upgrade_group.setTitle(self.tr("firmware_upgrade_group"))
+        self.upgrade_label.setText(self.tr("upgrade_file_placeholder"))
+        self.upgrade_file_path.setPlaceholderText(self.tr("upgrade_file_placeholder"))
+        self.upgrade_browse_btn.setText(self.tr("browse_btn"))
+        self.upgrade_btn.setText(self.tr("start_upgrade_btn"))
+
+    def _update_advanced_tab_texts(self):
+        self.tab_widget.setTabText(4, self.tr("advanced_tab"))
+        self.flash_ops_group.setTitle(self.tr("flash_ops_group"))
+        self.erase_flash_btn.setText(self.tr("erase_flash_btn"))
+        self.test_device_btn.setText(self.tr("test_device_btn"))
+        self.format_flash_btn.setText(self.tr("format_flash_btn"))
+        self.rw_ops_group.setTitle(self.tr("rw_ops_group"))
+        self.read_address_label.setText(self.tr("start_address"))
+        self.read_address.setPlaceholderText(self.tr("start_address_placeholder"))
+        self.read_length_label.setText(self.tr("read_length_placeholder"))
+        self.read_length.setPlaceholderText(self.tr("read_length_placeholder"))
+        self.read_save_path_label.setText(self.tr("save_path_placeholder"))
+        self.read_save_path.setPlaceholderText(self.tr("save_path_placeholder"))
+        self.read_browse_btn.setText(self.tr("browse_btn"))
+        self.read_flash_btn.setText(self.tr("read_flash_btn"))
+        self.verify_group.setTitle(self.tr("verify_tools_group"))
+        self.verify_file_label.setText(self.tr("verify_file_placeholder"))
+        self.verify_file_path.setPlaceholderText(self.tr("verify_file_placeholder"))
+        self.verify_browse_btn.setText(self.tr("browse_btn"))
+        self.verify_address_label.setText(self.tr("verify_address_placeholder"))
+        self.verify_address.setPlaceholderText(self.tr("verify_address_placeholder"))
+        self.verify_btn.setText(self.tr("verify_file_btn"))
+        self.calculate_md5_btn.setText(self.tr("calculate_md5_btn"))
+        self.verify_sector_label.setText(self.tr("verify_sector_label"))
+        self.verify_sector_combo.clear()
+        self.verify_sector_combo.addItem(self.tr("verify_sector_512"), "512")
+        self.verify_sector_combo.addItem(self.tr("verify_sector_4096"), "4096")
+        self.verify_sector_combo.addItem(self.tr("verify_sector_custom"), "custom")
+        self.verify_sector_custom.setPlaceholderText(self.tr("verify_sector_custom_placeholder"))
+        self.debug_group.setTitle(self.tr("debug_tools_group"))
+        self.enable_debug_log.setText(self.tr("enable_debug_log"))
+        self.export_log_btn.setText(self.tr("export_system_log_btn"))
+        self.show_usb_info_btn.setText(self.tr("show_usb_info_btn"))
+
+    def _update_misc_texts(self):
+        # Misc ops texts
+        self.read_flash_id_btn.setText(self.tr("read_flash_id_btn"))
+        self.read_flash_info_btn.setText(self.tr("read_flash_info_btn"))
+        self.read_chip_info_btn.setText(self.tr("read_chip_info_btn"))
+        self.read_capability_btn.setText(self.tr("read_capability_btn"))
+        self.change_storage_label.setText(self.tr("change_storage_label"))
+        self.change_storage_btn.setText(self.tr("change_storage_btn"))
+        self.pack_label.setText(self.tr("pack_label"))
+        self.pack_browse_btn.setText(self.tr("browse_btn"))
+        self.pack_btn.setText(self.tr("pack_btn"))
+        self.unpack_label.setText(self.tr("unpack_label"))
+        self.unpack_browse_btn.setText(self.tr("browse_btn"))
+        self.unpack_btn.setText(self.tr("unpack_btn"))
+        self.gpt_label.setText(self.tr("gpt_label"))
+        self.gpt_browse_btn.setText(self.tr("browse_btn"))
+        self.gpt_btn.setText(self.tr("gpt_btn"))
+        self.prm_label.setText(self.tr("prm_label"))
+        self.prm_text.setPlaceholderText(self.tr("prm_placeholder"))
+        self.prm_btn.setText(self.tr("prm_btn"))
+        self.tagspl_label.setText(self.tr("tagspl_label"))
+        self.tagspl_browse_btn.setText(self.tr("browse_btn"))
+        self.tagspl_btn.setText(self.tr("tagspl_btn"))
+
+    def _update_statusbar_texts(self):
+        self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{self.tr('not_connected_status')}")
+        self.connection_status.setText(f"⚪ {self.tr('not_connected')}")
+        self.update_device_status()
 
     def create_right_panel(self):
         panel = QWidget()
@@ -686,11 +743,23 @@ class RKDevToolGUI(QMainWindow):
         self.verify_btn.clicked.connect(self.verify_flash)
         self.calculate_md5_btn = QPushButton()
         self.calculate_md5_btn.clicked.connect(self.calculate_md5)
+        # Sector size selection for verification (512/4096/custom)
+        self.verify_sector_label = QLabel()
+        self.verify_sector_combo = QComboBox()
+        self.verify_sector_combo.addItem("512 B", "512")
+        self.verify_sector_combo.addItem("4096 B", "4096")
+        self.verify_sector_combo.addItem("自定义", "custom")
+        self.verify_sector_combo.currentIndexChanged.connect(self.on_verify_sector_changed)
+        self.verify_sector_custom = QLineEdit()
+        self.verify_sector_custom.setEnabled(False)
         verify_layout.addWidget(self.verify_file_label, 0, 0)
         verify_layout.addWidget(self.verify_file_path, 0, 1)
         verify_layout.addWidget(self.verify_browse_btn, 0, 2)
         verify_layout.addWidget(self.verify_address_label, 1, 0)
         verify_layout.addWidget(self.verify_address, 1, 1)
+        verify_layout.addWidget(self.verify_sector_label, 1, 2)
+        verify_layout.addWidget(self.verify_sector_combo, 1, 3)
+        verify_layout.addWidget(self.verify_sector_custom, 1, 4)
         verify_layout.addWidget(self.verify_btn, 2, 0)
         verify_layout.addWidget(self.calculate_md5_btn, 2, 1)
         self.verify_group.setLayout(verify_layout)
@@ -706,10 +775,108 @@ class RKDevToolGUI(QMainWindow):
         debug_layout.addWidget(self.export_log_btn, 1, 0)
         debug_layout.addWidget(self.show_usb_info_btn, 1, 1)
         self.debug_group.setLayout(debug_layout)
+        # Misc / new tool commands group
+        self.misc_ops_group = QGroupBox()
+        misc_layout = QGridLayout()
+
+        # Read identifiers/info
+        self.read_flash_id_btn = QPushButton()
+        self.read_flash_id_btn.clicked.connect(self.read_flash_id)
+        self.read_flash_info_btn = QPushButton()
+        self.read_flash_info_btn.clicked.connect(self.read_flash_info)
+        self.read_chip_info_btn = QPushButton()
+        self.read_chip_info_btn.clicked.connect(self.read_chip_info)
+        self.read_capability_btn = QPushButton()
+        self.read_capability_btn.clicked.connect(self.read_capability)
+
+        # Change storage (cs)
+        self.change_storage_label = QLabel()
+        self.change_storage_combo = QComboBox()
+        # Values: 1=EMMC,2=SD,9=SPINOR
+        self.change_storage_combo.addItem("EMMC", "1")
+        self.change_storage_combo.addItem("SD", "2")
+        self.change_storage_combo.addItem("SPINOR", "9")
+        self.change_storage_btn = QPushButton()
+        self.change_storage_btn.clicked.connect(self.change_storage)
+
+        # Pack / Unpack bootloader
+        self.pack_label = QLabel()
+        self.pack_output_path = QLineEdit()
+        self.pack_browse_btn = QPushButton()
+        self.pack_browse_btn.clicked.connect(lambda: self.browse_file(self.pack_output_path, "file_dialog_all"))
+        self.pack_btn = QPushButton()
+        self.pack_btn.clicked.connect(self.pack_bootloader)
+
+        self.unpack_label = QLabel()
+        self.unpack_input_path = QLineEdit()
+        self.unpack_browse_btn = QPushButton()
+        self.unpack_browse_btn.clicked.connect(lambda: self.browse_file(self.unpack_input_path, "file_dialog_all"))
+        self.unpack_btn = QPushButton()
+        self.unpack_btn.clicked.connect(self.unpack_bootloader)
+
+        # Write GPT and Parameter
+        self.gpt_label = QLabel()
+        self.gpt_path = QLineEdit()
+        self.gpt_browse_btn = QPushButton()
+        self.gpt_browse_btn.clicked.connect(lambda: self.browse_file(self.gpt_path, "file_dialog_all"))
+        self.gpt_btn = QPushButton()
+        self.gpt_btn.clicked.connect(self.write_gpt)
+
+        self.prm_label = QLabel()
+        self.prm_text = QLineEdit()
+        self.prm_btn = QPushButton()
+        self.prm_btn.clicked.connect(self.write_parameter)
+
+        # Tag SPL
+        self.tagspl_tag = QLineEdit()
+        self.tagspl_label = QLabel()
+        self.tagspl_spl_path = QLineEdit()
+        self.tagspl_browse_btn = QPushButton()
+        self.tagspl_browse_btn.clicked.connect(lambda: self.browse_file(self.tagspl_spl_path, "file_dialog_all"))
+        self.tagspl_btn = QPushButton()
+        self.tagspl_btn.clicked.connect(self.tag_spl)
+
+        # Layout placement (compact)
+        misc_layout.addWidget(self.read_flash_id_btn, 0, 0)
+        misc_layout.addWidget(self.read_flash_info_btn, 0, 1)
+        misc_layout.addWidget(self.read_chip_info_btn, 0, 2)
+        misc_layout.addWidget(self.read_capability_btn, 0, 3)
+
+        misc_layout.addWidget(self.change_storage_label, 1, 0)
+        misc_layout.addWidget(self.change_storage_combo, 1, 1)
+        misc_layout.addWidget(self.change_storage_btn, 1, 2)
+
+        misc_layout.addWidget(self.pack_label, 2, 0)
+        misc_layout.addWidget(self.pack_output_path, 2, 1)
+        misc_layout.addWidget(self.pack_browse_btn, 2, 2)
+        misc_layout.addWidget(self.pack_btn, 2, 3)
+
+        misc_layout.addWidget(self.unpack_label, 3, 0)
+        misc_layout.addWidget(self.unpack_input_path, 3, 1)
+        misc_layout.addWidget(self.unpack_browse_btn, 3, 2)
+        misc_layout.addWidget(self.unpack_btn, 3, 3)
+
+        misc_layout.addWidget(self.gpt_label, 4, 0)
+        misc_layout.addWidget(self.gpt_path, 4, 1)
+        misc_layout.addWidget(self.gpt_browse_btn, 4, 2)
+        misc_layout.addWidget(self.gpt_btn, 4, 3)
+
+        misc_layout.addWidget(self.prm_label, 5, 0)
+        misc_layout.addWidget(self.prm_text, 5, 1)
+        misc_layout.addWidget(self.prm_btn, 5, 2)
+
+        misc_layout.addWidget(self.tagspl_label, 6, 0)
+        misc_layout.addWidget(self.tagspl_tag, 6, 1)
+        misc_layout.addWidget(self.tagspl_spl_path, 6, 2)
+        misc_layout.addWidget(self.tagspl_browse_btn, 6, 3)
+        misc_layout.addWidget(self.tagspl_btn, 6, 4)
+
+        self.misc_ops_group.setLayout(misc_layout)
         layout.addWidget(self.flash_ops_group)
         layout.addWidget(self.rw_ops_group)
         layout.addWidget(self.verify_group)
         layout.addWidget(self.debug_group)
+        layout.addWidget(self.misc_ops_group)
         layout.addStretch()
         return widget
 
@@ -813,7 +980,7 @@ class RKDevToolGUI(QMainWindow):
 
     def run_command(self, cmd, description_key):
         if self.command_worker and self.command_worker.isRunning():
-            self.show_message("Warning", "A command is already running. Please wait.")
+            self.show_message("Warning", "command_already_running", "Warning")
             return
         self.progress_bar.setValue(0)
         self.progress_label.setText(self.tr('ready'))
@@ -826,12 +993,62 @@ class RKDevToolGUI(QMainWindow):
     def on_command_finished(self, success, error_msg):
         self.progress_bar.setValue(100 if success else 0)
         self.progress_label.setText(self.tr("ready_status"))
+        # If this command was a verification run (we previously launched `rl`),
+        # compare the temporary file's MD5 with the expected file.
+        try:
+            if hasattr(self, 'command_worker') and self.command_worker and getattr(self.command_worker, 'description_key', '') == 'verifying':
+                tmpfile = getattr(self, '_verify_tmpfile', None)
+                expected = getattr(self, '_verify_expected_file', None)
+                if tmpfile and expected:
+                    if success and os.path.exists(tmpfile):
+                        # compute md5s
+                        def md5_of(path):
+                            h = hashlib.md5()
+                            with open(path, 'rb') as f:
+                                for chunk in iter(lambda: f.read(8192), b''):
+                                    h.update(chunk)
+                            return h.hexdigest()
+
+                        try:
+                            md5_tmp = md5_of(tmpfile)
+                            md5_expected = md5_of(expected)
+                            if md5_tmp == md5_expected:
+                                self.show_message('Information', 'verification_success')
+                                self.log_message(f"✅ Verification succeeded: {md5_expected}")
+                            else:
+                                self.show_message('Warning', 'verification_mismatch', 'Warning')
+                                self.log_message(f"❌ Verification mismatch: expected {md5_expected}, got {md5_tmp}")
+                        except Exception as e:
+                            self.log_message(f"❌ Verification failed: {e}")
+                            self.show_message('Warning', 'verification_failed', 'Warning')
+                    else:
+                        # RL command failed
+                        self.show_message('Warning', 'verification_failed', 'Warning')
+                    # cleanup temp file
+                    try:
+                        if tmpfile and os.path.exists(tmpfile):
+                            os.remove(tmpfile)
+                    except Exception as e:
+                        self.log_message(f"⚠️ Failed to remove temp file: {e}")
+        except Exception:
+            pass
 
     def enter_maskrom_mode(self):
-        self.run_command([RKTOOL, "db"], "rebooting")
+        # Prefer to supply a loader when invoking `db <Loader>`.
+        loader_path = getattr(self, 'loader_path', None)
+        loader = loader_path.text() if loader_path else ''
+        if loader and os.path.exists(loader):
+            self.run_command([RKTOOL, "db", loader], "downloading_boot")
+        else:
+            # Running `db` without a loader is unsafe and ambiguous.
+            # Require the user to explicitly choose a loader instead of
+            # silently falling back to legacy behavior.
+            self.show_message("Warning", "select_loader_file", "Warning")
+            return
 
     def enter_loader_mode(self):
-        self.run_command([RKTOOL, "ul"], "loading_loader")
+        # Reuse the loader upload logic which validates the loader path.
+        self.load_loader()
 
     def reset_device(self):
         self.run_command([RKTOOL, "rd"], "rebooting")
@@ -844,7 +1061,8 @@ class RKDevToolGUI(QMainWindow):
 
     # TODO: Implement full firmware backup functionality
     def backup_firmware(self):
-        self.show_message("Warning", "Full firmware backup not yet implemented.")
+        # Inform user the feature is not implemented yet using a stable translation key
+        self.show_message("Warning", "backup_not_implemented", "Warning")
 
     def on_address_changed(self, text):
         if self.tr("custom_address") in text:
@@ -857,7 +1075,8 @@ class RKDevToolGUI(QMainWindow):
         if not firmware_path or not os.path.exists(firmware_path):
             self.show_message("Warning", "select_firmware_file", "Warning")
             return
-        self.run_command([RKTOOL, "ef", firmware_path], "burning")
+        # Write full firmware to LBA starting at 0 (use `wl <BeginSec> <File>`).
+        self.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning")
         
     def load_loader(self):
         loader_path = self.loader_path.text()
@@ -888,6 +1107,8 @@ class RKDevToolGUI(QMainWindow):
         self.show_message("Information", "Reading partition table...")
 
     def burn_partition(self):
+        # Use the partition key (currentData) for wlx <PartitionName> <File>
+        selected_partition_key = self.partition_combo.currentData()
         selected_partition = self.partition_combo.currentText()
         partition_path = self.partition_file_path.text()
         if not selected_partition:
@@ -896,14 +1117,21 @@ class RKDevToolGUI(QMainWindow):
         if not partition_path or not os.path.exists(partition_path):
             self.show_message("Warning", "select_file_for_partition", "Warning")
             return
-        match = re.search(r'\((\S+)\)', selected_partition)
-        if not match:
-            self.show_message("Warning", "select_partition", "Warning")
-            return
-        address = match.group(1)
-        self.run_command([RKTOOL, "wlx", address, partition_path], "burning")
+        # If data() is set we prefer that (it's the partition key); otherwise try
+        # to fall back to parsing the address/name from the visible text.
+        if selected_partition_key:
+            part_arg = selected_partition_key
+        else:
+            match = re.search(r'\((\S+)\)', selected_partition)
+            if not match:
+                self.show_message("Warning", "select_partition", "Warning")
+                return
+            part_arg = match.group(1)
+
+        self.run_command([RKTOOL, "wlx", part_arg, partition_path], "burning")
         
     def backup_partition(self):
+        selected_partition_key = self.partition_combo.currentData()
         selected_partition = self.partition_combo.currentText()
         save_path = self.partition_file_path.text()
         if not selected_partition:
@@ -913,29 +1141,94 @@ class RKDevToolGUI(QMainWindow):
             save_path, _ = QFileDialog.getSaveFileName(self, self.tr("save_file_dialog"))
             if not save_path:
                 return
-        match = re.search(r'\((\S+)\)', selected_partition)
-        if not match:
-            self.show_message("Warning", "select_partition", "Warning")
-            return
-        address = match.group(1)
+        # Prefer partition key to find address preset; fallback to parsing visible text.
+        if selected_partition_key and selected_partition_key in PARTITION_PRESETS:
+            address = PARTITION_PRESETS[selected_partition_key]['address']
+        else:
+            match = re.search(r'\((\S+)\)', selected_partition)
+            if not match:
+                self.show_message("Warning", "select_partition", "Warning")
+                return
+            address = match.group(1)
+
+        # Default sector length is kept as previously (0x1000).
         self.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
         
     def get_detailed_device_info(self):
         self.run_command([RKTOOL, "rcb"], "reading_device_info")
+
+    # New commands mapped to rkdeveloptool
+    def read_flash_id(self):
+        self.run_command([RKTOOL, "rid"], "reading_flash_info")
+
+    def read_flash_info(self):
+        self.run_command([RKTOOL, "rfi"], "reading_flash_info")
+
+    def read_chip_info(self):
+        self.run_command([RKTOOL, "rci"], "reading_device_info")
+
+    def read_capability(self):
+        self.run_command([RKTOOL, "rcb"], "reading_device_info")
+
+    def change_storage(self):
+        storage = self.change_storage_combo.currentData()
+        if not storage:
+            self.show_message("Warning", "select_storage", "Warning")
+            return
+        self.run_command([RKTOOL, "cs", storage], "changing_storage")
+
+    def pack_bootloader(self):
+        outpath = self.pack_output_path.text()
+        if not outpath:
+            self.show_message("Warning", "select_pack_output", "Warning")
+            return
+        self.run_command([RKTOOL, "pack", outpath], "packing_bootloader")
+
+    def unpack_bootloader(self):
+        inpath = self.unpack_input_path.text()
+        if not inpath or not os.path.exists(inpath):
+            self.show_message("Warning", "select_unpack_input", "Warning")
+            return
+        self.run_command([RKTOOL, "unpack", inpath], "unpacking_bootloader")
+
+    def write_gpt(self):
+        gptfile = self.gpt_path.text()
+        if not gptfile or not os.path.exists(gptfile):
+            self.show_message("Warning", "select_gpt_file", "Warning")
+            return
+        self.run_command([RKTOOL, "gpt", gptfile], "writing_gpt")
+
+    def write_parameter(self):
+        prm = self.prm_text.text()
+        if not prm:
+            self.show_message("Warning", "select_parameter", "Warning")
+            return
+        self.run_command([RKTOOL, "prm", prm], "writing_parameter")
+
+    def tag_spl(self):
+        tag = self.tagspl_tag.text()
+        spl = self.tagspl_spl_path.text()
+        if not tag or not spl or not os.path.exists(spl):
+            self.show_message("Warning", "select_tagspl_input", "Warning")
+            return
+        self.run_command([RKTOOL, "tagspl", tag, spl], "tagging_spl")
 
     def upgrade_firmware(self):
         firmware_path = self.upgrade_file_path.text()
         if not firmware_path or not os.path.exists(firmware_path):
             self.show_message("Warning", "select_firmware_file", "Warning")
             return
-        self.run_command([RKTOOL, "uf", firmware_path], "upgrade")
+        # Use raw write for firmware upgrade (write LBA at 0). Adjust if a
+        # dedicated `uf`/upgrade command is preferred in your rkdeveloptool.
+        self.run_command([RKTOOL, "wl", "0x0", firmware_path], "upgrade")
 
     def erase_flash(self):
         reply = QMessageBox.question(self, self.tr("erase_flash_warning_title"),
                                      self.tr("erase_flash_warning_message"),
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            self.run_command([RKTOOL, "ef", "all"], "erase_flash")
+            # `ef` is the canonical erase command; avoid passing a non-standard 'all'.
+            self.run_command([RKTOOL, "ef"], "erase_flash")
             
     def test_device(self):
         self.run_command([RKTOOL, "td"], "test_connection")
@@ -945,8 +1238,9 @@ class RKDevToolGUI(QMainWindow):
                                      self.tr("format_flash_warning_message"),
                                      QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            self.run_command([RKTOOL, "format"], "format_flash")
-            
+            # Map 'format' UI action to rkdeveloptool's 'ef' (erase flash).
+            self.run_command([RKTOOL, "ef"], "erase_flash")
+
     def read_flash(self):
         address = self.read_address.text()
         length = self.read_length.text()
@@ -965,10 +1259,80 @@ class RKDevToolGUI(QMainWindow):
         if not address:
             self.show_message("Warning", "select_address_for_verify", "Warning")
             return
-        self.run_command([RKTOOL, "verify", address, file_path], "verifying")
+        # Determine sector size from verify UI: 512/4096/custom
+        sector_size = 512
+        try:
+            sel = self.verify_sector_combo.currentData()
+            if sel == 'custom':
+                custom = self.verify_sector_custom.text().strip()
+                if custom:
+                    sector_size = int(custom)
+            else:
+                sector_size = int(sel)
+        except Exception:
+            sector_size = 512
+
+        # If user provided sector count directly in read_length, use it as-is
+        sector_len_arg = None
+        try:
+            user_len = self.read_length.text().strip()
+            if user_len:
+                sector_len_arg = user_len
+        except Exception:
+            sector_len_arg = None
+
+        if not sector_len_arg:
+            try:
+                fsize = os.path.getsize(file_path)
+                sectors = math.ceil(fsize / sector_size)
+                sector_len_arg = hex(sectors)
+            except Exception:
+                sector_len_arg = "0x1000"
+
+        # Prepare a temp file path
+        try:
+            tf = tempfile.NamedTemporaryFile(delete=False)
+            tmpfile = tf.name
+            tf.close()
+        except Exception:
+            tmpdir = tempfile.gettempdir()
+            tmpfile = os.path.join(tmpdir, f"rkverify_{os.getpid()}_{int(hashlib.md5(file_path.encode()).hexdigest(),16) % 100000}.bin")
+
+        # Save expected file path for on_command_finished
+        self._verify_tmpfile = tmpfile
+        self._verify_expected_file = file_path
+
+        # Run rl to read device into tmpfile, description key 'verifying' triggers post-check
+        self.run_command([RKTOOL, "rl", address, sector_len_arg, tmpfile], "verifying")
 
     def calculate_md5(self):
-        self.show_message("Information", "MD5 calculation not yet implemented.")
+        # Calculate MD5 of selected verify file (or prompt if empty)
+        file_path = self.verify_file_path.text()
+        if not file_path or not os.path.exists(file_path):
+            file_path, _ = QFileDialog.getOpenFileName(self, self.tr("select_file_dialog"), "", self.tr("file_dialog_all"))
+            if not file_path:
+                return
+        try:
+            h = hashlib.md5()
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(8192), b''):
+                    h.update(chunk)
+            md5sum = h.hexdigest()
+            self.show_message("Information", f"MD5: {md5sum}")
+            self.log_message(f"MD5({file_path}) = {md5sum}")
+        except Exception as e:
+            self.show_message("Warning", "md5_failed")
+            self.log_message(f"MD5 calculation failed: {e}")
+
+    def on_verify_sector_changed(self, index):
+        try:
+            sel = self.verify_sector_combo.currentData()
+            if sel == 'custom':
+                self.verify_sector_custom.setEnabled(True)
+            else:
+                self.verify_sector_custom.setEnabled(False)
+        except Exception:
+            pass
 
     def toggle_debug_log(self, state):
         pass
@@ -978,10 +1342,10 @@ class RKDevToolGUI(QMainWindow):
         if file_path:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(self.log_output.toPlainText())
-            self.show_message("Information", "Log saved successfully.")
+            self.show_message("Information", "log_saved")
 
     def show_usb_info(self):
-        self.show_message("Information", "USB information not yet implemented.")
+        self.show_message("Information", "usb_info_not_implemented")
 
     def clear_log(self):
         self.log_output.clear()
