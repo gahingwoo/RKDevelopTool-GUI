@@ -43,9 +43,9 @@ def build_with_nuitka():
     
     # Include necessary files
     if os.path.exists("i18n.py"):
-        cmd.extend(["--include-data-file", "./i18n.py=i18n.py"])
+        cmd.extend(["--include-data-file=./i18n.py=i18n.py"])
     if os.path.exists("readme.md"):
-        cmd.extend(["--include-data-file", "./readme.md=readme.md"])
+        cmd.extend(["--include-data-file=./readme.md=readme.md"])
     
     # Add main script
     cmd.append("rkdevtoolgui.py")
