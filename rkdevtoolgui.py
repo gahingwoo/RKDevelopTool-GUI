@@ -5,6 +5,7 @@ import os
 import hashlib
 import tempfile
 import math
+import functools
 
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase
@@ -13,8 +14,29 @@ from PySide6.QtWidgets import (
     QTabWidget, QListWidget, QTextEdit, QFileDialog, QLabel, QLineEdit,
     QProgressBar, QMessageBox, QComboBox, QGroupBox, QGridLayout, QCheckBox,
     QSplitter, QTableWidget, QTableWidgetItem, QSpinBox, QTextBrowser,
-    QScrollArea, QHeaderView
+    QScrollArea, QHeaderView, QSizePolicy
+    , QInputDialog
 )
+
+
+class AutoLoadCombo(QComboBox):
+    """QComboBox subclass which calls a callback when the popup is shown.
+
+    This lets us automatically trigger a partition read whenever the user
+    opens the address selection dropdown.
+    """
+    def __init__(self, parent=None, on_open=None):
+        super().__init__(parent)
+        self._on_open = on_open
+
+    def showPopup(self):
+        try:
+            if callable(self._on_open):
+                # Trigger partition read (non-blocking; uses PartitionPPTWorker)
+                self._on_open()
+        except Exception:
+            pass
+        super().showPopup()
 
 
 def _safe_slot(fn):
@@ -71,18 +93,8 @@ from i18n import TRANSLATIONS
 
 RKTOOL = "rkdeveloptool"
 
-PARTITION_PRESETS = {
-    "parameter": {"address": "0x2000", "zh": "参数分区", "en": "Parameter"},
-    "uboot": {"address": "0x4000", "zh": "U-Boot", "en": "U-Boot"},
-    "trust": {"address": "0x6000", "zh": "Trust", "en": "Trust"},
-    "boot": {"address": "0x8000", "zh": "Boot 内核", "en": "Boot Kernel"},
-    "recovery": {"address": "0x10000", "zh": "Recovery", "en": "Recovery"},
-    "backup": {"address": "0x18000", "zh": "备份分区", "en": "Backup Partition"},
-    "system": {"address": "0x20000", "zh": "System 系统", "en": "System"},
-    "vendor": {"address": "0x120000", "zh": "Vendor", "en": "Vendor"},
-    "oem": {"address": "0x140000", "zh": "OEM 定制", "en": "OEM Custom"},
-    "userdata": {"address": "0x160000", "zh": "用户数据", "en": "Userdata"}
-}
+# PARTITION_PRESETS removed: prefer reading partition table at runtime
+# If you need static defaults, reintroduce a minimal mapping here.
 
 CHIP_FAMILIES = {
     "RK3066": "RK3066 Family",
@@ -176,6 +188,24 @@ class DeviceWorker(QThread):
     def stop(self):
         self.running = False
 
+
+class PartitionPPTWorker(QThread):
+    """Background worker to run `rkdeveloptool ppt` and emit output."""
+    finished = Signal(str, int)
+
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        try:
+            result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=10)
+            out = result.stdout or ""
+            code = result.returncode
+            self.finished.emit(out, code)  # Emit output and return code
+        except Exception as e:
+            # emit empty output with non-zero code
+            self.finished.emit(str(e), 1)
+
 class CommandWorker(QThread):
     """命令执行工作线程"""
     progress = Signal(int)
@@ -258,6 +288,13 @@ class RKDevToolGUI(QMainWindow):
         self.manager = manager
         self.tr = self.manager.tr
         
+        # partitions: map partition name -> {'address': '0x...', 'size': '0x...'}
+        self.partitions = {}
+        # Ensure main window is large enough to show partition table content
+        try:
+            self.setMinimumSize(1200, 720)
+        except Exception:
+            pass
         self.set_application_font()
         
         self.device_worker = None
@@ -274,22 +311,33 @@ class RKDevToolGUI(QMainWindow):
         
         main_layout = QHBoxLayout(central_widget)
         
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        # Track whether a partition refresh is in progress to avoid re-entrancy
+        self._partition_refresh_lock = False
 
         left_scroll_area = QScrollArea()
         left_scroll_area.setWidgetResizable(True)
         self.left_panel = self.create_left_panel()
         left_scroll_area.setWidget(self.left_panel)
-        splitter.addWidget(left_scroll_area)
+        self.splitter.addWidget(left_scroll_area)
         
         right_scroll_area = QScrollArea()
         right_scroll_area.setWidgetResizable(True)
         self.right_panel = self.create_right_panel()
         right_scroll_area.setWidget(self.right_panel)
-        splitter.addWidget(right_scroll_area)
-        
-        splitter.setSizes([350, 1050])
-        main_layout.addWidget(splitter)
+        self.splitter.addWidget(right_scroll_area)
+        # Save initial sizes so we can restore them after partition refreshes
+        try:
+            self._splitter_sizes = [350, 1050]
+            self.splitter.setSizes(self._splitter_sizes)
+        except Exception:
+            self._splitter_sizes = None
+        # Keep splitter sizes up-to-date when user manually moves the splitter
+        try:
+            self.splitter.splitterMoved.connect(_safe_slot(self._on_splitter_moved))
+        except Exception:
+            pass
+        main_layout.addWidget(self.splitter)
         
         self.create_status_bar()
 
@@ -395,9 +443,16 @@ class RKDevToolGUI(QMainWindow):
         self.backup_firmware_btn = QPushButton()
         self.backup_firmware_btn.setProperty("class", "success")
         self.backup_firmware_btn.clicked.connect(_safe_slot(self.backup_firmware))
+        # Add quick access to flash info commands here so they're easy to reach
+        self.read_flash_id_btn = QPushButton()
+        self.read_flash_id_btn.clicked.connect(_safe_slot(self.read_flash_id))
+        self.read_flash_info_btn = QPushButton()
+        self.read_flash_info_btn.clicked.connect(_safe_slot(self.read_flash_info))
         quick_layout.addWidget(self.read_info_btn)
         quick_layout.addWidget(self.read_partitions_btn)
         quick_layout.addWidget(self.backup_firmware_btn)
+        quick_layout.addWidget(self.read_flash_id_btn)
+        quick_layout.addWidget(self.read_flash_info_btn)
         self.quick_group.setLayout(quick_layout)
         layout.addWidget(self.device_group)
         layout.addWidget(self.mode_group)
@@ -445,16 +500,14 @@ class RKDevToolGUI(QMainWindow):
         self.address_label.setText(self.tr("target_address"))
         self.custom_address.setPlaceholderText(self.tr("custom_address_placeholder"))
         self.burn_image_btn.setText(self.tr("burn_image_btn"))
-        # address combo
-        self.address_combo.clear()
-        self.address_combo.addItem(self.tr("address_full_firmware"))
-        self.address_combo.addItem(self.tr("address_parameter"))
-        self.address_combo.addItem(self.tr("address_uboot"))
-        self.address_combo.addItem(self.tr("address_trust"))
-        self.address_combo.addItem(self.tr("address_boot"))
-        self.address_combo.addItem(self.tr("address_recovery"))
-        self.address_combo.addItem(self.tr("address_system"))
-        self.address_combo.addItem(self.tr("custom_address"))
+        # address combo: populate with defaults and any parsed partition addresses
+        self.populate_address_combo()
+        # Flash maintenance quick buttons on the download page
+        try:
+            self.erase_flash_btn.setText(self.tr("erase_flash_btn"))
+            self.test_device_btn.setText(self.tr("test_device_btn"))
+        except Exception:
+            pass
 
     def _update_partition_tab_texts(self):
         self.tab_widget.setTabText(1, self.tr("partition_tab"))
@@ -468,9 +521,258 @@ class RKDevToolGUI(QMainWindow):
         self.partition_file_browse_btn.setText(self.tr("browse_btn"))
         self.burn_partition_btn.setText(self.tr("burn_partition_btn"))
         self.backup_partition_btn.setText(self.tr("backup_partition_btn"))
+        # Populate partition combo from parsed partitions if available,
+        # otherwise fall back to PARTITION_PRESETS.
+        self.populate_partition_combo()
+
+    def populate_partition_combo(self):
+        """Fill `self.partition_combo` using `self.partitions` if present.
+            If no partitions are parsed, leave the combo empty — partition
+            entries should come from a live `ppt` read rather than a static
+            preset mapping.
+            """
         self.partition_combo.clear()
-        for key, value in PARTITION_PRESETS.items():
-            self.partition_combo.addItem(f"{self.tr(value.get(self.manager.lang, key))} ({value['address']})", key)
+        if self.partitions:
+            for name, info in self.partitions.items():
+                addr = info.get('address', '')
+                display = f"{name} ({addr})"
+                self.partition_combo.addItem(display, name)
+        else:
+            # Intentionally do not populate from static presets; prefer
+            # dynamic partition reads via `read_partition_table()`.
+            pass
+
+    def populate_address_combo(self):
+        """Populate `self.address_combo` (download tab) with default addresses
+        plus any parsed partition addresses from `self.partitions`.
+        """
+        try:
+            # Keep only core entries: full firmware and custom address.
+            # Partition entries will be appended after a ppt read (on popup).
+            self.address_combo.clear()
+            self.address_combo.addItem(self.tr("address_full_firmware"))
+            self.address_combo.addItem(self.tr("custom_address"))
+
+            # If we already have parsed partitions, append them as well
+            if getattr(self, 'partitions', None):
+                for name, info in self.partitions.items():
+                    addr = info.get('address', '')
+                    self.address_combo.addItem(f"{name} ({addr})")
+        except Exception:
+            pass
+
+    def parse_partition_info(self, text):
+        """Parse output from `rkdeveloptool ppt` and fill `self.partitions`.
+
+        Expected lines like:
+        NO  LBA       Name
+        00  00002000  security
+        """
+        parts = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # match lines like: index  LBA  name
+            m = re.match(r'^(?:\d+)[\s,]+([0-9A-Fa-f]+)[\s,]+(\S+)$', line)
+            if m:
+                lba = m.group(1)
+                name = m.group(2)
+                try:
+                    start_int = int(lba, 16)
+                    addr = hex(start_int)
+                except Exception:
+                    addr = f"0x{lba}"
+                parts.append((name, start_int, addr))
+
+        # Sort by start_int and build mapping
+        parts.sort(key=lambda x: x[1])
+        self.partitions = {}
+        for idx, (name, start_int, addr) in enumerate(parts):
+            size = None
+            if idx + 1 < len(parts):
+                next_start = parts[idx+1][1]
+                size_val = next_start - start_int
+                try:
+                    size = hex(size_val)
+                except Exception:
+                    size = str(size_val)
+            else:
+                size = "unknown"
+            self.partitions[name] = {'address': addr, 'size': size}
+
+    def populate_partition_table(self):
+        """Populate `self.partition_table` from `self.partitions`.
+        """
+        self.partition_table.setRowCount(0)
+        # Ensure splitter sizes are restored even if parsing/partition data
+        # is missing or the ppt read failed. This prevents the UI from
+        # collapsing on subsequent refresh attempts when the worker fails.
+        try:
+            self._restore_splitter_sizes()
+        except Exception:
+            pass
+
+        if not self.partitions:
+            return
+        items = list(self.partitions.items())
+        self.partition_table.setRowCount(len(items))
+        for row, (name, info) in enumerate(items):
+            addr = info.get('address', '')
+            size = info.get('size', '')
+            self.partition_table.setItem(row, 0, QTableWidgetItem(name))
+            self.partition_table.setItem(row, 1, QTableWidgetItem(addr))
+            self.partition_table.setItem(row, 2, QTableWidgetItem(size))
+            # Create action buttons per-row: Backup / Write
+            action_widget = QWidget()
+            action_layout = QHBoxLayout(action_widget)
+            action_layout.setContentsMargins(0, 0, 0, 0)
+            backup_btn = QPushButton(self.tr('action_backup'))
+            write_btn = QPushButton(self.tr('action_write'))
+            backup_btn.clicked.connect(_safe_slot(lambda checked=False, n=name: self.backup_partition_by_name(n)))
+            write_btn.clicked.connect(_safe_slot(lambda checked=False, n=name: self.write_partition_by_name(n)))
+            action_layout.addWidget(backup_btn)
+            action_layout.addWidget(write_btn)
+            self.partition_table.setCellWidget(row, 3, action_widget)
+        # Resize columns/rows to fit content and ensure no truncation where possible
+        try:
+            self.partition_table.resizeColumnsToContents()
+            self.partition_table.resizeRowsToContents()
+            # Let the last column stretch to fill remaining space
+            self.partition_table.horizontalHeader().setStretchLastSection(True)
+        except Exception:
+            pass
+
+        # After repopulating the partition table, restore splitter sizes
+        try:
+            # Prefer restoring the user's most-recent sizes saved before refresh.
+            if getattr(self, 'splitter', None):
+                if getattr(self, '_splitter_sizes_prev', None):
+                    self.splitter.setSizes(self._splitter_sizes_prev)
+                elif getattr(self, '_splitter_sizes', None):
+                    self.splitter.setSizes(self._splitter_sizes)
+        except Exception:
+            pass
+
+    def _restore_splitter_sizes(self):
+        """Restore the splitter sizes from the most recent saved state.
+
+        This is factored out so we can call it from multiple failure/success
+        code paths and ensure the UI layout remains stable even when
+        partition reads fail or return no data.
+        """
+        try:
+            if getattr(self, 'splitter', None):
+                # Prefer the most recently saved sizes. Do NOT clear
+                # `_splitter_sizes_prev` here — keep it for subsequent
+                # refreshes until a new save occurs. Clearing it caused
+                # later refreshes to fall back to the hard-coded initial
+                # sizes which produced the observed shrinking behavior.
+                if getattr(self, '_splitter_sizes_prev', None):
+                    try:
+                        self.log_message(f"🔧 Restoring splitter sizes from prev: {self._splitter_sizes_prev}")
+                    except Exception:
+                        pass
+                    self.splitter.setSizes(self._splitter_sizes_prev)
+                elif getattr(self, '_splitter_sizes', None):
+                    try:
+                        self.log_message(f"🔧 Restoring splitter sizes from initial: {self._splitter_sizes}")
+                    except Exception:
+                        pass
+                    self.splitter.setSizes(self._splitter_sizes)
+        except Exception:
+            pass
+
+    def _on_splitter_moved(self, pos=None, index=None):
+        """Handler for splitterMoved signal to capture latest sizes."""
+        try:
+            if getattr(self, 'splitter', None):
+                self._splitter_sizes_prev = self.splitter.sizes()
+                try:
+                    self.log_message(f"🔧 saved splitter sizes: {self._splitter_sizes_prev}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def on_partition_ppt_finished(self, out, code):
+        """Handler called when PartitionPPTWorker finishes."""
+        try:
+            if code == 0 and out:
+                self.parse_partition_info(out)  # Parse the output
+                self.populate_partition_table()  # Update the UI table
+                self.populate_partition_combo()  # Refresh the combo box
+                self.populate_address_combo()  # Refresh download address combo
+                self.log_message(self.tr('partition_read_ok'))  # Log success
+                self.statusBar().showMessage(self.tr('partition_read_ok'))  # Update status bar
+            else:
+                # Show whatever output we got and fallback to log
+                self.log_message(out or self.tr('reading_partitions'))  # Log the output
+                self.statusBar().showMessage(self.tr('reading_partitions'))  # Update status bar
+        except Exception as e:
+            self.log_message(f"⚠️ parse ppt failed: {e}")
+        finally:
+            # Always restore splitter sizes (saved before the ppt read)
+            try:
+                self._restore_splitter_sizes()
+            except Exception:
+                pass
+            # Release refresh lock
+            try:
+                self._partition_refresh_lock = False
+            except Exception:
+                pass
+
+    def backup_partition_by_name(self, name):
+        # Prompt for save path
+        save_path, _ = QFileDialog.getSaveFileName(self, self.tr('save_file_dialog'), f"{name}.bin")
+        if not save_path:
+            return
+        # Manual override
+        try:
+            if getattr(self, 'manual_address_enable', None) and self.manual_address_enable.isChecked():
+                addr = self.manual_address.text().strip()
+                if not addr:
+                    self.show_message("Warning", "enter_manual_address", "Warning")
+                    return
+                self.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
+                return
+        except Exception:
+            pass
+
+        # Use parsed partition mapping
+        if name in self.partitions:
+            addr = self.partitions[name].get('address')
+            if addr:
+                self.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
+                return
+
+        # Fallback: show warning
+        self.show_message("Warning", "select_partition", "Warning")
+
+    def write_partition_by_name(self, name):
+        # Prompt for file to write
+        file_path, _ = QFileDialog.getOpenFileName(self, self.tr('browse_btn'), "", self.tr('file_dialog_image'))
+        if not file_path or not os.path.exists(file_path):
+            return
+        # Manual override
+        try:
+            if getattr(self, 'manual_address_enable', None) and self.manual_address_enable.isChecked():
+                addr = self.manual_address.text().strip()
+                if not addr:
+                    self.show_message("Warning", "enter_manual_address", "Warning")
+                    return
+                self.run_command([RKTOOL, "wl", addr, file_path], "burning")
+                return
+        except Exception:
+            pass
+
+        # Use wlx with partition name if possible
+        if name:
+            self.run_command([RKTOOL, "wlx", name, file_path], "burning")
+            return
+
+        self.show_message("Warning", "select_partition", "Warning")
 
     def _update_parameter_tab_texts(self):
         self.tab_widget.setTabText(2, self.tr("parameter_tab"))
@@ -488,18 +790,35 @@ class RKDevToolGUI(QMainWindow):
 
     def _update_upgrade_tab_texts(self):
         self.tab_widget.setTabText(3, self.tr("upgrade_tab"))
-        self.upgrade_group.setTitle(self.tr("firmware_upgrade_group"))
-        self.upgrade_label.setText(self.tr("upgrade_file_placeholder"))
-        self.upgrade_file_path.setPlaceholderText(self.tr("upgrade_file_placeholder"))
-        self.upgrade_browse_btn.setText(self.tr("browse_btn"))
-        self.upgrade_btn.setText(self.tr("start_upgrade_btn"))
+        # Repurpose the upgrade tab into Pack/Unpack and pack-related tools
+        try:
+            self.pack_group.setTitle(self.tr("firmware_upgrade_group"))
+            self.pack_label.setText(self.tr("pack_label"))
+            self.pack_browse_btn.setText(self.tr("browse_btn"))
+            self.pack_btn.setText(self.tr("pack_btn"))
+
+            self.unpack_group.setTitle(self.tr("unpack_label"))
+            self.unpack_label.setText(self.tr("unpack_label"))
+            self.unpack_browse_btn.setText(self.tr("browse_btn"))
+            self.unpack_btn.setText(self.tr("unpack_btn"))
+
+            self.pack_ops_group.setTitle(self.tr("pack_ops_group") if hasattr(self, 'tr') else self.tr("pack_ops_group") )
+            self.gpt_label.setText(self.tr("gpt_label"))
+            self.gpt_browse_btn.setText(self.tr("browse_btn"))
+            self.gpt_btn.setText(self.tr("gpt_btn"))
+            self.prm_label.setText(self.tr("prm_label"))
+            self.prm_text.setPlaceholderText(self.tr("prm_placeholder"))
+            self.prm_btn.setText(self.tr("prm_btn"))
+            self.tagspl_label.setText(self.tr("tagspl_label"))
+            self.tagspl_browse_btn.setText(self.tr("browse_btn"))
+            self.tagspl_btn.setText(self.tr("tagspl_btn"))
+        except Exception:
+            pass
 
     def _update_advanced_tab_texts(self):
         self.tab_widget.setTabText(4, self.tr("advanced_tab"))
         self.flash_ops_group.setTitle(self.tr("flash_ops_group"))
-        self.erase_flash_btn.setText(self.tr("erase_flash_btn"))
-        self.test_device_btn.setText(self.tr("test_device_btn"))
-        self.format_flash_btn.setText(self.tr("format_flash_btn"))
+        # Erase/test moved to download tab; format removed.
         self.rw_ops_group.setTitle(self.tr("rw_ops_group"))
         self.read_address_label.setText(self.tr("start_address"))
         self.read_address.setPlaceholderText(self.tr("start_address_placeholder"))
@@ -532,25 +851,9 @@ class RKDevToolGUI(QMainWindow):
         # Misc ops texts
         self.read_flash_id_btn.setText(self.tr("read_flash_id_btn"))
         self.read_flash_info_btn.setText(self.tr("read_flash_info_btn"))
-        self.read_chip_info_btn.setText(self.tr("read_chip_info_btn"))
-        self.read_capability_btn.setText(self.tr("read_capability_btn"))
         self.change_storage_label.setText(self.tr("change_storage_label"))
         self.change_storage_btn.setText(self.tr("change_storage_btn"))
-        self.pack_label.setText(self.tr("pack_label"))
-        self.pack_browse_btn.setText(self.tr("browse_btn"))
-        self.pack_btn.setText(self.tr("pack_btn"))
-        self.unpack_label.setText(self.tr("unpack_label"))
-        self.unpack_browse_btn.setText(self.tr("browse_btn"))
-        self.unpack_btn.setText(self.tr("unpack_btn"))
-        self.gpt_label.setText(self.tr("gpt_label"))
-        self.gpt_browse_btn.setText(self.tr("browse_btn"))
-        self.gpt_btn.setText(self.tr("gpt_btn"))
-        self.prm_label.setText(self.tr("prm_label"))
-        self.prm_text.setPlaceholderText(self.tr("prm_placeholder"))
-        self.prm_btn.setText(self.tr("prm_btn"))
-        self.tagspl_label.setText(self.tr("tagspl_label"))
-        self.tagspl_browse_btn.setText(self.tr("browse_btn"))
-        self.tagspl_btn.setText(self.tr("tagspl_btn"))
+
 
     def _update_statusbar_texts(self):
         self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{self.tr('not_connected_status')}")
@@ -597,7 +900,7 @@ class RKDevToolGUI(QMainWindow):
         self.firmware_label = QLabel()
         self.firmware_path = QLineEdit()
         self.firmware_browse_btn = QPushButton()
-        self.firmware_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.firmware_path, "file_dialog_firmware")))
+        self.register_browse(self.firmware_browse_btn, self.firmware_path, "file_dialog_firmware")
         self.onekey_burn_btn = QPushButton()
         self.onekey_burn_btn.setProperty("class", "success")
         self.onekey_burn_btn.clicked.connect(_safe_slot(self.onekey_burn))
@@ -611,7 +914,7 @@ class RKDevToolGUI(QMainWindow):
         self.loader_label = QLabel()
         self.loader_path = QLineEdit()
         self.loader_browse_btn = QPushButton()
-        self.loader_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.loader_path, "file_dialog_loader")))
+        self.register_browse(self.loader_browse_btn, self.loader_path, "file_dialog_loader")
         self.auto_load_loader = QCheckBox()
         self.load_loader_btn = QPushButton()
         self.load_loader_btn.setProperty("class", "primary")
@@ -627,9 +930,10 @@ class RKDevToolGUI(QMainWindow):
         self.image_label = QLabel()
         self.image_path = QLineEdit()
         self.image_browse_btn = QPushButton()
-        self.image_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.image_path, "file_dialog_image")))
+        self.register_browse(self.image_browse_btn, self.image_path, "file_dialog_image")
         self.address_label = QLabel()
-        self.address_combo = QComboBox()
+        # Use AutoLoadCombo so opening the dropdown triggers partition read
+        self.address_combo = AutoLoadCombo(self, on_open=self.read_partition_table)
         self.address_combo.currentTextChanged.connect(_safe_slot(self.on_address_changed))
         self.custom_address = QLineEdit()
         self.custom_address.setEnabled(False)
@@ -644,9 +948,34 @@ class RKDevToolGUI(QMainWindow):
         image_layout.addWidget(self.custom_address, 1, 2)
         image_layout.addWidget(self.burn_image_btn, 2, 0, 1, 3)
         self.image_group.setLayout(image_layout)
+        # Storage switch controls moved into the download tab for convenience
+        self.change_storage_label = QLabel()
+        self.change_storage_combo = QComboBox()
+        # Values: 1=EMMC,2=SD,9=SPINOR
+        self.change_storage_combo.addItem("EMMC", "1")
+        self.change_storage_combo.addItem("SD", "2")
+        self.change_storage_combo.addItem("SPINOR", "9")
+        self.change_storage_btn = QPushButton()
+        self.change_storage_btn.clicked.connect(_safe_slot(self.change_storage))
+
         layout.addWidget(self.onekey_group)
         layout.addWidget(self.loader_group)
         layout.addWidget(self.image_group)
+        storage_layout = QHBoxLayout()
+        storage_layout.addWidget(self.change_storage_label)
+        storage_layout.addWidget(self.change_storage_combo)
+        storage_layout.addWidget(self.change_storage_btn)
+        layout.addLayout(storage_layout)
+        # Add quick actions related to flash maintenance on the download tab
+        ops_layout = QHBoxLayout()
+        self.erase_flash_btn = QPushButton()
+        self.erase_flash_btn.setProperty("class", "danger")
+        self.erase_flash_btn.clicked.connect(_safe_slot(self.erase_flash))
+        self.test_device_btn = QPushButton()
+        self.test_device_btn.clicked.connect(_safe_slot(self.test_device))
+        ops_layout.addWidget(self.erase_flash_btn)
+        ops_layout.addWidget(self.test_device_btn)
+        layout.addLayout(ops_layout)
         layout.addStretch()
         return widget
 
@@ -657,7 +986,29 @@ class RKDevToolGUI(QMainWindow):
         partition_list_layout = QVBoxLayout()
         self.partition_table = QTableWidget()
         self.partition_table.setColumnCount(4)
-        self.partition_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Allow interactive resizing and make content-sized by default
+        header = self.partition_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # Improve readability for Chinese text: use application font and larger row height
+        try:
+            table_font = QApplication.font()
+            table_font.setPointSize(max(table_font.pointSize(), 11))
+            self.partition_table.setFont(table_font)
+        except Exception:
+            pass
+        self.partition_table.verticalHeader().setDefaultSectionSize(28)
+        self.partition_table.setMinimumHeight(320)
+        self.partition_table.setMinimumWidth(760)
+        # Ensure the partition table and its container expand to fill available space
+        try:
+            self.partition_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # Make the group expand as well so the table can use available area
+            try:
+                self.partition_list_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.refresh_partitions_btn = QPushButton()
         self.refresh_partitions_btn.clicked.connect(_safe_slot(self.refresh_partition_table))
         partition_list_layout.addWidget(self.partition_table)
@@ -670,8 +1021,7 @@ class RKDevToolGUI(QMainWindow):
         self.partition_file_label = QLabel()
         self.partition_file_path = QLineEdit()
         self.partition_file_browse_btn = QPushButton()
-        self.partition_file_browse_btn.clicked.connect(
-            _safe_slot(lambda: self.browse_file(self.partition_file_path, "file_dialog_image")))
+        self.register_browse(self.partition_file_browse_btn, self.partition_file_path, "file_dialog_image")
         self.burn_partition_btn = QPushButton()
         self.burn_partition_btn.setProperty("class", "success")
         self.burn_partition_btn.clicked.connect(_safe_slot(self.burn_partition))
@@ -685,9 +1035,23 @@ class RKDevToolGUI(QMainWindow):
         partition_ops_layout.addWidget(self.partition_file_browse_btn, 1, 2)
         partition_ops_layout.addWidget(self.burn_partition_btn, 2, 0)
         partition_ops_layout.addWidget(self.backup_partition_btn, 2, 1)
+        # Manual address override controls
+        self.manual_address_enable = QCheckBox()
+        self.manual_address_enable.setText(self.tr("manual_address_override") if hasattr(self, 'tr') else "Manual address")
+        self.manual_address = QLineEdit()
+        self.manual_address.setPlaceholderText("0x2000")
+        partition_ops_layout.addWidget(self.manual_address_enable, 3, 0)
+        partition_ops_layout.addWidget(self.manual_address, 3, 1)
         self.partition_ops_group.setLayout(partition_ops_layout)
-        layout.addWidget(self.partition_list_group)
-        layout.addWidget(self.partition_ops_group)
+        # Hide the old partition operations panel — consolidate operations
+        # into the download tab. Keep widgets instantiated for programmatic
+        # compatibility, but do not show them in the UI.
+        try:
+            self.partition_ops_group.hide()
+        except Exception:
+            pass
+        # Add the partition list group and let it take remaining space
+        layout.addWidget(self.partition_list_group, 1)
         layout.addStretch()
         return widget
 
@@ -739,22 +1103,80 @@ class RKDevToolGUI(QMainWindow):
     def create_upgrade_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        self.upgrade_group = QGroupBox()
-        upgrade_layout = QGridLayout()
-        self.upgrade_label = QLabel()
-        self.upgrade_file_path = QLineEdit()
-        self.upgrade_browse_btn = QPushButton()
-        self.upgrade_browse_btn.clicked.connect(
-            _safe_slot(lambda: self.browse_file(self.upgrade_file_path, "file_dialog_firmware")))
-        self.upgrade_btn = QPushButton()
-        self.upgrade_btn.setProperty("class", "warning")
-        self.upgrade_btn.clicked.connect(_safe_slot(self.upgrade_firmware))
-        upgrade_layout.addWidget(self.upgrade_label, 0, 0)
-        upgrade_layout.addWidget(self.upgrade_file_path, 0, 1)
-        upgrade_layout.addWidget(self.upgrade_browse_btn, 0, 2)
-        upgrade_layout.addWidget(self.upgrade_btn, 1, 0, 1, 3)
-        self.upgrade_group.setLayout(upgrade_layout)
-        layout.addWidget(self.upgrade_group)
+
+        # Pack group
+        self.pack_group = QGroupBox()
+        pack_layout = QGridLayout()
+        self.pack_label = QLabel()
+        self.pack_output_path = QLineEdit()
+        self.pack_browse_btn = QPushButton()
+        self.register_browse(self.pack_browse_btn, self.pack_output_path, "file_dialog_all", save=True)
+        self.pack_btn = QPushButton()
+        self.pack_btn.clicked.connect(_safe_slot(self.pack_bootloader))
+        pack_layout.addWidget(self.pack_label, 0, 0)
+        pack_layout.addWidget(self.pack_output_path, 0, 1)
+        pack_layout.addWidget(self.pack_browse_btn, 0, 2)
+        pack_layout.addWidget(self.pack_btn, 0, 3)
+        self.pack_group.setLayout(pack_layout)
+
+        # Unpack group
+        self.unpack_group = QGroupBox()
+        unpack_layout = QGridLayout()
+        self.unpack_label = QLabel()
+        self.unpack_input_path = QLineEdit()
+        self.unpack_browse_btn = QPushButton()
+        self.register_browse(self.unpack_browse_btn, self.unpack_input_path, "file_dialog_all")
+        self.unpack_btn = QPushButton()
+        self.unpack_btn.clicked.connect(_safe_slot(self.unpack_bootloader))
+        unpack_layout.addWidget(self.unpack_label, 0, 0)
+        unpack_layout.addWidget(self.unpack_input_path, 0, 1)
+        unpack_layout.addWidget(self.unpack_browse_btn, 0, 2)
+        unpack_layout.addWidget(self.unpack_btn, 0, 3)
+        self.unpack_group.setLayout(unpack_layout)
+
+        # GPT / PRM / Tag operations grouped together
+        self.pack_ops_group = QGroupBox()
+        pack_ops_layout = QGridLayout()
+        self.gpt_label = QLabel()
+        self.gpt_path = QLineEdit()
+        self.gpt_browse_btn = QPushButton()
+        self.register_browse(self.gpt_browse_btn, self.gpt_path, "file_dialog_all")
+        self.gpt_btn = QPushButton()
+        self.gpt_btn.clicked.connect(_safe_slot(self.write_gpt))
+
+        self.prm_label = QLabel()
+        self.prm_text = QLineEdit()
+        self.prm_btn = QPushButton()
+        self.prm_btn.clicked.connect(_safe_slot(self.write_parameter))
+
+        self.tagspl_label = QLabel()
+        self.tagspl_tag = QLineEdit()
+        self.tagspl_spl_path = QLineEdit()
+        self.tagspl_browse_btn = QPushButton()
+        self.register_browse(self.tagspl_browse_btn, self.tagspl_spl_path, "file_dialog_all")
+        self.tagspl_btn = QPushButton()
+        self.tagspl_btn.clicked.connect(_safe_slot(self.tag_spl))
+
+        pack_ops_layout.addWidget(self.gpt_label, 0, 0)
+        pack_ops_layout.addWidget(self.gpt_path, 0, 1)
+        pack_ops_layout.addWidget(self.gpt_browse_btn, 0, 2)
+        pack_ops_layout.addWidget(self.gpt_btn, 0, 3)
+
+        pack_ops_layout.addWidget(self.prm_label, 1, 0)
+        pack_ops_layout.addWidget(self.prm_text, 1, 1)
+        pack_ops_layout.addWidget(self.prm_btn, 1, 2)
+
+        pack_ops_layout.addWidget(self.tagspl_label, 2, 0)
+        pack_ops_layout.addWidget(self.tagspl_tag, 2, 1)
+        pack_ops_layout.addWidget(self.tagspl_spl_path, 2, 2)
+        pack_ops_layout.addWidget(self.tagspl_browse_btn, 2, 3)
+        pack_ops_layout.addWidget(self.tagspl_btn, 2, 4)
+
+        self.pack_ops_group.setLayout(pack_ops_layout)
+
+        layout.addWidget(self.pack_group)
+        layout.addWidget(self.unpack_group)
+        layout.addWidget(self.pack_ops_group)
         layout.addStretch()
         return widget
 
@@ -763,17 +1185,8 @@ class RKDevToolGUI(QMainWindow):
         layout = QVBoxLayout(widget)
         self.flash_ops_group = QGroupBox()
         flash_ops_layout = QGridLayout()
-        self.erase_flash_btn = QPushButton()
-        self.erase_flash_btn.setProperty("class", "danger")
-        self.erase_flash_btn.clicked.connect(_safe_slot(self.erase_flash))
-        self.test_device_btn = QPushButton()
-        self.test_device_btn.clicked.connect(_safe_slot(self.test_device))
-        self.format_flash_btn = QPushButton()
-        self.format_flash_btn.setProperty("class", "danger")
-        self.format_flash_btn.clicked.connect(_safe_slot(self.format_flash))
-        flash_ops_layout.addWidget(self.erase_flash_btn, 0, 0)
-        flash_ops_layout.addWidget(self.test_device_btn, 0, 1)
-        flash_ops_layout.addWidget(self.format_flash_btn, 1, 0)
+        # Erase/test buttons were moved to the Download tab; leave the
+        # flash ops group present (empty) to avoid changing layout order.
         self.flash_ops_group.setLayout(flash_ops_layout)
         self.rw_ops_group = QGroupBox()
         rw_ops_layout = QGridLayout()
@@ -784,7 +1197,7 @@ class RKDevToolGUI(QMainWindow):
         self.read_save_path_label = QLabel()
         self.read_save_path = QLineEdit()
         self.read_browse_btn = QPushButton()
-        self.read_browse_btn.clicked.connect(_safe_slot(self.browse_save_path))
+        self.register_browse(self.read_browse_btn, self.read_save_path, save=True)
         self.read_flash_btn = QPushButton()
         self.read_flash_btn.setProperty("class", "primary")
         self.read_flash_btn.clicked.connect(_safe_slot(self.read_flash))
@@ -802,7 +1215,7 @@ class RKDevToolGUI(QMainWindow):
         self.verify_file_label = QLabel()
         self.verify_file_path = QLineEdit()
         self.verify_browse_btn = QPushButton()
-        self.verify_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.verify_file_path, "file_dialog_all")))
+        self.register_browse(self.verify_browse_btn, self.verify_file_path, "file_dialog_all")
         self.verify_address_label = QLabel()
         self.verify_address = QLineEdit()
         self.verify_address.setPlaceholderText("校验地址 (如: 0x0)")
@@ -847,100 +1260,27 @@ class RKDevToolGUI(QMainWindow):
         self.misc_ops_group = QGroupBox()
         misc_layout = QGridLayout()
 
-        # Read identifiers/info
-        self.read_flash_id_btn = QPushButton()
-        self.read_flash_id_btn.clicked.connect(_safe_slot(self.read_flash_id))
-        self.read_flash_info_btn = QPushButton()
-        self.read_flash_info_btn.clicked.connect(_safe_slot(self.read_flash_info))
-        self.read_chip_info_btn = QPushButton()
-        self.read_chip_info_btn.clicked.connect(_safe_slot(self.read_chip_info))
-        self.read_capability_btn = QPushButton()
-        self.read_capability_btn.clicked.connect(_safe_slot(self.read_capability))
+        # Note: flash info quick buttons are created in the left panel's
+        # `create_left_panel()` as `self.read_flash_id_btn` /
+        # `self.read_flash_info_btn`. Do NOT recreate them here to avoid
+        # duplicate widgets and blank labels. They are intentionally not
+        # re-instantiated in the advanced tab's misc group.
 
-        # Change storage (cs)
-        self.change_storage_label = QLabel()
-        self.change_storage_combo = QComboBox()
-        # Values: 1=EMMC,2=SD,9=SPINOR
-        self.change_storage_combo.addItem("EMMC", "1")
-        self.change_storage_combo.addItem("SD", "2")
-        self.change_storage_combo.addItem("SPINOR", "9")
-        self.change_storage_btn = QPushButton()
-        self.change_storage_btn.clicked.connect(_safe_slot(self.change_storage))
 
-        # Pack / Unpack bootloader
-        self.pack_label = QLabel()
-        self.pack_output_path = QLineEdit()
-        self.pack_browse_btn = QPushButton()
-        self.pack_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.pack_output_path, "file_dialog_all")))
-        self.pack_btn = QPushButton()
-        self.pack_btn.clicked.connect(_safe_slot(self.pack_bootloader))
+        # Layout placement (compact) — flash info quick buttons are placed in
+        # the left quick group. The misc layout begins with the pack/unpack
+        # controls at row 2 to preserve existing visual order.
 
-        self.unpack_label = QLabel()
-        self.unpack_input_path = QLineEdit()
-        self.unpack_browse_btn = QPushButton()
-        self.unpack_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.unpack_input_path, "file_dialog_all")))
-        self.unpack_btn = QPushButton()
-        self.unpack_btn.clicked.connect(_safe_slot(self.unpack_bootloader))
-
-        # Write GPT and Parameter
-        self.gpt_label = QLabel()
-        self.gpt_path = QLineEdit()
-        self.gpt_browse_btn = QPushButton()
-        self.gpt_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.gpt_path, "file_dialog_all")))
-        self.gpt_btn = QPushButton()
-        self.gpt_btn.clicked.connect(_safe_slot(self.write_gpt))
-
-        self.prm_label = QLabel()
-        self.prm_text = QLineEdit()
-        self.prm_btn = QPushButton()
-        self.prm_btn.clicked.connect(_safe_slot(self.write_parameter))
-
-        # Tag SPL
-        self.tagspl_tag = QLineEdit()
-        self.tagspl_label = QLabel()
-        self.tagspl_spl_path = QLineEdit()
-        self.tagspl_browse_btn = QPushButton()
-        self.tagspl_browse_btn.clicked.connect(_safe_slot(lambda: self.browse_file(self.tagspl_spl_path, "file_dialog_all")))
-        self.tagspl_btn = QPushButton()
-        self.tagspl_btn.clicked.connect(_safe_slot(self.tag_spl))
-
-        # Layout placement (compact)
-        misc_layout.addWidget(self.read_flash_id_btn, 0, 0)
-        misc_layout.addWidget(self.read_flash_info_btn, 0, 1)
-        misc_layout.addWidget(self.read_chip_info_btn, 0, 2)
-        misc_layout.addWidget(self.read_capability_btn, 0, 3)
-
-        misc_layout.addWidget(self.change_storage_label, 1, 0)
-        misc_layout.addWidget(self.change_storage_combo, 1, 1)
-        misc_layout.addWidget(self.change_storage_btn, 1, 2)
-
-        misc_layout.addWidget(self.pack_label, 2, 0)
-        misc_layout.addWidget(self.pack_output_path, 2, 1)
-        misc_layout.addWidget(self.pack_browse_btn, 2, 2)
-        misc_layout.addWidget(self.pack_btn, 2, 3)
-
-        misc_layout.addWidget(self.unpack_label, 3, 0)
-        misc_layout.addWidget(self.unpack_input_path, 3, 1)
-        misc_layout.addWidget(self.unpack_browse_btn, 3, 2)
-        misc_layout.addWidget(self.unpack_btn, 3, 3)
-
-        misc_layout.addWidget(self.gpt_label, 4, 0)
-        misc_layout.addWidget(self.gpt_path, 4, 1)
-        misc_layout.addWidget(self.gpt_browse_btn, 4, 2)
-        misc_layout.addWidget(self.gpt_btn, 4, 3)
-
-        misc_layout.addWidget(self.prm_label, 5, 0)
-        misc_layout.addWidget(self.prm_text, 5, 1)
-        misc_layout.addWidget(self.prm_btn, 5, 2)
-
-        misc_layout.addWidget(self.tagspl_label, 6, 0)
-        misc_layout.addWidget(self.tagspl_tag, 6, 1)
-        misc_layout.addWidget(self.tagspl_spl_path, 6, 2)
-        misc_layout.addWidget(self.tagspl_browse_btn, 6, 3)
-        misc_layout.addWidget(self.tagspl_btn, 6, 4)
+        # Pack/unpack and related tools are shown on the Pack/Unpack tab.
+        # They were moved out of the Advanced tab to declutter advanced tools.
 
         self.misc_ops_group.setLayout(misc_layout)
-        layout.addWidget(self.flash_ops_group)
+        # Only add the flash ops group if it contains actionable widgets.
+        try:
+            if self.flash_ops_group.layout() and self.flash_ops_group.layout().count() > 0:
+                layout.addWidget(self.flash_ops_group)
+        except Exception:
+            pass
         layout.addWidget(self.rw_ops_group)
         layout.addWidget(self.verify_group)
         layout.addWidget(self.debug_group)
@@ -1005,25 +1345,74 @@ class RKDevToolGUI(QMainWindow):
 
     def cleanup(self):
         """Stop background workers and running subprocesses before application exit."""
+        # Robust cleanup: stop known workers and wait briefly for termination.
+        # This method should be safe to call multiple times.
         try:
-            # Stop device detection
-            if self.device_worker:
+            # Stop device worker
+            if getattr(self, 'device_worker', None):
                 try:
                     self.device_worker.stop()
                     self.device_worker.wait(1000)
                 except Exception:
                     pass
 
-            # Terminate running command worker subprocess if any
-            if self.command_worker:
+            # Stop partition worker
+            if getattr(self, 'partition_worker', None):
                 try:
-                    # request subprocess termination
-                    if hasattr(self.command_worker, 'terminate_process'):
-                        self.command_worker.terminate_process()
-                    # wait briefly for thread to finish
-                    self.command_worker.wait(1000)
+                    if self.partition_worker.isRunning():
+                        try:
+                            # If worker exposes a terminate/stop API, call it
+                            if hasattr(self.partition_worker, 'stop'):
+                                self.partition_worker.stop()
+                        except Exception:
+                            pass
+                        # Wait briefly for thread to finish
+                        self.partition_worker.wait(1000)
                 except Exception:
                     pass
+
+            # Stop mass production workers (if any)
+            if getattr(self, 'mass_workers', None):
+                for w in list(self.mass_workers):
+                    try:
+                        if getattr(w, 'terminate_process', None):
+                            try:
+                                w.terminate_process()
+                            except Exception:
+                                pass
+                        # Request thread stop if supported
+                        try:
+                            if hasattr(w, 'stop'):
+                                w.stop()
+                        except Exception:
+                            pass
+                        try:
+                            w.wait(1000)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+
+            # Terminate running single command worker subprocess if any
+            if getattr(self, 'command_worker', None):
+                try:
+                    if hasattr(self.command_worker, 'terminate_process'):
+                        try:
+                            self.command_worker.terminate_process()
+                        except Exception:
+                            pass
+                    try:
+                        self.command_worker.wait(1000)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            # Clear any locks
+            try:
+                self._partition_refresh_lock = False
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1050,6 +1439,15 @@ class RKDevToolGUI(QMainWindow):
     def show_message(self, title_key, message_key, icon="Information"):
         msg = QMessageBox()
         msg.setWindowTitle(self.tr(title_key))
+        # Ensure message box can display longer Chinese messages by
+        # increasing the minimum width and using the application font.
+        try:
+            app_font = QApplication.font()
+            app_font.setPointSize(max(app_font.pointSize(), 11))
+            msg.setFont(app_font)
+            msg.setMinimumWidth(600)
+        except Exception:
+            pass
         msg.setText(self.tr(message_key))
         if icon == "Warning":
             msg.setIcon(QMessageBox.Icon.Warning)
@@ -1064,6 +1462,33 @@ class RKDevToolGUI(QMainWindow):
         file_path, _ = QFileDialog.getOpenFileName(self, self.tr("browse_btn"), "", file_filter)
         if file_path:
             line_edit.setText(file_path)
+
+    def register_browse(self, button, line_edit, filter_key=None, save=False):
+        """Helper to connect a browse button to a line_edit.
+        If save is True, opens a Save dialog; otherwise Open dialog.
+        If filter_key is None, use generic all-files filter.
+        """
+        def _on_browse():
+            try:
+                if save:
+                    file_path, _ = QFileDialog.getSaveFileName(self, self.tr("save_file_dialog"), "", self.tr(filter_key) if filter_key else "")
+                    if file_path:
+                        line_edit.setText(file_path)
+                else:
+                    file_filter = self.tr(filter_key) if filter_key else ""
+                    file_path, _ = QFileDialog.getOpenFileName(self, self.tr("browse_btn"), "", file_filter)
+                    if file_path:
+                        line_edit.setText(file_path)
+            except Exception:
+                pass
+
+        try:
+            button.clicked.connect(_safe_slot(_on_browse))
+        except Exception:
+            try:
+                button.clicked.connect(lambda: _on_browse())
+            except Exception:
+                pass
 
     def browse_save_path(self):
         file_path, _ = QFileDialog.getSaveFileName(self, self.tr("save_file_dialog"))
@@ -1081,7 +1506,20 @@ class RKDevToolGUI(QMainWindow):
         # descriptors (which can trigger post-load introspection errors in some
         # PySide6 packaging/runtime scenarios). Use small Python wrappers instead.
         self.command_worker.progress.connect(lambda v: self.progress_bar.setValue(v))
+        # Always log to main log output
         self.command_worker.log.connect(_safe_slot(self.log_message))
+        # If this command is reading device info, also mirror output to the
+        # device info text box so the user sees detailed info in-place.
+        try:
+            if description_key == 'reading_device_info' and hasattr(self, 'device_info_text'):
+                try:
+                    self.device_info_text.clear()
+                    self.device_info_text.append(self.tr('reading_device_info'))
+                except Exception:
+                    pass
+                self.command_worker.log.connect(_safe_slot(lambda s: self.device_info_text.append(s)))
+        except Exception:
+            pass
         self.command_worker.finished_signal.connect(_safe_slot(self.on_command_finished))
         self.command_worker.start()
 
@@ -1152,12 +1590,148 @@ class RKDevToolGUI(QMainWindow):
         self.run_command([RKTOOL, "rcb"], "reading_device_info")
 
     def read_partition_table(self):
-        self.run_command([RKTOOL, "ppt"], "reading_partitions")
+        # Run ppt in a background thread and update UI when ready.
+        try:
+            # If a refresh is already running, skip and log it
+            if getattr(self, '_partition_refresh_lock', False):
+                self.log_message(self.tr('reading_partitions_already'))
+                return
+
+            # Save current splitter sizes (fallback if splitterMoved wasn't fired)
+            try:
+                if getattr(self, 'splitter', None):
+                    self._splitter_sizes_prev = self.splitter.sizes()
+            except Exception:
+                self._splitter_sizes_prev = None
+
+            # Start partition read worker
+            if getattr(self, 'partition_worker', None) and self.partition_worker.isRunning():
+                self.log_message(self.tr('reading_partitions_already'))
+                return
+            self._partition_refresh_lock = True
+            self.partition_worker = PartitionPPTWorker()
+            self.partition_worker.finished.connect(_safe_slot(self.on_partition_ppt_finished))
+            self.partition_worker.start()
+            # Use non-modal notification: log + status bar.
+            self.log_message(self.tr('reading_partitions'))
+            self.statusBar().showMessage(self.tr('reading_partitions'))
+        except Exception:
+            # fallback to synchronous call if thread cannot be started
+            try:
+                # mark lock during synchronous fallback
+                self._partition_refresh_lock = True
+                result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=5)
+                out = result.stdout.strip()
+                if result.returncode == 0 and out:
+                    self.parse_partition_info(out)
+                    self.populate_partition_table()
+                    self.populate_partition_combo()
+                    self.populate_address_combo()
+                    self.log_message(self.tr('partition_read_ok'))
+                    self.statusBar().showMessage(self.tr('partition_read_ok'))
+                    try:
+                        self._restore_splitter_sizes()
+                    except Exception:
+                        pass
+                    # clear lock after sync success
+                    try:
+                        self._partition_refresh_lock = False
+                    except Exception:
+                        pass
+                else:
+                    self.run_command([RKTOOL, "ppt"], "reading_partitions")
+                    try:
+                        self._restore_splitter_sizes()
+                    except Exception:
+                        pass
+                    try:
+                        self._partition_refresh_lock = False
+                    except Exception:
+                        pass
+            except Exception:
+                self.run_command([RKTOOL, "ppt"], "reading_partitions")
+                try:
+                    self._restore_splitter_sizes()
+                except Exception:
+                    pass
+                try:
+                    self._partition_refresh_lock = False
+                except Exception:
+                    pass
 
     # TODO: Implement full firmware backup functionality
     def backup_firmware(self):
-        # Inform user the feature is not implemented yet using a stable translation key
-        self.show_message("Warning", "backup_not_implemented", "Warning")
+        # Backup the entire flash to a user-chosen file.
+        save_path, _ = QFileDialog.getSaveFileName(self, self.tr("save_file_dialog"), "firmware_backup.bin", self.tr("file_dialog_all"))
+        if not save_path:
+            return
+
+        # Try to auto-detect flash capacity via `rkdeveloptool rfi`.
+        bytes_size = None
+        try:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+            out = (result.stdout or "") + "\n" + (result.stderr or "")
+            # Common output may include human-friendly capacity like 'Capacity: 128MB' or a hex size.
+            m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
+            if m:
+                val = float(m.group(1))
+                unit = m.group(2).upper()
+                if unit == 'MB':
+                    bytes_size = int(val * 1024 * 1024)
+                else:
+                    bytes_size = int(val * 1024 * 1024 * 1024)
+            else:
+                m2 = re.search(r'size[:\s]*(0x[0-9A-Fa-f]+)', out, re.I)
+                if m2:
+                    try:
+                        bytes_size = int(m2.group(1), 16)
+                    except Exception:
+                        bytes_size = None
+                else:
+                    # fallback: pick the largest hex-looking number present
+                    hexes = re.findall(r'0x[0-9A-Fa-f]+', out)
+                    if hexes:
+                        nums = [int(h, 16) for h in hexes]
+                        bytes_size = max(nums)
+        except Exception:
+            bytes_size = None
+
+        if bytes_size and bytes_size > 0:
+            # Convert bytes to sectors (512B) and request rl for that many sectors
+            sectors = (bytes_size + 511) // 512
+            length_arg = hex(sectors)
+            try:
+                self.log_message(f"🔧 {self.tr('detected_flash_size')}: {bytes_size} bytes -> {length_arg} sectors")
+            except Exception:
+                pass
+            self.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
+            return
+
+        # If we couldn't auto-detect, ask the user to provide a length (in sectors, hex or decimal)
+        text, ok = QInputDialog.getText(self, self.tr('enter_backup_length_title'), self.tr('enter_backup_length_prompt'))
+        if not ok or not text:
+            # User cancelled
+            try:
+                self.show_message('Information', 'backup_cancelled')
+            except Exception:
+                pass
+            return
+
+        length_arg = text.strip()
+        # Basic normalization: if user typed bytes (like '128MB'), attempt to convert
+        m = re.match(r'^([0-9.]+)\s*(MB|GB)$', length_arg, re.I)
+        if m:
+            val = float(m.group(1))
+            unit = m.group(2).upper()
+            if unit == 'MB':
+                bytes_size = int(val * 1024 * 1024)
+            else:
+                bytes_size = int(val * 1024 * 1024 * 1024)
+            sectors = (bytes_size + 511) // 512
+            length_arg = hex(sectors)
+
+        # Launch background worker to perform the read
+        self.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
 
     def on_address_changed(self, text):
         if self.tr("custom_address") in text:
@@ -1198,11 +1772,10 @@ class RKDevToolGUI(QMainWindow):
         self.run_command([RKTOOL, "wl", address, image_path], "burning")
 
     def refresh_partition_table(self):
-        self.partition_table.setRowCount(0)
-        self.show_message("Information", "Reading partition table...")
+        # Trigger reading the partition table and populate the UI (sync)
+        self.read_partition_table()
 
     def burn_partition(self):
-        # Use the partition key (currentData) for wlx <PartitionName> <File>
         selected_partition_key = self.partition_combo.currentData()
         selected_partition = self.partition_combo.currentText()
         partition_path = self.partition_file_path.text()
@@ -1212,18 +1785,32 @@ class RKDevToolGUI(QMainWindow):
         if not partition_path or not os.path.exists(partition_path):
             self.show_message("Warning", "select_file_for_partition", "Warning")
             return
-        # If data() is set we prefer that (it's the partition key); otherwise try
-        # to fall back to parsing the address/name from the visible text.
+
+        # If manual override is enabled, write to the provided address using `wl`.
+        try:
+            if getattr(self, 'manual_address_enable', None) and self.manual_address_enable.isChecked():
+                addr = self.manual_address.text().strip()
+                if not addr:
+                    self.show_message("Warning", "enter_manual_address", "Warning")
+                    return
+                self.run_command([RKTOOL, "wl", addr, partition_path], "burning")
+                return
+        except Exception:
+            pass
+
+        # Otherwise prefer partition name key (for wlx command)
         if selected_partition_key:
             part_arg = selected_partition_key
-        else:
-            match = re.search(r'\((\S+)\)', selected_partition)
-            if not match:
-                self.show_message("Warning", "select_partition", "Warning")
-                return
-            part_arg = match.group(1)
+            self.run_command([RKTOOL, "wlx", part_arg, partition_path], "burning")
+            return
 
-        self.run_command([RKTOOL, "wlx", part_arg, partition_path], "burning")
+        # Fallback: parse address from visible text
+        match = re.search(r'\((\S+)\)', selected_partition)
+        if not match:
+            self.show_message("Warning", "select_partition", "Warning")
+            return
+        part_arg = match.group(1)
+        self.run_command([RKTOOL, "wl", part_arg, partition_path], "burning")
         
     def backup_partition(self):
         selected_partition_key = self.partition_combo.currentData()
@@ -1236,21 +1823,37 @@ class RKDevToolGUI(QMainWindow):
             save_path, _ = QFileDialog.getSaveFileName(self, self.tr("save_file_dialog"))
             if not save_path:
                 return
-        # Prefer partition key to find address preset; fallback to parsing visible text.
-        if selected_partition_key and selected_partition_key in PARTITION_PRESETS:
-            address = PARTITION_PRESETS[selected_partition_key]['address']
-        else:
-            match = re.search(r'\((\S+)\)', selected_partition)
-            if not match:
-                self.show_message("Warning", "select_partition", "Warning")
-                return
-            address = match.group(1)
 
-        # Default sector length is kept as previously (0x1000).
+        # Manual override: read using provided address
+        try:
+            if getattr(self, 'manual_address_enable', None) and self.manual_address_enable.isChecked():
+                addr = self.manual_address.text().strip()
+                if not addr:
+                    self.show_message("Warning", "enter_manual_address", "Warning")
+                    return
+                self.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
+                return
+        except Exception:
+            pass
+
+        # Prefer parsed partitions mapping
+        if selected_partition_key and selected_partition_key in self.partitions:
+            address = self.partitions[selected_partition_key].get('address')
+            if address:
+                self.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
+                return
+
+        # Fallback: parse from visible text
+        match = re.search(r'\((\S+)\)', selected_partition)
+        if not match:
+            self.show_message("Warning", "select_partition", "Warning")
+            return
+        address = match.group(1)
         self.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
         
     def get_detailed_device_info(self):
         self.run_command([RKTOOL, "rcb"], "reading_device_info")
+
 
     # New commands mapped to rkdeveloptool
     def read_flash_id(self):
@@ -1259,11 +1862,8 @@ class RKDevToolGUI(QMainWindow):
     def read_flash_info(self):
         self.run_command([RKTOOL, "rfi"], "reading_flash_info")
 
-    def read_chip_info(self):
-        self.run_command([RKTOOL, "rci"], "reading_device_info")
-
-    def read_capability(self):
-        self.run_command([RKTOOL, "rcb"], "reading_device_info")
+    # Note: `read_chip_info` and `read_capability` were removed — their
+    # functionality is covered by `read_device_info` / `get_detailed_device_info`.
 
     def change_storage(self):
         storage = self.change_storage_combo.currentData()
@@ -1327,14 +1927,7 @@ class RKDevToolGUI(QMainWindow):
             
     def test_device(self):
         self.run_command([RKTOOL, "td"], "test_connection")
-
-    def format_flash(self):
-        reply = QMessageBox.question(self, self.tr("format_flash_warning_title"),
-                                     self.tr("format_flash_warning_message"),
-                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply == QMessageBox.StandardButton.Yes:
-            # Map 'format' UI action to rkdeveloptool's 'ef' (erase flash).
-            self.run_command([RKTOOL, "ef"], "erase_flash")
+    
 
     def read_flash(self):
         address = self.read_address.text()
