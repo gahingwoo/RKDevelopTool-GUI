@@ -1,3 +1,13 @@
-PySide6>=6.0.0
-nuitka>=1.0.0
-requests>=2.0.0
+# RKDevelopTool GUI Requirements
+
+# UI Framework
+PySide6>=6.5.0
+
+# Build Tool (optional, for packaging)
+nuitka>=1.8.0
+
+# Development Dependencies (optional)
+# pytest>=7.4.0
+# pytest-qt>=4.2.0
+# black>=23.0.0
+# flake8>=6.0.0
