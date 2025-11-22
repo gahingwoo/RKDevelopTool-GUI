@@ -1,6 +1,6 @@
 """
 Device operations for RKDevelopTool GUI
-Contains all device interaction methods
+Contains all device interaction methods with improved flash capacity detection
 """
 import os
 import re
@@ -14,6 +14,158 @@ from utils import (
     calculate_file_md5, format_file_size, safe_slot
 )
 from workers import PartitionPPTWorker
+
+
+def read_device_info(gui):
+    """Read device capability information and cache flash info"""
+    def on_finished(output, return_code):
+        if return_code == 0 and output:
+            # Parse and cache flash info
+            flash_info = parse_flash_info(output)
+            if flash_info:
+                gui._cached_flash_info = flash_info
+                capacity_str = flash_info.get('capacity', '')
+                if capacity_str:
+                    gui.log_message(f"💾 {gui.tr('detected_flash_size')}: {capacity_str}")
+
+    gui.run_command([RKTOOL, "rfi"], "reading_device_info", callback=on_finished)
+
+
+def get_detailed_device_info(gui):
+    """Get detailed device information and cache flash info"""
+    def on_finished(output, return_code):
+        if return_code == 0 and output:
+            flash_info = parse_flash_info(output)
+            if flash_info:
+                gui._cached_flash_info = flash_info
+
+    gui.run_command([RKTOOL, "rcb"], "reading_device_info", callback=on_finished)
+
+
+def get_flash_capacity_bytes(gui):
+    """
+    Get flash capacity in bytes from cached info or by querying device
+    Returns: (bytes_size, source_description) or (None, error_message)
+    """
+    # Try cached flash info first
+    if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
+        capacity_str = gui._cached_flash_info.get('capacity', '')
+        if capacity_str:
+            m = re.match(r'([0-9.]+)\s*(MB|GB)', capacity_str, re.I)
+            if m:
+                val = float(m.group(1))
+                unit = m.group(2).upper()
+                bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
+                return bytes_size, f"cached ({capacity_str})"
+
+    # Query device for flash info
+    try:
+        result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+        out = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        # Try to parse capacity
+        m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
+        if m:
+            val = float(m.group(1))
+            unit = m.group(2).upper()
+            bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
+
+            # Cache the result
+            flash_info = parse_flash_info(out)
+            if flash_info:
+                gui._cached_flash_info = flash_info
+
+            return bytes_size, f"detected ({val} {unit})"
+
+        # Try to parse size field
+        m2 = re.search(r'size[:\s]*(0x[0-9A-Fa-f]+)', out, re.I)
+        if m2:
+            bytes_size = int(m2.group(1), 16)
+            return bytes_size, f"detected (0x{m2.group(1)})"
+
+        return None, "no_capacity_info"
+
+    except subprocess.TimeoutExpired:
+        return None, "device_timeout"
+    except Exception as e:
+        return None, f"query_error: {str(e)}"
+
+
+def backup_firmware(gui):
+    """Backup entire firmware with automatic capacity detection"""
+    save_path, _ = QFileDialog.getSaveFileName(
+        gui, gui.tr("save_file_dialog"), "firmware_backup.bin", gui.tr("file_dialog_all")
+    )
+    if not save_path:
+        return
+
+    # Try to get flash capacity automatically
+    bytes_size, source = get_flash_capacity_bytes(gui)
+
+    if bytes_size and bytes_size > 0:
+        sectors = (bytes_size + 511) // 512
+        length_arg = hex(sectors)
+
+        size_mb = bytes_size / (1024 ** 2)
+        size_gb = bytes_size / (1024 ** 3)
+
+        if size_gb >= 1:
+            size_display = f"{size_gb:.2f} GB"
+        else:
+            size_display = f"{size_mb:.2f} MB"
+
+        gui.log_message(f"🔧 {gui.tr('detected_flash_size')}: {size_display} ({source})")
+        gui.log_message(f"📊 {gui.tr('backup_sectors')}: {length_arg} ({sectors:,} sectors)")
+
+        # Confirm with user
+        msg = QMessageBox()
+        msg.setWindowTitle(gui.tr("confirm_backup_title"))
+        msg.setIcon(QMessageBox.Icon.Question)
+
+        detail_text = f"""
+{gui.tr("backup_confirmation_message")}
+
+💾 {gui.tr("flash_capacity")}: {size_display}
+📊 {gui.tr("total_sectors")}: {sectors:,} ({length_arg})
+📁 {gui.tr("save_to")}: {os.path.basename(save_path)}
+
+{gui.tr("backup_time_warning")}
+        """
+
+        msg.setText(detail_text)
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+        if msg.exec() == QMessageBox.StandardButton.Yes:
+            gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
+        return
+
+    # Fallback: ask user for length
+    gui.log_message(f"⚠️ {gui.tr('auto_detect_failed')}: {source}")
+
+    text, ok = QInputDialog.getText(
+        gui,
+        gui.tr('enter_backup_length_title'),
+        gui.tr('enter_backup_length_prompt') + f"\n\n💡 {gui.tr('format_examples')}"
+    )
+
+    if not ok or not text:
+        gui.show_message('Information', 'backup_cancelled')
+        return
+
+    length_arg = text.strip()
+
+    # Convert MB/GB to sectors
+    m = re.match(r'^([0-9.]+)\s*(MB|GB)$', length_arg, re.I)
+    if m:
+        val = float(m.group(1))
+        unit = m.group(2).upper()
+        bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
+        sectors = (bytes_size + 511) // 512
+        length_arg = hex(sectors)
+        gui.log_message(f"📊 {gui.tr('calculated_sectors')}: {length_arg} ({sectors:,} sectors)")
+
+    gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
 
 
 def enter_maskrom_mode(gui):
@@ -35,16 +187,6 @@ def reset_device(gui):
     gui.run_command([RKTOOL, "rd"], "rebooting")
 
 
-def read_device_info(gui):
-    """Read device capability information"""
-    gui.run_command([RKTOOL, "rcb"], "reading_device_info")
-
-
-def get_detailed_device_info(gui):
-    """Get detailed device information"""
-    gui.run_command([RKTOOL, "rcb"], "reading_device_info")
-
-
 def read_partition_table(gui):
     """Read partition table in background"""
     try:
@@ -52,11 +194,9 @@ def read_partition_table(gui):
             gui.log_message(gui.tr('reading_partitions_already'))
             return
 
-        # Save splitter sizes
         if hasattr(gui, 'splitter'):
             gui._splitter_sizes_prev = gui.splitter.sizes()
 
-        # Start worker
         if hasattr(gui, 'partition_worker') and gui.partition_worker and gui.partition_worker.isRunning():
             gui.log_message(gui.tr('reading_partitions_already'))
             return
@@ -70,7 +210,6 @@ def read_partition_table(gui):
         gui.statusBar().showMessage(gui.tr('reading_partitions'))
 
     except Exception:
-        # Fallback to sync
         gui._partition_refresh_lock = True
         try:
             result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=5)
@@ -128,7 +267,6 @@ def populate_partition_table(gui):
         gui.partition_table.setItem(row, 1, QTableWidgetItem(addr))
         gui.partition_table.setItem(row, 2, QTableWidgetItem(size))
 
-        # Action buttons
         action_widget = QWidget()
         action_layout = QHBoxLayout(action_widget)
         action_layout.setContentsMargins(0, 0, 0, 0)
@@ -144,7 +282,6 @@ def populate_partition_table(gui):
 
         gui.partition_table.setCellWidget(row, 3, action_widget)
 
-    # Resize columns
     try:
         gui.partition_table.resizeColumnsToContents()
         gui.partition_table.resizeRowsToContents()
@@ -184,7 +321,6 @@ def backup_partition_by_name(gui, name):
     if not save_path:
         return
 
-    # Manual override
     try:
         if gui.manual_address_enable.isChecked():
             addr = gui.manual_address.text().strip()
@@ -196,7 +332,6 @@ def backup_partition_by_name(gui, name):
     except:
         pass
 
-    # Use parsed partition
     if name in gui.partitions:
         addr = gui.partitions[name].get('address')
         if addr:
@@ -212,7 +347,6 @@ def write_partition_by_name(gui, name):
     if not file_path or not os.path.exists(file_path):
         return
 
-    # Manual override
     try:
         if gui.manual_address_enable.isChecked():
             addr = gui.manual_address.text().strip()
@@ -224,67 +358,11 @@ def write_partition_by_name(gui, name):
     except:
         pass
 
-    # Use wlx with partition name
     if name:
         gui.run_command([RKTOOL, "wlx", name, file_path], "burning")
         return
 
     gui.show_message("Warning", "select_partition", "Warning")
-
-
-def backup_firmware(gui):
-    """Backup entire firmware"""
-    save_path, _ = QFileDialog.getSaveFileName(
-        gui, gui.tr("save_file_dialog"), "firmware_backup.bin", gui.tr("file_dialog_all")
-    )
-    if not save_path:
-        return
-
-    # Try to detect flash capacity
-    bytes_size = None
-    try:
-        result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
-        out = (result.stdout or "") + "\n" + (result.stderr or "")
-
-        m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
-        if m:
-            val = float(m.group(1))
-            unit = m.group(2).upper()
-            bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
-        else:
-            m2 = re.search(r'size[:\s]*(0x[0-9A-Fa-f]+)', out, re.I)
-            if m2:
-                bytes_size = int(m2.group(1), 16)
-    except:
-        pass
-
-    if bytes_size and bytes_size > 0:
-        sectors = (bytes_size + 511) // 512
-        length_arg = hex(sectors)
-        gui.log_message(f"🔧 {gui.tr('detected_flash_size')}: {bytes_size} bytes -> {length_arg} sectors")
-        gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
-        return
-
-    # Ask user for length
-    text, ok = QInputDialog.getText(
-        gui, gui.tr('enter_backup_length_title'), gui.tr('enter_backup_length_prompt')
-    )
-    if not ok or not text:
-        gui.show_message('Information', 'backup_cancelled')
-        return
-
-    length_arg = text.strip()
-
-    # Convert MB/GB to sectors
-    m = re.match(r'^([0-9.]+)\s*(MB|GB)$', length_arg, re.I)
-    if m:
-        val = float(m.group(1))
-        unit = m.group(2).upper()
-        bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
-        sectors = (bytes_size + 511) // 512
-        length_arg = hex(sectors)
-
-    gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
 
 
 def onekey_burn(gui):
@@ -324,7 +402,6 @@ def burn_image(gui):
         gui.show_message("Warning", "select_image_address", "Warning")
         return
 
-    # Confirm operation
     if not confirm_burn_operation(gui, image_path, address):
         return
 
@@ -373,7 +450,7 @@ def confirm_burn_operation(gui, file_path, address):
 # Export all operation functions
 __all__ = [
     'enter_maskrom_mode', 'enter_loader_mode', 'reset_device',
-    'read_device_info', 'get_detailed_device_info',
+    'read_device_info', 'get_detailed_device_info', 'get_flash_capacity_bytes',
     'read_partition_table', 'backup_firmware',
     'onekey_burn', 'load_loader', 'burn_image',
     'on_partition_ppt_finished', 'backup_partition_by_name',
