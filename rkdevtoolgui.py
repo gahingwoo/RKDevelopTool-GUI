@@ -25,6 +25,7 @@ from utils import (
 from workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from widgets import AutoLoadCombo
 from i18n import TRANSLATIONS
+from themes import ThemeManager, ThemeAutoManager
 
 
 class TranslationManager:
@@ -66,7 +67,10 @@ class RKDevToolGUI(QMainWindow):
         # UI Setup
         self.setMinimumSize(1200, 720)
         self.set_application_font()
-        self.setup_dark_styles()
+
+        # Initialize theme manager
+        self.theme_manager = ThemeManager(self)
+        self.theme_manager.apply_theme(ThemeManager.DARK)
 
         # Create main layout
         central_widget = QWidget()
@@ -100,6 +104,9 @@ class RKDevToolGUI(QMainWindow):
         # Status bar
         self.create_status_bar()
 
+        # Initialize automatic theme manager (after UI is created)
+        self.theme_auto_manager = ThemeAutoManager(self, enable_auto=True)
+
         # Update UI text
         self.update_ui_text()
 
@@ -118,36 +125,6 @@ class RKDevToolGUI(QMainWindow):
                     QApplication.setFont(app_font)
         except Exception:
             pass
-
-    def setup_dark_styles(self):
-        """Apply dark theme stylesheet"""
-        self.setStyleSheet("""
-            QMainWindow { background-color: #2c2c2c; color: #f0f0f0; }
-            QGroupBox { font-weight: bold; border: 2px solid #555555; border-radius: 8px; 
-                       margin-top: 1ex; padding-top: 10px; background-color: #3c3c3c; color: #f0f0f0; }
-            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 8px 0 8px; color: #f0f0f0; }
-            QPushButton { background-color: #444444; border: 2px solid #555555; border-radius: 6px; 
-                         padding: 8px 16px; font-size: 11px; min-height: 20px; color: #f0f0f0; }
-            QPushButton:hover { background-color: #555555; border-color: #007acc; }
-            QPushButton:pressed { background-color: #666666; }
-            QPushButton:disabled { background-color: #3a3a3a; color: #888888; border-color: #444444; }
-            QPushButton.primary { background-color: #007acc; color: white; border-color: #0056b3; }
-            QPushButton.primary:hover { background-color: #0056b3; }
-            QPushButton.success { background-color: #28a745; color: white; border-color: #1e7e34; }
-            QPushButton.success:hover { background-color: #218838; }
-            QPushButton.danger { background-color: #dc3545; color: white; border-color: #c82333; }
-            QPushButton.danger:hover { background-color: #c82333; }
-            QLineEdit, QComboBox, QSpinBox { border: 2px solid #555555; border-radius: 4px; 
-                                            padding: 6px; background-color: #444444; color: #f0f0f0; }
-            QTextEdit, QTextBrowser { border: 2px solid #555555; border-radius: 6px; background-color: #3a3a3a; 
-                                     color: #f0f0f0; font-family: 'Courier New', monospace; font-size: 10px; }
-            QListWidget, QTableWidget { border: 2px solid #555555; border-radius: 6px; 
-                                       background-color: #3a3a3a; color: #f0f0f0; alternate-background-color: #424242; }
-            QProgressBar { border: 2px solid #555555; border-radius: 6px; text-align: center; 
-                          background-color: #444444; color: #f0f0f0; }
-            QProgressBar::chunk { background-color: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, 
-                                 stop: 0 #28a745, stop: 1 #1e7e34); border-radius: 4px; }
-        """)
 
     def create_left_panel(self):
         """Create left sidebar with device info and quick actions"""
@@ -340,9 +317,21 @@ class RKDevToolGUI(QMainWindow):
         return panel
 
     def create_status_bar(self):
-        """Create status bar with language selector"""
+        """Create status bar with theme checkbox and language selector"""
         self.statusBar()
 
+        # Theme toggle checkbox
+        self.theme_checkbox = QCheckBox()
+        self.theme_checkbox.setText("🌙")
+        self.theme_checkbox.setToolTip("Toggle Light/Dark Theme")
+        self.theme_checkbox.stateChanged.connect(safe_slot(self.on_theme_toggle))
+        self.statusBar().addPermanentWidget(self.theme_checkbox)
+
+        # Separator
+        separator = QLabel(" | ")
+        self.statusBar().addPermanentWidget(separator)
+
+        # Language selector
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("中文 (Chinese)", "zh")
         self.lang_combo.addItem("English", "en")
@@ -351,9 +340,18 @@ class RKDevToolGUI(QMainWindow):
         self.lang_combo.currentTextChanged.connect(safe_slot(self.on_language_changed))
         self.statusBar().addPermanentWidget(self.lang_combo)
 
+        # Connection status
         self.connection_status = QLabel()
-        self.connection_status.setStyleSheet("QLabel { color: #aaaaaa; margin: 0 10px; }")
         self.statusBar().addPermanentWidget(self.connection_status)
+
+    def on_theme_toggle(self, state):
+        """Handle theme toggle checkbox"""
+        if state == Qt.CheckState.Checked.value:
+            self.theme_manager.apply_theme(ThemeManager.LIGHT)
+            self.theme_checkbox.setText("☀️")
+        else:
+            self.theme_manager.apply_theme(ThemeManager.DARK)
+            self.theme_checkbox.setText("🌙")
 
     def update_ui_text(self):
         """Update all UI text based on current language"""
@@ -579,7 +577,7 @@ class RKDevToolGUI(QMainWindow):
 def main():
     """Main entry point"""
     app = QApplication(sys.argv)
-
+    app.setStyle("Fusion")
     # Check for rkdeveloptool
     if not ToolValidator.validate():
         manager = TranslationManager()
