@@ -3,6 +3,7 @@ Background worker threads for RKDevelopTool GUI
 """
 import subprocess
 import re
+import os
 from PySide6.QtCore import QThread, Signal
 
 from utils import RKTOOL, parse_chip_info
@@ -90,14 +91,13 @@ class CommandWorker(QThread):
         self.description_key = description_key
         self.manager = manager
         self._process = None
+        self.last_logged_progress = -1
+        self.last_logged_line = ""
 
     def tr(self, key):
         return self.manager.tr(key)
 
     def run(self):
-        success = False
-        error_msg = ""
-
         try:
             description = self.tr(self.description_key)
             self.log.emit(f"🚀 {self.tr('start_executing')}{description}")
@@ -107,38 +107,75 @@ class CommandWorker(QThread):
                 self.cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                bufsize=1,
+                universal_newlines=True,
+                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
             )
 
             self._process = process
+            line_buffer = ""
 
-            for line in iter(process.stdout.readline, ''):
-                if not line:
+            # Read output character by character for true real-time updates
+            while True:
+                char = process.stdout.read(1)
+                if not char:
+                    # Process final buffered content if any
+                    if line_buffer:
+                        self._process_line(line_buffer)
                     break
-                line = line.strip()
-                if line:
-                    self.log.emit(line)
-                    if "%" in line:
-                        match = re.search(r'(\d+)%', line)
-                        if match:
-                            progress = min(int(match.group(1)), 99)
-                            self.progress.emit(progress)
+                
+                line_buffer += char
+                
+                # Process when we get a complete line
+                if char == '\n':
+                    self._process_line(line_buffer)
+                    line_buffer = ""
 
-            process.wait()
-            if process.returncode == 0:
-                success = True
+            returncode = process.wait()
+            if returncode == 0:
                 self.log.emit(f"✅ {description} {self.tr('success')}")
+                # Only emit 100% if we haven't already reached it
+                if self.last_logged_progress < 100:
+                    self.progress.emit(100)
+                self.finished_signal.emit(True, "")
             else:
-                error_msg = f"{self.tr('failure')}{process.returncode}"
-                self.log.emit(f"❌ {description} {self.tr('failure')}{process.returncode}")
-
+                error_msg = f"{self.tr('failure')}{returncode}"
+                self.log.emit(f"❌ {description} {error_msg}")
+                self.progress.emit(0)
+                self.finished_signal.emit(False, error_msg)
         except Exception as e:
             error_msg = str(e)
+            description = self.tr(self.description_key) if 'description' in locals() else "command"
             self.log.emit(f"❌ {description} {self.tr('abnormal_execution')}{error_msg}")
+            self.progress.emit(0)
+            self.finished_signal.emit(False, error_msg)
 
-        self.progress.emit(100 if success else 0)
-        self.finished_signal.emit(success, error_msg)
+    def _process_line(self, line):
+        """Process a single line of output"""
+        # Remove ANSI control codes comprehensively
+        line_cleaned = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', line)  # Binary ANSI sequences
+        line_cleaned = re.sub(r'\[1A\[2K|\[2K|\[1A', '', line_cleaned)  # Text-form control codes
+        line_cleaned = line_cleaned.strip()
+        
+        if not line_cleaned:
+            return
+        
+        # Only log lines that are not just progress updates
+        if "%" in line_cleaned:
+            match = re.search(r'(\d+)%', line_cleaned)
+            if match:
+                progress = min(int(match.group(1)), 99)
+                # Only emit progress and log if it's different from last
+                if progress != self.last_logged_progress:
+                    self.log.emit(line_cleaned)
+                    self.progress.emit(progress)
+                    self.last_logged_progress = progress
+                    self.last_logged_line = line_cleaned
+        else:
+            # Log non-progress lines normally, but skip duplicates
+            if line_cleaned != self.last_logged_line:
+                self.log.emit(line_cleaned)
+                self.last_logged_line = line_cleaned
 
     def terminate_process(self):
         """Attempt to terminate the running subprocess if any."""

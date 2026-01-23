@@ -22,6 +22,13 @@ CHIP_ID_MAP = {
     "0x3066": "RK3066",
 }
 
+ASCII_CHIP_MAP = {
+    "6753": "RK3576",
+    "330A": "RK3588",
+    "3368": "RK3368",
+    "3399": "RK3399",
+}
+
 # Flash ID mapping (common manufacturers)
 FLASH_ID_MAP = {
     "C8": "GigaDevice",
@@ -62,21 +69,52 @@ class ToolValidator:
 
 
 def parse_chip_info(chip_text):
-    """Parse chip info and return readable chip name"""
+    """Parse chip info and return readable chip name in RKxxxx format
+    
+    Handles multiple formats:
+    - ASCII byte sequences: "36 37 35 33..." (decimal ASCII codes) -> "6753" -> "RK3576"
+    - Hex IDs: "0x330A" -> "RK3588"
+    - Direct names: "RK3399" -> "RK3399"
+    """
     if not chip_text:
         return "Unknown Chip"
 
-    # Try to extract chip ID
+    chip_text = chip_text.strip()
+    
+    # Try to parse ASCII byte sequence (rkdeveloptool rci format)
+    # Example: "36 37 35 33..." where each number is ASCII decimal code
+    # 36=ASCII('6'), 37=ASCII('7'), 35=ASCII('5'), 33=ASCII('3')
+    if ' ' in chip_text:
+        try:
+            byte_parts = chip_text.split()[:4]  # Take first 4 parts
+            chip_id_str = ''
+            for b in byte_parts:
+                ascii_val = int(b)
+                # Convert ASCII code to character, and keep only digits
+                char = chr(ascii_val)
+                if char.isdigit():
+                    chip_id_str += char
+            
+            if chip_id_str and len(chip_id_str) >= 3:
+                # Check if it matches our ASCII chip map
+                if chip_id_str in ASCII_CHIP_MAP:
+                    return ASCII_CHIP_MAP[chip_id_str]
+                else:
+                    return f"RK{chip_id_str}"  # Default to RKxxxx format
+        except (ValueError, OverflowError):
+            pass
+
+    # Try to extract chip ID in hex format
     match = re.search(r'0x[0-9A-Fa-f]+', chip_text)
     if match:
         chip_id = match.group(0).upper()
         if chip_id in CHIP_ID_MAP:
-            return f"{CHIP_ID_MAP[chip_id]} ({chip_id})"
+            return CHIP_ID_MAP[chip_id]
 
     # Try to match chip name directly
     for chip_name in CHIP_FAMILIES.keys():
         if chip_name.lower() in chip_text.lower():
-            return f"{CHIP_FAMILIES[chip_name]} ({chip_name})"
+            return chip_name
 
     return chip_text
 

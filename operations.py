@@ -13,7 +13,7 @@ from utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot
 )
-from workers import PartitionPPTWorker
+from workers import PartitionPPTWorker, CommandWorker
 
 
 def read_device_info(gui):
@@ -133,8 +133,10 @@ def backup_firmware(gui):
         """
 
         msg.setText(detail_text)
-        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+        msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+        msg.setMinimumWidth(550)
+        # Clear focus to prevent button highlighting
+        msg.setFocus()
 
         if msg.exec() == QMessageBox.StandardButton.Yes:
             gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
@@ -377,10 +379,55 @@ def onekey_burn(gui):
 def load_loader(gui):
     """Load loader file"""
     loader_path = gui.loader_path.text()
+    
+    # If loader path not set or file doesn't exist, ask user to select
     if not loader_path or not os.path.exists(loader_path):
-        gui.show_message("Warning", "select_loader_file", "Warning")
-        return
-    gui.run_command([RKTOOL, "ul", loader_path], "loading_loader")
+        loader_path, _ = QFileDialog.getOpenFileName(
+            gui, gui.tr("select_loader_file"), "", gui.tr("file_dialog_loader")
+        )
+        if not loader_path:
+            return
+        gui.loader_path.setText(loader_path)
+    
+    # Ask user to choose between ul (upload) or db (download)
+    msg = QMessageBox()
+    msg.setWindowTitle(gui.tr("loader_load_method_title"))
+    msg.setIcon(QMessageBox.Icon.Information)
+    msg.setText(gui.tr("loader_load_method_message"))
+    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    
+    # Use custom button text
+    buttons = msg.buttons()
+    for btn in buttons:
+        if msg.buttonRole(btn) == QMessageBox.ButtonRole.NoRole:
+            btn.setText(gui.tr("loader_download"))
+        elif msg.buttonRole(btn) == QMessageBox.ButtonRole.YesRole:
+            btn.setText(gui.tr("loader_upload"))
+    
+    msg.setMinimumWidth(400)
+    result = msg.exec()
+    
+    # Determine which command to use
+    if result == QMessageBox.StandardButton.Yes:
+        cmd_type = "ul"
+    else:
+        cmd_type = "db"
+    
+    gui.run_command([RKTOOL, cmd_type, loader_path], "loading_loader")
+    
+    # Mark that we're attempting to load loader and wrap the finished signal
+    if gui.command_worker:
+        def on_loader_finished(success, error_msg):
+            if success:
+                gui.loader_loaded = True
+                gui.log_message("✅ " + gui.tr("loader_loaded_success"))
+            gui.on_command_finished(success, error_msg)
+        
+        try:
+            gui.command_worker.finished_signal.disconnect()
+        except:
+            pass
+        gui.command_worker.finished_signal.connect(safe_slot(on_loader_finished))
 
 
 def burn_image(gui):
@@ -432,9 +479,10 @@ def confirm_burn_operation(gui, file_path, address):
         """
 
         msg.setText(detail_text)
-        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        msg.setDefaultButton(QMessageBox.StandardButton.No)
-        msg.setMinimumWidth(500)
+        msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+        msg.setMinimumWidth(550)
+        # Clear focus to prevent button highlighting
+        msg.setFocus()
 
         return msg.exec() == QMessageBox.StandardButton.Yes
 

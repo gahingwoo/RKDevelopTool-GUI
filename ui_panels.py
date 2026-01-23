@@ -231,7 +231,6 @@ def create_download_tab(gui):
     layout.addWidget(image_group)
     layout.addLayout(storage_layout)
     layout.addLayout(ops_layout)
-    layout.addStretch()
 
     widgets = {
         'onekey_group': onekey_group,
@@ -277,7 +276,7 @@ def create_partition_tab(gui):
 
     # Configure table
     header = partition_table.horizontalHeader()
-    header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
     try:
         table_font = QApplication.font()
@@ -337,7 +336,6 @@ def create_partition_tab(gui):
     ops_group.hide()  # Hide by default as operations are in table
 
     layout.addWidget(list_group, 1)
-    layout.addStretch()
 
     widgets = {
         'list_group': list_group,
@@ -421,7 +419,6 @@ def create_parameter_tab(gui):
     layout.addWidget(burn_group)
     layout.addWidget(advanced_group)
     layout.addWidget(info_group)
-    layout.addStretch()
 
     widgets = {
         'burn_group': burn_group,
@@ -528,7 +525,6 @@ def create_upgrade_tab(gui):
     layout.addWidget(pack_group)
     layout.addWidget(unpack_group)
     layout.addWidget(ops_group)
-    layout.addStretch()
 
     widgets = {
         'pack_group': pack_group,
@@ -704,7 +700,6 @@ def create_advanced_tab(gui):
     layout.addWidget(verify_group)
     layout.addWidget(debug_group)
     layout.addWidget(mass_group)
-    layout.addStretch()
 
     widgets = {
         'flash_group': flash_group,

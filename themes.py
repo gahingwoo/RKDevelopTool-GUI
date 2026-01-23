@@ -606,7 +606,7 @@ class ThemeAutoManager:
             return
         
         # Check if UI is ready
-        if not hasattr(self.gui, 'theme_checkbox'):
+        if not hasattr(self.gui, 'theme_combo'):
             return
         
         theme = self.get_system_theme()
@@ -614,16 +614,14 @@ class ThemeAutoManager:
         
         if theme == "dark":
             self.gui.theme_manager.apply_theme(self.gui.theme_manager.DARK)
-            self.gui.theme_checkbox.blockSignals(True)
-            self.gui.theme_checkbox.setCheckState(Qt.CheckState.Unchecked)
-            self.gui.theme_checkbox.setText("🌙")
-            self.gui.theme_checkbox.blockSignals(False)
+            self.gui.theme_combo.blockSignals(True)
+            self.gui.theme_combo.setCurrentIndex(1)  # Dark option
+            self.gui.theme_combo.blockSignals(False)
         else:
             self.gui.theme_manager.apply_theme(self.gui.theme_manager.LIGHT)
-            self.gui.theme_checkbox.blockSignals(True)
-            self.gui.theme_checkbox.setCheckState(Qt.CheckState.Checked)
-            self.gui.theme_checkbox.setText("☀️")
-            self.gui.theme_checkbox.blockSignals(False)
+            self.gui.theme_combo.blockSignals(True)
+            self.gui.theme_combo.setCurrentIndex(2)  # Light option
+            self.gui.theme_combo.blockSignals(False)
 
     def on_system_theme_changed(self, *_):
         """Callback for system theme change notification"""

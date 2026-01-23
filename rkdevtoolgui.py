@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info
 )
 from workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from widgets import AutoLoadCombo
@@ -63,6 +63,8 @@ class RKDevToolGUI(QMainWindow):
         self.mass_workers = []
         self.mass_production_active = False
         self._partition_refresh_lock = False
+        self.loader_loaded = False  # Track if loader has been loaded
+        self.maskrom_device_shown_hint = False  # Track if we've shown loader hint for current device
 
         # UI Setup
         self.setMinimumSize(1200, 720)
@@ -157,7 +159,6 @@ class RKDevToolGUI(QMainWindow):
         layout.addWidget(self.device_group)
         layout.addWidget(self.mode_group)
         layout.addWidget(self.quick_group)
-        layout.addStretch()
 
         return panel
 
@@ -313,19 +314,23 @@ class RKDevToolGUI(QMainWindow):
         self.progress_label = log_widgets['label']
 
         layout.addWidget(self.log_group)
+        layout.addStretch()
 
         return panel
 
     def create_status_bar(self):
-        """Create status bar with theme checkbox and language selector"""
+        """Create status bar with theme selector and language selector"""
         self.statusBar()
 
-        # Theme toggle checkbox
-        self.theme_checkbox = QCheckBox()
-        self.theme_checkbox.setText("🌙")
-        self.theme_checkbox.setToolTip("Toggle Light/Dark Theme")
-        self.theme_checkbox.stateChanged.connect(safe_slot(self.on_theme_toggle))
-        self.statusBar().addPermanentWidget(self.theme_checkbox)
+        # Theme selector combo
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("自动 (Auto)", "auto")
+        self.theme_combo.addItem("深色 (Dark)", "dark")
+        self.theme_combo.addItem("浅色 (Light)", "light")
+        self.theme_combo.setMinimumWidth(120)
+        self.theme_combo.setCurrentIndex(0)
+        self.theme_combo.currentIndexChanged.connect(safe_slot(self.on_theme_changed))
+        self.statusBar().addPermanentWidget(self.theme_combo)
 
         # Separator
         separator = QLabel(" | ")
@@ -344,14 +349,25 @@ class RKDevToolGUI(QMainWindow):
         self.connection_status = QLabel()
         self.statusBar().addPermanentWidget(self.connection_status)
 
-    def on_theme_toggle(self, state):
-        """Handle theme toggle checkbox"""
-        if state == Qt.CheckState.Checked.value:
-            self.theme_manager.apply_theme(ThemeManager.LIGHT)
-            self.theme_checkbox.setText("☀️")
-        else:
+    def on_theme_changed(self):
+        """Handle theme selection change"""
+        selected_theme = self.theme_combo.currentData()
+        
+        if selected_theme == "auto":
+            # Enable automatic theme detection
+            if hasattr(self, 'theme_auto_manager'):
+                self.theme_auto_manager.enable_auto = True
+                self.theme_auto_manager.apply_system_theme()
+        elif selected_theme == "dark":
+            # Disable auto and apply dark theme
+            if hasattr(self, 'theme_auto_manager'):
+                self.theme_auto_manager.enable_auto = False
             self.theme_manager.apply_theme(ThemeManager.DARK)
-            self.theme_checkbox.setText("🌙")
+        elif selected_theme == "light":
+            # Disable auto and apply light theme
+            if hasattr(self, 'theme_auto_manager'):
+                self.theme_auto_manager.enable_auto = False
+            self.theme_manager.apply_theme(ThemeManager.LIGHT)
 
     def update_ui_text(self):
         """Update all UI text based on current language"""
@@ -385,6 +401,17 @@ class RKDevToolGUI(QMainWindow):
         if devices:
             self.device_list.setCurrentRow(0)
             self.current_device = devices[0]
+            
+            # If we can read chip info, it means loader is responding - don't need to prompt
+            if chip_info and chip_info != "unknown_chip":
+                self.loader_loaded = True
+            else:
+                self.loader_loaded = False
+            
+            # Show dialog only once when device connects in Maskrom mode AND no chip info
+            if "Maskrom" in mode and not self.maskrom_device_shown_hint and self.loader_loaded == False:
+                self.maskrom_device_shown_hint = True  # Set immediately to prevent repeat
+                self._show_loader_hint()
         self.update_device_status()
 
     def on_device_lost(self):
@@ -400,7 +427,8 @@ class RKDevToolGUI(QMainWindow):
         """Update device status display"""
         if self.current_device:
             mode_text = self.tr(f"connected_{self.device_mode.lower()}")
-            chip_text = self.chip_info
+            # Parse chip info to show readable chip name
+            chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
             self.device_status_label.setText(mode_text)
             self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
@@ -467,7 +495,8 @@ class RKDevToolGUI(QMainWindow):
         self.progress_label.setText(self.tr('ready'))
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
-        self.command_worker.progress.connect(lambda v: self.progress_bar.setValue(v))
+        # Use safe_slot for all signal connections to handle thread-safety
+        self.command_worker.progress.connect(safe_slot(lambda v: self.progress_bar.setValue(v)))
         self.command_worker.log.connect(safe_slot(self.log_message))
 
         # Mirror to device info text if reading device info
@@ -483,6 +512,13 @@ class RKDevToolGUI(QMainWindow):
         """Handle command completion"""
         self.progress_bar.setValue(100 if success else 0)
         self.progress_label.setText(self.tr("ready_status"))
+
+        # If command failed and in Maskrom mode and no chip info, suggest loading Loader
+        # (only show once per device connection via maskrom_device_shown_hint flag)
+        if (not success and "Maskrom" in self.device_mode and 
+            not self.loader_loaded and not self.maskrom_device_shown_hint):
+            self.maskrom_device_shown_hint = True
+            self._show_loader_hint(is_failure=True)
 
         # Handle verification completion
         if hasattr(self, '_verify_tmpfile'):
@@ -524,17 +560,77 @@ class RKDevToolGUI(QMainWindow):
         self.manager.set_language(selected_lang)
         self.update_ui_text()
 
+    def _show_loader_hint(self, is_failure=False):
+        """Show hint dialog to load Loader when in Maskrom mode"""
+        import operations
+        
+        if is_failure:
+            # Show warning dialog when command fails
+            msg = QMessageBox()
+            msg.setWindowTitle(self.tr("warning_title"))
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setText(
+                "⚠️ " + self.tr("command_execution_failed") + "\n\n"
+                "💡 " + self.tr("loader_hint_message") + "\n\n"
+                "是否现在加载 Loader?"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+            msg.setMinimumWidth(500)
+            
+            if msg.exec() == QMessageBox.StandardButton.Yes:
+                self._auto_load_loader()
+        else:
+            # On initial device connection, show info dialog
+            msg = QMessageBox()
+            msg.setWindowTitle(self.tr("tip"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(
+                "💡 " + self.tr("loader_hint_message") + "\n\n"
+                "是否现在加载 Loader?"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+            msg.setMinimumWidth(500)
+            
+            if msg.exec() == QMessageBox.StandardButton.Yes:
+                self._auto_load_loader()
+
+    def _auto_load_loader(self):
+        """Automatically load Loader"""
+        import operations
+        
+        loader_path = self.loader_path.text()
+        if not loader_path or not os.path.exists(loader_path):
+            self.show_message("Warning", "select_loader_file", "Warning")
+            return
+        
+        operations.load_loader(self)
+        self.loader_loaded = True
+
     def cleanup(self):
         """Cleanup before exit"""
         try:
+            # Stop automatic theme manager
+            if hasattr(self, 'theme_auto_manager') and self.theme_auto_manager:
+                try:
+                    if hasattr(self.theme_auto_manager, 'linux_timer') and self.theme_auto_manager.linux_timer:
+                        self.theme_auto_manager.linux_timer.stop()
+                except Exception as e:
+                    print(f"⚠️ Failed to stop theme timer: {e}")
+
             # Stop device worker
             if self.device_worker:
-                self.device_worker.stop()
-                self.device_worker.wait(1000)
+                try:
+                    self.device_worker.stop()
+                    self.device_worker.wait(1000)
+                except Exception as e:
+                    print(f"⚠️ Failed to stop device worker: {e}")
 
             # Stop partition worker
             if self.partition_worker and self.partition_worker.isRunning():
-                self.partition_worker.wait(1000)
+                try:
+                    self.partition_worker.wait(1000)
+                except Exception as e:
+                    print(f"⚠️ Failed to stop partition worker: {e}")
 
             # Stop mass workers
             if self.mass_workers:
@@ -543,18 +639,30 @@ class RKDevToolGUI(QMainWindow):
                         if hasattr(w, 'terminate_process'):
                             w.terminate_process()
                         w.wait(1000)
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"⚠️ Failed to stop mass worker: {e}")
 
             # Stop command worker
             if self.command_worker:
-                if hasattr(self.command_worker, 'terminate_process'):
-                    self.command_worker.terminate_process()
-                self.command_worker.wait(1000)
+                try:
+                    if hasattr(self.command_worker, 'terminate_process'):
+                        self.command_worker.terminate_process()
+                    self.command_worker.wait(1000)
+                except Exception as e:
+                    print(f"⚠️ Failed to stop command worker: {e}")
 
             self._partition_refresh_lock = False
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"❌ Cleanup error: {e}")
+
+    def closeEvent(self, event):
+        """Handle window close event"""
+        try:
+            self.cleanup()
+            event.accept()
+        except Exception as e:
+            print(f"❌ Close event error: {e}")
+            event.accept()
 
     def _on_splitter_moved(self, pos=None, index=None):
         """Save splitter sizes when moved"""
@@ -591,11 +699,27 @@ def main():
     # Launch GUI
     manager = TranslationManager()
     main_window = RKDevToolGUI(manager)
+    
+    # Connect both closeEvent and aboutToQuit for proper cleanup
     app.aboutToQuit.connect(safe_slot(lambda: main_window.cleanup()))
     main_window.show()
 
-    sys.exit(app.exec())
+    try:
+        exit_code = app.exec()
+        main_window.cleanup()  # Ensure cleanup happens
+        return exit_code
+    except Exception as e:
+        print(f"❌ Application error: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        sys.exit(main())
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
