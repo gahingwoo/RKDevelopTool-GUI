@@ -16,30 +16,60 @@ from utils import (
 from workers import PartitionPPTWorker, CommandWorker
 
 
+# Dark theme stylesheet for QMessageBox
+MESSAGEBOX_DARK_STYLE = """
+QMessageBox {
+    background-color: #232629;
+    color: #e5e9ef;
+}
+QMessageBox QLabel {
+    color: #e5e9ef;
+}
+QMessageBox QPushButton {
+    background-color: #31363b;
+    border: 1px solid #4d5257;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #e5e9ef;
+    min-width: 60px;
+}
+QMessageBox QPushButton:hover {
+    background-color: #3b4045;
+    border-color: #5294e2;
+}
+QMessageBox QPushButton:pressed {
+    background-color: #44494e;
+}
+"""
+
+
+def style_messagebox(msg_box):
+    """Apply dark theme style to QMessageBox"""
+    msg_box.setStyleSheet(MESSAGEBOX_DARK_STYLE)
+
+
+def get_rkdeveloptool_version():
+    """Get rkdeveloptool version"""
+    try:
+        result = subprocess.run([RKTOOL, "--version"], capture_output=True, text=True, timeout=2)
+        output = (result.stdout or "") + (result.stderr or "")
+        # Parse "rkdeveloptool ver 1.32" format
+        m = re.search(r'ver\s+([\d.]+)', output)
+        if m:
+            return m.group(1)
+    except:
+        pass
+    return "unknown"
+
+
 def read_device_info(gui):
     """Read device capability information and cache flash info"""
-    def on_finished(output, return_code):
-        if return_code == 0 and output:
-            # Parse and cache flash info
-            flash_info = parse_flash_info(output)
-            if flash_info:
-                gui._cached_flash_info = flash_info
-                capacity_str = flash_info.get('capacity', '')
-                if capacity_str:
-                    gui.log_message(f"💾 {gui.tr('detected_flash_size')}: {capacity_str}")
-
-    gui.run_command([RKTOOL, "rfi"], "reading_device_info", callback=on_finished)
+    gui.run_command([RKTOOL, "rfi"], "reading_device_info")
 
 
 def get_detailed_device_info(gui):
     """Get detailed device information and cache flash info"""
-    def on_finished(output, return_code):
-        if return_code == 0 and output:
-            flash_info = parse_flash_info(output)
-            if flash_info:
-                gui._cached_flash_info = flash_info
-
-    gui.run_command([RKTOOL, "rcb"], "reading_device_info", callback=on_finished)
+    gui.run_command([RKTOOL, "rcb"], "reading_device_info")
 
 
 def get_flash_capacity_bytes(gui):
@@ -119,6 +149,7 @@ def backup_firmware(gui):
 
         # Confirm with user
         msg = QMessageBox()
+        style_messagebox(msg)
         msg.setWindowTitle(gui.tr("confirm_backup_title"))
         msg.setIcon(QMessageBox.Icon.Question)
 
@@ -391,6 +422,7 @@ def load_loader(gui):
     
     # Ask user to choose between ul (upload) or db (download)
     msg = QMessageBox()
+    style_messagebox(msg)
     msg.setWindowTitle(gui.tr("loader_load_method_title"))
     msg.setIcon(QMessageBox.Icon.Information)
     msg.setText(gui.tr("loader_load_method_message"))
@@ -421,6 +453,10 @@ def load_loader(gui):
             if success:
                 gui.loader_loaded = True
                 gui.log_message("✅ " + gui.tr("loader_loaded_success"))
+                # Re-detect storage types now that loader is loaded
+                # This allows hardware like SD cards and SSDs to be recognized
+                gui.log_message("🔄 Re-detecting storage types...")
+                detect_supported_storage_types(gui)
             gui.on_command_finished(success, error_msg)
         
         try:
@@ -456,14 +492,20 @@ def burn_image(gui):
 
 
 def confirm_burn_operation(gui, file_path, address):
-    """Show confirmation dialog before burning"""
+    """Show confirmation dialog before burning with storage information"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
         size_str = format_file_size(file_size)
         md5sum = calculate_file_md5(file_path)
+        
+        # Get current storage information
+        current_storage_code = gui.change_storage_combo.currentData()
+        current_storage_name = gui.change_storage_combo.currentText()
+        storage_info = get_storage_info(gui, current_storage_code) if current_storage_code else {}
 
         msg = QMessageBox()
+        style_messagebox(msg)
         msg.setWindowTitle(gui.tr("confirm_burn_title"))
         msg.setIcon(QMessageBox.Icon.Question)
 
@@ -474,6 +516,8 @@ def confirm_burn_operation(gui, file_path, address):
 📊 {gui.tr("file_size")}: {size_str} ({file_size:,} bytes)
 📍 {gui.tr("target_address")}: {address}
 🔐 MD5: {md5sum}
+
+💾 {gui.tr("storage_type")}: {current_storage_name} ({storage_info.get('type', 'Unknown')})
 
 {gui.tr("confirm_proceed")}
         """
@@ -495,6 +539,177 @@ def confirm_burn_operation(gui, file_path, address):
         return reply == QMessageBox.StandardButton.Yes
 
 
+def detect_supported_storage_types(gui):
+    """
+    Detect supported storage types by testing each one.
+    Only initializes storage types that the device actually supports.
+    
+    Note: Storage detection requires Loader to be loaded.
+    In Maskrom mode without Loader, only fallback types will be available.
+    
+    Supported storage types depend on rkdeveloptool version and device hardware:
+    - rkdeveloptool 1.32: EMMC (1), SD (2), SPINOR (9)
+    """
+    try:
+        if not hasattr(gui, '_supported_storages'):
+            # Storage types supported by rkdeveloptool 1.32
+            # These are the officially documented storage types
+            all_types = {
+                '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash'},
+                '2': {'name': 'SD Card', 'code': '2', 'type': 'SD Card'},
+                '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash'},
+                # For newer rkdeveloptool versions (uncomment if your version supports these):
+                # '3': {'name': 'UFS', 'code': '3', 'type': 'Universal Flash Storage'},
+                # '4': {'name': 'NAND', 'code': '4', 'type': 'NAND Flash'},
+                # '10': {'name': 'NVMe SSD', 'code': '10', 'type': 'NVMe Solid State Drive'},
+            }
+            
+            # Start with empty dict - will be populated by detection
+            gui._supported_storages = {}
+            
+            # Check if device is in Maskrom mode without Loader
+            # In this mode, storage detection won't work
+            is_maskrom_no_loader = (
+                hasattr(gui, 'device_mode') and 'Maskrom' in gui.device_mode and
+                hasattr(gui, 'loader_loaded') and not gui.loader_loaded
+            )
+            
+            if is_maskrom_no_loader:
+                gui.log_message("⚠️ Device in Maskrom mode - load firmware to detect storage types")
+                # Use default types that are most likely available
+                gui._supported_storages = {
+                    '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
+                    '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
+                }
+            else:
+                # Test which storage types are actually available
+                # by attempting to switch to each one
+                available = []
+                for code, info in all_types.items():
+                    try:
+                        result = subprocess.run(
+                            [RKTOOL, "cs", code],
+                            capture_output=True,
+                            text=True,
+                            timeout=3
+                        )
+                        output = (result.stdout or "") + (result.stderr or "")
+                        
+                        # Check for explicit success or failure
+                        has_not_available = "is not available" in output
+                        has_ok = "Change Storage OK" in output
+                        
+                        # Success if has "OK" or no "not available" message
+                        is_success = has_ok or (not has_not_available and result.returncode == 0)
+                        
+                        if is_success and not has_not_available:
+                            gui._supported_storages[code] = {
+                                'name': info['name'],
+                                'code': code,
+                                'type': info['type'],
+                                'enabled': True
+                            }
+                            available.append(f"{info['name']} ({code})")
+                            gui.log_message(f"✓ Storage {code}: {info['name']}")
+                        else:
+                            # Only log if explicitly not available
+                            if has_not_available:
+                                gui.log_message(f"✗ Storage {code}: {info['name']} not available")
+                    except Exception as e:
+                        gui.log_message(f"✗ Storage {code} error: {str(e)[:50]}")
+                
+                if available:
+                    gui.log_message(f"📦 Detected {len(available)} storage type(s): {', '.join(available)}")
+                elif gui._supported_storages:
+                    # Some were added despite errors
+                    gui.log_message(f"📦 Detected storage types: {', '.join([info['name'] for info in gui._supported_storages.values()])}")
+                else:
+                    # No storage detected - use defaults
+                    gui._supported_storages = {
+                        '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
+                        '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
+                    }
+                    gui.log_message("📦 Using default storage types (EMMC, SPI NOR)")
+                    gui.log_message("💡 If your device has other storage, check:")
+                    gui.log_message("   - Is eMMC/SD physically installed on the board?")
+                    gui.log_message("   - Is rkdeveloptool up to date? (current: 1.32)")
+        
+        # Update UI combo box with detected types
+        update_storage_combo(gui)
+    except Exception as e:
+        # Fallback to basic types if detection fails
+        import sys
+        print(f"Warning: Storage detection failed: {e}", file=sys.stderr)
+        if not hasattr(gui, '_supported_storages'):
+            gui._supported_storages = {
+                '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
+                '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
+            }
+        try:
+            update_storage_combo(gui)
+        except:
+            pass
+
+
+def update_storage_combo(gui):
+    """
+    Update storage combo box with detected/available storage types.
+    """
+    try:
+        if not hasattr(gui, 'change_storage_combo'):
+            return
+        
+        # Get supported storages
+        supported = getattr(gui, '_supported_storages', {
+            '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
+            '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
+        })
+        
+        # Store previous selection
+        prev_text = gui.change_storage_combo.currentText()
+        prev_data = gui.change_storage_combo.currentData()
+        
+        # Clear and repopulate combo box
+        gui.change_storage_combo.clear()
+        
+        # Sort by code number for consistent ordering
+        sorted_items = sorted(supported.items(), key=lambda x: int(x[0]))
+        
+        for code, storage_info in sorted_items:
+            if storage_info.get('enabled', True):
+                gui.change_storage_combo.addItem(
+                    storage_info['name'],
+                    storage_info['code']  # Use the code as data
+                )
+        
+        # Try to restore previous selection
+        if prev_data:
+            idx = gui.change_storage_combo.findData(prev_data)
+            if idx >= 0:
+                gui.change_storage_combo.setCurrentIndex(idx)
+        
+    except Exception as e:
+        gui.log_message(f"⚠️ Error updating storage combo: {e}")
+
+
+def get_storage_info(gui, storage_code):
+    """
+    Get detailed information about a specific storage type.
+    Returns storage capacity, block size, partition count, etc.
+    """
+    # For now, return placeholder info - can be enhanced with real device queries
+    storage_map = {
+        '1': {'name': 'EMMC', 'type': 'eMMC Flash'},
+        '2': {'name': 'SD Card', 'type': 'SD Card'},
+        '9': {'name': 'SPI NOR', 'type': 'SPI NOR Flash'},
+        '3': {'name': 'UFS', 'type': 'Universal Flash Storage'},
+        '4': {'name': 'NAND', 'type': 'NAND Flash'},
+        '10': {'name': 'NVMe SSD', 'type': 'NVMe Solid State Drive'}
+    }
+    
+    return storage_map.get(storage_code, {'name': 'Unknown', 'type': 'Unknown'})
+
+
 # Export all operation functions
 __all__ = [
     'enter_maskrom_mode', 'enter_loader_mode', 'reset_device',
@@ -502,5 +717,6 @@ __all__ = [
     'read_partition_table', 'backup_firmware',
     'onekey_burn', 'load_loader', 'burn_image',
     'on_partition_ppt_finished', 'backup_partition_by_name',
-    'write_partition_by_name', 'confirm_burn_operation'
+    'write_partition_by_name', 'confirm_burn_operation',
+    'detect_supported_storage_types', 'update_storage_combo', 'get_storage_info'
 ]

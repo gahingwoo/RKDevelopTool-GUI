@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton,
     QLabel, QLineEdit, QListWidget, QComboBox, QGroupBox, QCheckBox,
     QTableWidget, QSpinBox, QTextBrowser, QProgressBar, QHeaderView,
-    QSizePolicy
+    QSizePolicy, QMessageBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -797,26 +797,66 @@ def on_address_changed(gui):
 
 
 def change_storage(gui):
-    """Change storage medium"""
+    """Change storage medium and auto-refresh partition table"""
     from utils import RKTOOL
     storage = gui.change_storage_combo.currentData()
     if not storage:
         gui.show_message("Warning", "select_storage", "Warning")
         return
+    
+    storage_name = gui.change_storage_combo.currentText()
+    gui.log_message(f"🔄 Switching storage to {storage_name}...")
+    
+    # Store the storage name for use in callback
+    gui._storage_switch_target = storage_name
+    
+    # Disconnect previous finished signal if any
+    if gui.command_worker and gui.command_worker.isRunning():
+        try:
+            gui.command_worker.finished_signal.disconnect()
+        except:
+            pass
+    
+    # Run the storage change command using standard run_command
     gui.run_command([RKTOOL, "cs", storage], "changing_storage")
+    
+    # Connect to the finished signal to auto-refresh partitions
+    if gui.command_worker:
+        def on_storage_finished(success, error_msg):
+            """Handle storage change completion and auto-refresh partition table"""
+            target_name = getattr(gui, '_storage_switch_target', 'Storage')
+            if success:
+                gui.log_message(f"✅ Storage switched to {target_name}")
+                gui.log_message(f"📦 Auto-refreshing partition table...")
+                # Auto-refresh partition table after successful storage switch
+                operations.read_partition_table(gui)
+            else:
+                gui.log_message(f"❌ Failed to switch storage: {error_msg if error_msg else 'Unknown error'}")
+            # Call the original on_command_finished
+            gui.on_command_finished(success, error_msg)
+        
+        try:
+            gui.command_worker.finished_signal.disconnect()
+        except:
+            pass
+        gui.command_worker.finished_signal.connect(safe_slot(on_storage_finished))
 
 
 def erase_flash(gui):
     """Erase entire flash"""
     from PySide6.QtWidgets import QMessageBox
+    from operations import style_messagebox
     from utils import RKTOOL
 
-    reply = QMessageBox.question(
-        gui, gui.tr("erase_flash_warning_title"),
-        gui.tr("erase_flash_warning_message"),
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-    )
-    if reply == QMessageBox.StandardButton.Yes:
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("erase_flash_warning_title"))
+    msg.setText(gui.tr("erase_flash_warning_message"))
+    msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setMinimumWidth(500)
+    
+    if msg.exec() == QMessageBox.StandardButton.Yes:
         gui.run_command([RKTOOL, "ef"], "erase_flash")
 
 
@@ -1232,13 +1272,16 @@ def start_mass_production(gui):
         return
 
     # Confirm
-    reply = QMessageBox.question(
-        gui, gui.tr("confirm_mass_production"),
-        gui.tr("mass_production_warning").format(len(selected_items)),
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-    )
-
-    if reply != QMessageBox.StandardButton.Yes:
+    msg = QMessageBox()
+    from operations import style_messagebox
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("confirm_mass_production"))
+    msg.setText(gui.tr("mass_production_warning").format(len(selected_items)))
+    msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setMinimumWidth(500)
+    
+    if msg.exec() != QMessageBox.StandardButton.Yes:
         return
 
     gui.mass_production_active = True

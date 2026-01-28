@@ -67,7 +67,7 @@ class RKDevToolGUI(QMainWindow):
         self.maskrom_device_shown_hint = False  # Track if we've shown loader hint for current device
 
         # UI Setup
-        self.setMinimumSize(1200, 720)
+        self.setMinimumSize(1300, 720)
         self.set_application_font()
 
         # Initialize theme manager
@@ -97,7 +97,7 @@ class RKDevToolGUI(QMainWindow):
         self.splitter.addWidget(right_scroll)
 
         # Set splitter sizes
-        self._splitter_sizes = [350, 1050]
+        self._splitter_sizes = [430, 970]
         self.splitter.setSizes(self._splitter_sizes)
         self.splitter.splitterMoved.connect(safe_slot(self._on_splitter_moved))
 
@@ -392,6 +392,8 @@ class RKDevToolGUI(QMainWindow):
 
     def on_device_found(self, devices, mode, chip_info):
         """Handle device found event"""
+        from operations import detect_supported_storage_types
+        
         self.connected_devices = devices
         self.device_mode = mode
         self.chip_info = chip_info
@@ -407,6 +409,9 @@ class RKDevToolGUI(QMainWindow):
                 self.loader_loaded = True
             else:
                 self.loader_loaded = False
+            
+            # Detect supported storage types for the connected device
+            detect_supported_storage_types(self)
             
             # Show dialog only once when device connects in Maskrom mode AND no chip info
             if "Maskrom" in mode and not self.maskrom_device_shown_hint and self.loader_loaded == False:
@@ -452,7 +457,9 @@ class RKDevToolGUI(QMainWindow):
 
     def show_message(self, title_key, message_key, icon="Information"):
         """Show message box"""
+        from operations import style_messagebox
         msg = QMessageBox()
+        style_messagebox(msg)
         msg.setWindowTitle(self.tr(title_key))
         msg.setText(self.tr(message_key))
         msg.setMinimumWidth(600)
@@ -562,11 +569,13 @@ class RKDevToolGUI(QMainWindow):
 
     def _show_loader_hint(self, is_failure=False):
         """Show hint dialog to load Loader when in Maskrom mode"""
+        from operations import style_messagebox
         import operations
         
         if is_failure:
             # Show warning dialog when command fails
             msg = QMessageBox()
+            style_messagebox(msg)
             msg.setWindowTitle(self.tr("warning_title"))
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setText(
@@ -582,6 +591,7 @@ class RKDevToolGUI(QMainWindow):
         else:
             # On initial device connection, show info dialog
             msg = QMessageBox()
+            style_messagebox(msg)
             msg.setWindowTitle(self.tr("tip"))
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setText(
