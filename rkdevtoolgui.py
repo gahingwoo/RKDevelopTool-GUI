@@ -492,8 +492,8 @@ class RKDevToolGUI(QMainWindow):
 
         button.clicked.connect(safe_slot(_on_browse))
 
-    def run_command(self, cmd, description_key):
-        """Run command in background worker"""
+    def run_command(self, cmd, description_key, callback=None):
+        """Run command in background worker with optional callback"""
         if self.command_worker and self.command_worker.isRunning():
             self.show_message("Warning", "command_already_running", "Warning")
             return
@@ -511,6 +511,18 @@ class RKDevToolGUI(QMainWindow):
             self.device_info_text.clear()
             self.device_info_text.append(self.tr('reading_device_info'))
             self.command_worker.log.connect(safe_slot(lambda s: self.device_info_text.append(s)))
+        
+        # Mirror to device info text if reading device capability
+        if description_key == 'reading_device_capability' and hasattr(self, 'device_info_text'):
+            self.device_info_text.clear()
+            self.device_info_text.append(self.tr('reading_device_capability'))
+            self.command_worker.log.connect(safe_slot(lambda s: self.device_info_text.append(s)))
+
+        # Store callback if provided
+        if callback:
+            self._command_callback = callback
+        else:
+            self._command_callback = None
 
         self.command_worker.finished_signal.connect(safe_slot(self.on_command_finished))
         self.command_worker.start()
@@ -519,7 +531,18 @@ class RKDevToolGUI(QMainWindow):
         """Handle command completion"""
         self.progress_bar.setValue(100 if success else 0)
         self.progress_label.setText(self.tr("ready_status"))
-
+        # Call callback if provided
+        if hasattr(self, '_command_callback') and self._command_callback:
+            try:
+                # Get the command output from the worker if it has output
+                output = ""
+                if hasattr(self.command_worker, 'output'):
+                    output = self.command_worker.output
+                self._command_callback(success, output)
+            except Exception as e:
+                self.log_message(f"❌ Callback error: {e}")
+            finally:
+                self._command_callback = None
         # If command failed and in Maskrom mode and no chip info, suggest loading Loader
         # (only show once per device connection via maskrom_device_shown_hint flag)
         if (not success and "Maskrom" in self.device_mode and 

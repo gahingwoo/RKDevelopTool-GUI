@@ -428,15 +428,11 @@ def load_loader(gui):
     msg.setText(gui.tr("loader_load_method_message"))
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     
-    # Use custom button text
-    buttons = msg.buttons()
-    for btn in buttons:
-        if msg.buttonRole(btn) == QMessageBox.ButtonRole.NoRole:
-            btn.setText(gui.tr("loader_download"))
-        elif msg.buttonRole(btn) == QMessageBox.ButtonRole.YesRole:
-            btn.setText(gui.tr("loader_upload"))
+    # Set custom button text - make them clear and distinct
+    msg.button(QMessageBox.StandardButton.No).setText(gui.tr("loader_download"))
+    msg.button(QMessageBox.StandardButton.Yes).setText(gui.tr("loader_upload"))
     
-    msg.setMinimumWidth(400)
+    msg.setMinimumWidth(550)
     result = msg.exec()
     
     # Determine which command to use
@@ -710,6 +706,145 @@ def get_storage_info(gui, storage_code):
     return storage_map.get(storage_code, {'name': 'Unknown', 'type': 'Unknown'})
 
 
+def read_flash_id(gui):
+    """Read Flash ID and display in dialog"""
+    from utils import parse_flash_id
+    from workers import CommandWorker
+    
+    def on_flash_id_finished(success, output):
+        if not success:
+            gui.log_message("❌ Failed to read Flash ID")
+            return
+        
+        flash_id_info = parse_flash_id(output)
+        if flash_id_info:
+            gui._flash_id_info = flash_id_info
+            
+            # Build info text
+            info_text = "📦 Flash ID Information:\n\n"
+            if 'manufacturer' in flash_id_info:
+                info_text += f"  Manufacturer: {flash_id_info['manufacturer']}\n"
+            if 'manufacturer_id' in flash_id_info:
+                info_text += f"  Manufacturer ID: {flash_id_info['manufacturer_id']}\n"
+            if 'device_id_hex' in flash_id_info:
+                info_text += f"  Device ID: {flash_id_info['device_id_hex']}\n"
+            if 'capacity' in flash_id_info:
+                info_text += f"  Capacity: {flash_id_info['capacity']}\n"
+            
+            gui.log_message(info_text)
+            
+            # Show in message box only (don't overwrite device_info_text)
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("flash_id_info"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(info_text)
+            msg.exec()
+        else:
+            gui.log_message("⚠️ Could not parse Flash ID information")
+    
+    gui.run_command([RKTOOL, "rid"], "reading_flash_id", on_flash_id_finished)
+
+
+def read_capability(gui):
+    """Read device capability information and display in dialog"""
+    from utils import parse_capability, format_capability_info
+    from workers import CommandWorker
+    
+    def on_capability_finished(success, output):
+        if not success:
+            gui.log_message("❌ Failed to read device capability")
+            return
+        
+        capability_info = parse_capability(output)
+        if capability_info:
+            gui._device_capability = capability_info
+            
+            # Format and display
+            info_text = format_capability_info(capability_info)
+            gui.log_message(info_text)
+            
+            # Update device info text box if available
+            if hasattr(gui, 'device_info_text'):
+                gui.device_info_text.clear()
+                gui.device_info_text.setText(info_text)
+            
+            # Show in message box
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("device_capability"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(info_text)
+            msg.exec()
+        else:
+            gui.log_message("⚠️ Could not parse device capability information")
+    
+    gui.run_command([RKTOOL, "rcb"], "reading_device_capability", on_capability_finished)
+
+
+def show_flash_info_detailed(gui):
+    """Show detailed flash information in a dialog"""
+    from utils import parse_flash_info
+    
+    def on_flash_info_finished(success, output):
+        if not success:
+            gui.log_message("❌ Failed to read Flash information")
+            return
+        
+        # Parse the output
+        flash_info = parse_flash_info(output)
+        if flash_info:
+            # Cache the info
+            gui._cached_flash_info = flash_info
+            # Display dialog
+            _display_flash_info_dialog(gui)
+        else:
+            gui.log_message("❌ Failed to parse Flash information")
+    
+    gui.run_command([RKTOOL, "rfi"], "reading_flash_info", on_flash_info_finished)
+
+
+def _display_flash_info_dialog(gui):
+    """Display cached flash information in a dialog"""
+    from utils import format_flash_info_detailed
+    
+    if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
+        flash_info = gui._cached_flash_info
+        
+        # Build detailed info text
+        info_text = "📦 Detailed Flash Information:\n\n"
+        
+        # Basic information
+        if 'manufacturer' in flash_info:
+            info_text += f"  Manufacturer: {flash_info['manufacturer']}\n"
+        if 'capacity' in flash_info:
+            info_text += f"  Capacity: {flash_info['capacity']}\n"
+        if 'id' in flash_info:
+            info_text += f"  Flash ID: {flash_info['id']}\n"
+        
+        # Additional fields that might be present
+        if 'flash_type' in flash_info:
+            info_text += f"  Type: {flash_info['flash_type']}\n"
+        if 'block_size' in flash_info:
+            info_text += f"  Block Size: {flash_info['block_size']}\n"
+        if 'page_size' in flash_info:
+            info_text += f"  Page Size: {flash_info['page_size']}\n"
+        if 'health_status' in flash_info:
+            info_text += f"  Health: {flash_info['health_status']}\n"
+        if 'wear_level' in flash_info:
+            info_text += f"  Wear Level: {flash_info['wear_level']}\n"
+        
+        gui.log_message(info_text)
+        
+        # Show in message box only (don't overwrite device_info_text)
+        msg = QMessageBox()
+        style_messagebox(msg)
+        msg.setWindowTitle(gui.tr("flash_info_detailed"))
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText(info_text)
+        msg.exec()
+
+
 # Export all operation functions
 __all__ = [
     'enter_maskrom_mode', 'enter_loader_mode', 'reset_device',
@@ -718,5 +853,6 @@ __all__ = [
     'onekey_burn', 'load_loader', 'burn_image',
     'on_partition_ppt_finished', 'backup_partition_by_name',
     'write_partition_by_name', 'confirm_burn_operation',
-    'detect_supported_storage_types', 'update_storage_combo', 'get_storage_info'
+    'detect_supported_storage_types', 'update_storage_combo', 'get_storage_info',
+    'read_flash_id', 'read_capability', 'show_flash_info_detailed'
 ]

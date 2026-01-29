@@ -409,7 +409,7 @@ def create_parameter_tab(gui):
     info_text.setMaximumHeight(150)
 
     info_btn = QPushButton()
-    info_btn.clicked.connect(safe_slot(lambda: operations.get_detailed_device_info(gui)))
+    info_btn.clicked.connect(safe_slot(lambda: operations.read_capability(gui)))
 
     info_layout.addWidget(info_text)
     info_layout.addWidget(info_btn)
@@ -867,23 +867,13 @@ def test_device(gui):
 
 
 def read_flash_id(gui):
-    """Read flash ID"""
-    from utils import RKTOOL, parse_flash_info
-    from workers import CommandWorker
-
-    if gui.command_worker and gui.command_worker.isRunning():
-        gui.show_message("Warning", "command_already_running", "Warning")
-        return
-
-    gui.command_worker = CommandWorker([RKTOOL, "rid"], "reading_flash_info", gui.manager)
-    gui.command_worker.progress.connect(lambda v: gui.progress_bar.setValue(v))
-    gui.command_worker.log.connect(safe_slot(gui.log_message))
-    gui.command_worker.finished_signal.connect(safe_slot(lambda success, error: on_flash_id_read(gui, success)))
-    gui.command_worker.start()
+    """Read Flash ID using enhanced operations function"""
+    from operations import read_flash_id as read_flash_id_op
+    read_flash_id_op(gui)
 
 
 def on_flash_id_read(gui, success):
-    """Handle flash ID read completion"""
+    """Handle flash ID read completion (legacy support)"""
     if not success:
         return
 
@@ -903,19 +893,9 @@ def on_flash_id_read(gui, success):
 
 
 def read_flash_info(gui):
-    """Read detailed flash info"""
-    from utils import RKTOOL
-    from workers import CommandWorker
-
-    if gui.command_worker and gui.command_worker.isRunning():
-        gui.show_message("Warning", "command_already_running", "Warning")
-        return
-
-    gui.command_worker = CommandWorker([RKTOOL, "rfi"], "reading_flash_info", gui.manager)
-    gui.command_worker.progress.connect(lambda v: gui.progress_bar.setValue(v))
-    gui.command_worker.log.connect(safe_slot(gui.log_message))
-    gui.command_worker.finished_signal.connect(safe_slot(lambda success, error: on_flash_info_read(gui, success)))
-    gui.command_worker.start()
+    """Read detailed flash info using enhanced operations function"""
+    from operations import show_flash_info_detailed
+    show_flash_info_detailed(gui)
 
 
 def on_flash_info_read(gui, success):

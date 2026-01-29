@@ -120,40 +120,54 @@ def parse_chip_info(chip_text):
 
 
 def parse_flash_info(flash_text):
-    """Parse flash ID and return manufacturer and capacity"""
+    """Parse flash info from rkdeveloptool rfi output"""
     if not flash_text:
         return None
 
     info = {}
 
-    # Extract Flash ID
+    # Extract Manufacturer
+    mfg_match = re.search(r'Manufacturer\s*:\s*([A-Z0-9\s,]+?)(?:,\s*value|$)', flash_text, re.I)
+    if mfg_match:
+        info['manufacturer'] = mfg_match.group(1).strip()
+
+    # Extract Flash Size (first occurrence usually is the main one)
+    size_match = re.search(r'Flash\s+Size\s*:\s*([0-9.]+\s*(?:MB|GB|KB))', flash_text, re.I)
+    if size_match:
+        info['capacity'] = size_match.group(1).strip()
+
+    # Extract Block Size
+    block_match = re.search(r'Block\s+Size\s*:\s*([0-9.]+\s*(?:KB|MB))', flash_text, re.I)
+    if block_match:
+        info['block_size'] = block_match.group(1).strip()
+
+    # Extract Page Size
+    page_match = re.search(r'Page\s+Size\s*:\s*([0-9.]+\s*(?:KB|Bytes))', flash_text, re.I)
+    if page_match:
+        info['page_size'] = page_match.group(1).strip()
+
+    # Extract ECC Bits
+    ecc_match = re.search(r'ECC\s+Bits\s*:\s*([0-9]+)', flash_text, re.I)
+    if ecc_match:
+        info['ecc_bits'] = ecc_match.group(1).strip()
+
+    # Extract Access Time
+    access_match = re.search(r'Access\s+Time\s*:\s*([0-9]+)', flash_text, re.I)
+    if access_match:
+        info['access_time'] = access_match.group(1).strip()
+
+    # Extract Flash CS info
+    cs_match = re.search(r'Flash\s+CS\s*:\s*([^\n]+)', flash_text, re.I)
+    if cs_match:
+        info['flash_cs'] = cs_match.group(1).strip()
+
+    # Legacy: Extract Flash ID from old format if present
     id_match = re.search(r'Flash\s*ID[:\s]*([0-9A-Fa-f]{2})\s*([0-9A-Fa-f]{2})\s*([0-9A-Fa-f]{2})', flash_text, re.I)
     if id_match:
         manufacturer_id = id_match.group(1).upper()
         device_id1 = id_match.group(2).upper()
         device_id2 = id_match.group(3).upper()
-
-        manufacturer = FLASH_ID_MAP.get(manufacturer_id, f"Unknown (0x{manufacturer_id})")
-        info['manufacturer'] = manufacturer
         info['id'] = f"{manufacturer_id} {device_id1} {device_id2}"
-
-        # Calculate capacity from device ID
-        try:
-            capacity_code = int(device_id2, 16)
-            capacity_bytes = 2 ** capacity_code
-            if capacity_bytes >= 1024 ** 3:
-                info['capacity'] = f"{capacity_bytes / (1024 ** 3):.1f} GB"
-            else:
-                info['capacity'] = f"{capacity_bytes / (1024 ** 2):.0f} MB"
-        except:
-            pass
-
-    # Extract capacity from text
-    cap_match = re.search(r'([0-9.]+)\s*(MB|GB)', flash_text, re.I)
-    if cap_match and 'capacity' not in info:
-        val = float(cap_match.group(1))
-        unit = cap_match.group(2).upper()
-        info['capacity'] = f"{val} {unit}"
 
     return info if info else None
 
@@ -268,3 +282,161 @@ def safe_slot(fn):
             return None
 
     return slot
+
+
+def parse_flash_id(output: str) -> dict:
+    """Parse Flash ID from rkdeveloptool rid output
+    
+    Returns a dict with keys: manufacturer, device_id, capacity, etc.
+    """
+    info = {}
+    
+    # Parse Flash ID (hex format: 4E 4F 52 or similar)
+    # The output is usually: Flash ID: XX YY ZZ ...
+    id_match = re.search(r'Flash\s*ID\s*:\s*([0-9A-Fa-f]{2})\s+([0-9A-Fa-f]{2})\s+([0-9A-Fa-f]{2})', output, re.I)
+    if id_match:
+        manufacturer_id = id_match.group(1).upper()
+        device_id1 = id_match.group(2).upper()
+        device_id2 = id_match.group(3).upper()
+        
+        manufacturer = FLASH_ID_MAP.get(manufacturer_id, f"Unknown (0x{manufacturer_id})")
+        info['manufacturer'] = manufacturer
+        info['manufacturer_id'] = f"0x{manufacturer_id}"
+        info['device_id'] = f"{device_id1} {device_id2}"
+        info['device_id_hex'] = f"0x{device_id1}{device_id2}"
+        
+        # Try to calculate capacity from device ID
+        # Device ID typically has high byte = density code
+        try:
+            # Try using device_id1 first (most significant byte)
+            capacity_code = int(device_id1, 16)
+            # Check if it's a valid power of 2
+            if capacity_code > 0 and (capacity_code & (capacity_code - 1)) == 0:
+                # It's a power of 2, use as byte multiplier
+                capacity_bytes = capacity_code * (1024 * 1024)  # Assume in MB
+                if capacity_bytes >= 1024 ** 3:
+                    info['capacity'] = f"{capacity_bytes / (1024 ** 3):.1f} GB"
+                else:
+                    info['capacity'] = f"{capacity_bytes / (1024 ** 2):.0f} MB"
+        except:
+            pass
+    
+    # Extract capacity from text if not already found
+    cap_match = re.search(r'([0-9.]+)\s*(MB|GB)', output, re.I)
+    if cap_match and 'capacity' not in info:
+        val = float(cap_match.group(1))
+        unit = cap_match.group(2).upper()
+        info['capacity'] = f"{val} {unit}"
+    
+    return info
+
+
+def parse_capability(output: str) -> dict:
+    """Parse device capability from rkdeveloptool rcb output
+    
+    Returns a dict with device capability information
+    """
+    info = {}
+    
+    # Extract capability code from "Capability:51 17 00 00..." format
+    cap_match = re.search(r'Capability\s*:\s*([0-9A-Fa-f\s]+?)(?:\n|$)', output, re.I)
+    if cap_match:
+        cap_code = cap_match.group(1).strip()
+        info['capability_code'] = cap_code
+    
+    # Extract various capability fields
+    patterns = [
+        (r'Direct\s+LBA\s*:\s*(\w+)', 'direct_lba'),
+        (r'Read\s+Com\s+Log\s*:\s*(\w+)', 'read_com_log'),
+        (r'Read\s+Secure\s+Mode\s*:\s*(\w+)', 'secure_mode'),
+        (r'New\s+IDB\s*:\s*(\w+)', 'new_idb'),
+        (r'(?:Erase\s+)?Block\s+Size\s*[:\s]*([0-9.]+\s*(?:KB|MB|Bytes))', 'block_size'),
+        (r'(?:Write\s+)?Page\s+Size\s*[:\s]*([0-9.]+\s*(?:Bytes|KB|Byte))', 'write_page_size'),
+        (r'(?:Read\s+)?Page\s+Size\s*[:\s]*([0-9.]+\s*(?:Bytes|KB|Byte))', 'read_page_size'),
+        (r'IDB\s+Version\s*[:\s]*([0-9A-Fa-f.]+)', 'idb_version'),
+        (r'(?:ROM|Bootloader)\s+Version\s*[:\s]*([0-9A-Fa-f.]+)', 'bootloader_version'),
+        (r'(?:Chip|Device)\s+(?:Name|Type)\s*[:\s]*(\S+)', 'chip_name'),
+    ]
+    
+    for pattern, key in patterns:
+        match = re.search(pattern, output, re.I)
+        if match:
+            info[key] = match.group(1).strip()
+    
+    # Check for specific features/capabilities
+    features = []
+    if re.search(r'Direct\s+LBA.*enabled', output, re.I):
+        features.append('Direct LBA')
+    if re.search(r'New\s+IDB.*enabled', output, re.I):
+        features.append('New IDB')
+    if re.search(r'Secure\s+Mode.*enabled', output, re.I):
+        features.append('Secure Mode')
+    
+    if features:
+        info['features'] = ', '.join(features)
+    
+    return info
+
+
+def format_capability_info(capability: dict) -> str:
+    """Format capability information as readable text"""
+    lines = ["📋 Device Capability Information:\n"]
+    
+    if 'chip_name' in capability:
+        lines.append(f"  Chip: {capability['chip_name']}")
+    
+    if 'flash_types' in capability:
+        lines.append(f"  Supported Flash Types: {capability['flash_types']}")
+    
+    if 'block_size' in capability:
+        lines.append(f"  Block Size: {capability['block_size']}")
+    
+    if 'write_page_size' in capability:
+        lines.append(f"  Write Page Size: {capability['write_page_size']}")
+    
+    if 'read_page_size' in capability:
+        lines.append(f"  Read Page Size: {capability['read_page_size']}")
+    
+    if 'idb_version' in capability:
+        lines.append(f"  IDB Version: {capability['idb_version']}")
+    
+    if 'bootloader_version' in capability:
+        lines.append(f"  Bootloader Version: {capability['bootloader_version']}")
+    
+    if 'features' in capability:
+        lines.append(f"  Features: {capability['features']}")
+    
+    return '\n'.join(lines)
+
+
+def format_flash_info_detailed(flash_info: dict) -> str:
+    """Format flash information as detailed readable text"""
+    lines = ["📦 Detailed Flash Information:\n"]
+    
+    # Basic info
+    if 'flash_type' in flash_info:
+        lines.append(f"  Type: {flash_info['flash_type']}")
+    
+    if 'manufacturer' in flash_info:
+        lines.append(f"  Manufacturer: {flash_info['manufacturer']}")
+    
+    if 'id' in flash_info:
+        lines.append(f"  ID: {flash_info['id']}")
+    
+    if 'capacity' in flash_info:
+        lines.append(f"  Capacity: {flash_info['capacity']}")
+    
+    # Advanced info
+    if 'block_size' in flash_info:
+        lines.append(f"  Block Size: {flash_info['block_size']}")
+    
+    if 'page_size' in flash_info:
+        lines.append(f"  Page Size: {flash_info['page_size']}")
+    
+    if 'health_status' in flash_info:
+        lines.append(f"  Health: {flash_info['health_status']}")
+    
+    if 'wear_level' in flash_info:
+        lines.append(f"  Wear Level: {flash_info['wear_level']}")
+    
+    return '\n'.join(lines)

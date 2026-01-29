@@ -93,6 +93,7 @@ class CommandWorker(QThread):
         self._process = None
         self.last_logged_progress = -1
         self.last_logged_line = ""
+        self.output = ""  # Store command output for callbacks
 
     def tr(self, key):
         return self.manager.tr(key)
@@ -114,6 +115,7 @@ class CommandWorker(QThread):
 
             self._process = process
             line_buffer = ""
+            self.output = ""  # Reset output buffer
 
             # Read output character by character for true real-time updates
             while True:
@@ -125,6 +127,7 @@ class CommandWorker(QThread):
                     break
                 
                 line_buffer += char
+                self.output += char  # Accumulate output
                 
                 # Process when we get a complete line
                 if char == '\n':
