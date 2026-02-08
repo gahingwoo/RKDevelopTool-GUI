@@ -97,7 +97,13 @@ def update_partition_tab_texts(gui):
     gui.partition_file_browse_btn.setText(gui.tr("browse_btn"))
     gui.burn_partition_btn.setText(gui.tr("burn_partition_btn"))
     gui.backup_partition_btn.setText(gui.tr("backup_partition_btn"))
+    gui.erase_partition_btn.setText(gui.tr("erase_partition_btn"))
+    gui.erase_all_btn.setText(gui.tr("erase_all_btn"))
     gui.manual_address_enable.setText(gui.tr("manual_address_override"))
+    
+    # Update danger zone label
+    if hasattr(gui, 'danger_label') and gui.danger_label:
+        gui.danger_label.setText(gui.tr("danger_zone_label"))
 
     # Populate partition combo
     populate_partition_combo(gui)
@@ -120,6 +126,7 @@ def update_parameter_tab_texts(gui):
 
     gui.device_info_group.setTitle(gui.tr("device_info_group"))
     gui.get_device_info_btn.setText(gui.tr("get_detailed_info_btn"))
+    gui.get_security_info_btn.setText(gui.tr("get_security_info_btn"))
 
 
 def update_upgrade_tab_texts(gui):
@@ -139,6 +146,7 @@ def update_upgrade_tab_texts(gui):
     gui.pack_ops_group.setTitle(gui.tr("pack_ops_group"))
     gui.gpt_label.setText(gui.tr("gpt_label"))
     gui.gpt_browse_btn.setText(gui.tr("browse_btn"))
+    gui.gpt_export_btn.setText(gui.tr("gpt_export_btn"))
     gui.gpt_btn.setText(gui.tr("gpt_btn"))
 
     gui.prm_label.setText(gui.tr("prm_label"))
@@ -181,6 +189,14 @@ def update_advanced_tab_texts(gui):
     gui.verify_sector_combo.addItem(gui.tr("verify_sector_4096"), "4096")
     gui.verify_sector_combo.addItem(gui.tr("verify_sector_custom"), "custom")
     gui.verify_sector_custom.setPlaceholderText(gui.tr("verify_sector_custom_placeholder"))
+
+    # Boot operations (Week 6)
+    if hasattr(gui, 'boot_group') and gui.boot_group:
+        gui.boot_group.setTitle("🔧 Boot 文件操作" if gui.manager.lang == "zh" else "Boot File Operations")
+        if hasattr(gui, 'download_boot_btn') and gui.download_boot_btn:
+            gui.download_boot_btn.setText(gui.tr("download_boot_btn"))
+        if hasattr(gui, 'upload_boot_btn') and gui.upload_boot_btn:
+            gui.upload_boot_btn.setText(gui.tr("upload_boot_btn"))
 
     gui.debug_group.setTitle(gui.tr("debug_tools_group"))
     gui.enable_debug_log.setText(gui.tr("enable_debug_log"))

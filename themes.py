@@ -1,515 +1,231 @@
 """
-Theme Manager for RKDevelopTool GUI
+Theme Manager for RKDevelopTool GUI - Using Qt Built-in Styles
+Supports multiple styles: Fusion, Windows, macOS, Material, iOS, etc.
 """
 import sys
-import platform
-import subprocess
+from PySide6.QtWidgets import QApplication, QStyleFactory
+from PySide6.QtGui import QPalette, QColor
+from PySide6.QtCore import Qt
 
-# Linux dbus support
-try:
-    import dbus
-except ImportError:
-    dbus = None
 
-# Dark Theme - Native controls with custom buttons
-DARK_THEME = """
-/* ===============================================
-   KDE Breeze Dark Theme for Qt Widgets
-   =============================================== */
+# Available styles
+AVAILABLE_STYLES = [
+    'Fusion',
+    'Windows',
+    'macOS',
+    'Imagine',
+    'iOS',
+    'Material',
+    'Universal',
+    'windowsvista',
+]
 
-/* Base */
-QMainWindow, QWidget {
-    background-color: #232629;
-    color: #e5e9ef;
-    font-size: 12px;
-}
 
-/* Group box titles */
-QGroupBox {
-    border: 1px solid #3d4144;
-    border-radius: 6px;
-    margin-top: 20px;
-    padding: 12px;
-}
-QGroupBox:title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    padding: 0 6px;
-    color: #cfd8dc;
-}
+def get_available_styles():
+    """Get list of available styles on this platform"""
+    available = []
+    app = QApplication.instance()
+    
+    for style in AVAILABLE_STYLES:
+        try:
+            # Try to create the style to see if it's available
+            if QStyleFactory.create(style):
+                available.append(style)
+        except Exception:
+            pass
+    
+    # Always include Fusion as fallback
+    if 'Fusion' not in available:
+        available.insert(0, 'Fusion')
+    
+    return available
 
-/* Buttons */
-QPushButton {
-    background-color: #31363b;
-    border: 1px solid #4d5257;
-    border-radius: 6px;
-    padding: 6px 14px;
-    color: #e5e9ef;
-}
 
-QPushButton:hover {
-    background-color: #3b4045;
-    border-color: #5294e2;
-}
+def create_dark_palette():
+    """Create a dark palette for any style"""
+    palette = QPalette()
+    
+    # Define dark colors
+    dark = QColor(43, 43, 43)
+    darker = QColor(30, 30, 30)
+    light = QColor(255, 255, 255)
+    link_color = QColor(0, 120, 212)
+    mid = QColor(80, 80, 80)
+    
+    # Window and general
+    palette.setColor(QPalette.ColorRole.Window, dark)
+    palette.setColor(QPalette.ColorRole.WindowText, light)
+    palette.setColor(QPalette.ColorRole.Base, darker)
+    palette.setColor(QPalette.ColorRole.AlternateBase, dark)
+    palette.setColor(QPalette.ColorRole.ToolTipBase, dark)
+    palette.setColor(QPalette.ColorRole.ToolTipText, light)
+    palette.setColor(QPalette.ColorRole.Text, light)
+    palette.setColor(QPalette.ColorRole.Button, dark)
+    palette.setColor(QPalette.ColorRole.ButtonText, light)
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    palette.setColor(QPalette.ColorRole.Link, link_color)
+    palette.setColor(QPalette.ColorRole.Highlight, link_color)
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Mid, mid)
+    palette.setColor(QPalette.ColorRole.Midlight, QColor(100, 100, 100))
+    palette.setColor(QPalette.ColorRole.Dark, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.Shadow, QColor(0, 0, 0))
+    
+    # For disabled state
+    disabled_text = QColor(128, 128, 128)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
+    
+    return palette
 
-QPushButton:pressed {
-    background-color: #44494e;
-}
 
-/* State buttons */
-QPushButton.primary {
-    background-color: #3daee9;
-    border: 1px solid #2b90c4;
-    color: black;
-}
-QPushButton.primary:hover {
-    background-color: #51b7ec;
-}
+def create_light_palette():
+    """Create a light palette"""
+    palette = QPalette()
+    
+    # Define light colors
+    light = QColor(240, 240, 240)
+    lighter = QColor(255, 255, 255)
+    dark = QColor(40, 40, 40)
+    mid = QColor(180, 180, 180)
+    
+    # Window and general
+    palette.setColor(QPalette.ColorRole.Window, light)
+    palette.setColor(QPalette.ColorRole.WindowText, dark)
+    palette.setColor(QPalette.ColorRole.Base, lighter)
+    palette.setColor(QPalette.ColorRole.AlternateBase, light)
+    palette.setColor(QPalette.ColorRole.ToolTipBase, lighter)
+    palette.setColor(QPalette.ColorRole.ToolTipText, dark)
+    palette.setColor(QPalette.ColorRole.Text, dark)
+    palette.setColor(QPalette.ColorRole.Button, light)
+    palette.setColor(QPalette.ColorRole.ButtonText, dark)
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Link, QColor(0, 120, 212))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(0, 120, 212))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Mid, mid)
+    palette.setColor(QPalette.ColorRole.Midlight, QColor(200, 200, 200))
+    palette.setColor(QPalette.ColorRole.Dark, QColor(100, 100, 100))
+    palette.setColor(QPalette.ColorRole.Shadow, QColor(200, 200, 200))
+    
+    # For disabled state
+    disabled_text = QColor(160, 160, 160)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, disabled_text)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, disabled_text)
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, disabled_text)
+    
+    return palette
 
-QPushButton.success {
-    background-color: #27ae60;
-    border: 1px solid #1e8c4b;
-}
 
-QPushButton.danger {
-    background-color: #c0392b;
-    border: 1px solid #a83226;
-}
-
-QPushButton.warning {
-    background-color: #f39c12;
-    color: black;
-    border: 1px solid #d98c10;
-}
-
-/* Scrollbar (Breeze style) */
-QScrollBar:vertical {
-    background: #232629;
-    width: 12px;
-    margin: 0;
-}
-QScrollBar::handle:vertical {
-    background: #4d5257;
-    min-height: 30px;
-    border-radius: 6px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #5a6268;
-}
-
-QScrollBar:horizontal {
-    background: #232629;
-    height: 12px;
-}
-QScrollBar::handle:horizontal {
-    background: #4d5257;
-    min-width: 30px;
-    border-radius: 6px;
-}
-QScrollBar::handle:horizontal:hover {
-    background: #5a6268;
-}
-
-QScrollBar::add-line, 
-QScrollBar::sub-line {
-    background: none;
-}
-
-/* Text input */
-QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
-    background-color: #2b2f33;
-    border: 1px solid #4d5257;
-    border-radius: 6px;
-    padding: 4px 8px;
-    color: #e5e9ef;
-}
-QLineEdit:hover, QTextEdit:hover {
-    border-color: #5294e2;
-}
-
-/* ComboBox popup */
-QComboBox QAbstractItemView {
-    background-color: #2b2f33;
-    border: 1px solid #4d5257;
-    selection-background-color: #3daee9;
-    selection-color: black;
-}
-/* ============================
-   KDE Breeze Dark: TabWidget
-   ============================ */
-QTabWidget::pane {
-    border: 1px solid #3d4144;
-    background-color: #2b2f33;
-    border-radius: 6px;
-}
-
-QTabBar::tab {
-    background: #31363b;
-    padding: 6px 14px;
-    margin-right: 2px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-}
-
-QTabBar::tab:selected {
-    background: #3daee9;
-    color: black;
-}
-
-QTabBar::tab:hover {
-    background: #3b4045;
-}
-
-/* ============================
-   KDE Breeze Dark: Slider
-   ============================ */
-QSlider::groove:horizontal {
-    background: #3d4144;
-    height: 6px;
-    border-radius: 3px;
-}
-QSlider::handle:horizontal {
-    width: 14px;
-    background: #3daee9;
-    margin: -4px 0;
-    border-radius: 7px;
-}
-QSlider::handle:horizontal:hover {
-    background: #51b7ec;
-}
-
-/* ============================
-   KDE Breeze Dark: ProgressBar
-   ============================ */
-QProgressBar {
-    border: 1px solid #4d5257;
-    border-radius: 6px;
-    background: #2b2f33;
-    text-align: center;
-}
-QProgressBar::chunk {
-    background-color: #3daee9;
-    border-radius: 6px;
-}
-
-/* ============================
-   KDE Breeze Dark: Toolbar
-   ============================ */
-QToolBar {
-    background: #2b2f33;
-    border-bottom: 1px solid #3d4144;
-}
-QToolButton {
-    background: transparent;
-    padding: 6px 8px;
-    border-radius: 4px;
-}
-QToolButton:hover {
-    background: #3b4045;
-}
-QToolButton:checked {
-    background: #3daee9;
-    color: black;
-}
-
-/* ============================
-   KDE Breeze Dark: Menu
-   ============================ */
-QMenu {
-    background-color: #2b2f33;
-    border: 1px solid #4d5257;
-}
-QMenu::item {
-    padding: 6px 18px;
-    background: transparent;
-}
-QMenu::item:selected {
-    background: #3daee9;
-    color: black;
-}
-
-/* ============================
-   KDE Breeze Dark: CheckBox / Radio
-   ============================ */
-QCheckBox::indicator, QRadioButton::indicator {
-    width: 16px;
-    height: 16px;
-}
-QCheckBox::indicator {
-    border: 1px solid #4d5257;
-    background: #2b2f33;
-    border-radius: 3px;
-}
-QCheckBox::indicator:checked {
-    background: #3daee9;
-    border-color: #2b90c4;
-}
-QRadioButton::indicator {
-    border: 1px solid #4d5257;
-    background: #2b2f33;
-    border-radius: 8px;
-}
-QRadioButton::indicator:checked {
-    background: #3daee9;
-    border-color: #2b90c4;
-}
-"""
-
-# Light Theme - Native controls with custom buttons
-LIGHT_THEME = """
-/* ===============================================
-   KDE Breeze Light Theme
-   =============================================== */
-
-/* Base */
-QMainWindow, QWidget {
-    background-color: #fafafa;
-    color: #232629;
-    font-size: 12px;
-}
-
-/* Group box */
-QGroupBox {
-    border: 1px solid #c7ccd1;
-    border-radius: 6px;
-    margin-top: 20px;
-    padding: 12px;
-}
-QGroupBox:title {
-    padding: 0 6px;
-    color: #455a64;
-}
-
-/* Buttons */
-QPushButton {
-    background-color: #e9e9e9;
-    border: 1px solid #c8c8c8;
-    border-radius: 6px;
-    padding: 6px 14px;
-    color: #232629;
-}
-
-QPushButton:hover {
-    background-color: #ffffff;
-    border-color: #3daee9;
-}
-
-QPushButton:pressed {
-    background-color: #dcdcdc;
-}
-
-/* Primary / success / danger */
-QPushButton.primary {
-    background-color: #3daee9;
-    color: white;
-    border: 1px solid #2b90c4;
-}
-QPushButton.success {
-    background-color: #27ae60;
-    color: white;
-}
-QPushButton.danger {
-    background-color: #c0392b;
-    color: white;
-}
-QPushButton.warning {
-    background-color: #f39c12;
-    color: black;
-}
-
-/* Scrollbar */
-QScrollBar:vertical {
-    background: #fafafa;
-    width: 12px;
-}
-QScrollBar::handle:vertical {
-    background: #c7ccd1;
-    border-radius: 6px;
-    min-height: 30px;
-}
-QScrollBar::handle:vertical:hover {
-    background: #b0b6bb;
-}
-
-/* Inputs */
-QLineEdit, QTextEdit, QPlainTextEdit, QComboBox {
-    background-color: #ffffff;
-    border: 1px solid #c4c4c4;
-    border-radius: 6px;
-    padding: 4px 8px;
-    color: #232629;
-}
-QLineEdit:hover {
-    border-color: #3daee9;
-}
-
-QComboBox QAbstractItemView {
-    background-color: #ffffff;
-    border: 1px solid #c4c4c4;
-    selection-background-color: #3daee9;
-    selection-color: white;
-}
-/* ============================
-   KDE Breeze Light: TabWidget
-   ============================ */
-QTabWidget::pane {
-    border: 1px solid #c7ccd1;
-    background-color: #ffffff;
-    border-radius: 6px;
-}
-
-QTabBar::tab {
-    background: #e6e6e6;
-    padding: 6px 14px;
-    margin-right: 2px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-}
-
-QTabBar::tab:selected {
-    background: #3daee9;
-    color: white;
-}
-QTabBar::tab:hover {
-    background: #f0f0f0;
-}
-
-/* ============================
-   KDE Breeze Light: Slider
-   ============================ */
-QSlider::groove:horizontal {
-    background: #c7ccd1;
-    height: 6px;
-    border-radius: 3px;
-}
-QSlider::handle:horizontal {
-    width: 14px;
-    background: #3daee9;
-    margin: -4px 0;
-    border-radius: 7px;
-}
-QSlider::handle:horizontal:hover {
-    background: #51b7ec;
-}
-
-/* ============================
-   KDE Breeze Light: ProgressBar
-   ============================ */
-QProgressBar {
-    border: 1px solid #c7ccd1;
-    border-radius: 6px;
-    background: #ffffff;
-    text-align: center;
-}
-QProgressBar::chunk {
-    background-color: #3daee9;
-    border-radius: 6px;
-}
-
-/* ============================
-   KDE Breeze Light: Toolbar
-   ============================ */
-QToolBar {
-    background: #f0f0f0;
-    border-bottom: 1px solid #c7ccd1;
-}
-QToolButton {
-    padding: 6px 8px;
-    border-radius: 4px;
-}
-QToolButton:hover {
-    background: #e6e6e6;
-}
-QToolButton:checked {
-    background: #3daee9;
-    color: white;
-}
-
-/* ============================
-   KDE Breeze Light: Menu
-   ============================ */
-QMenu {
-    background-color: #ffffff;
-    border: 1px solid #c7ccd1;
-}
-QMenu::item {
-    padding: 6px 18px;
-}
-QMenu::item:selected {
-    background: #3daee9;
-    color: white;
-}
-
-/* ============================
-   KDE Breeze Light: CheckBox / Radio
-   ============================ */
-QCheckBox::indicator, QRadioButton::indicator {
-    width: 16px;
-    height: 16px;
-}
-QCheckBox::indicator {
-    border: 1px solid #c4c4c4;
-    background: #ffffff;
-    border-radius: 3px;
-}
-QCheckBox::indicator:checked {
-    background: #3daee9;
-    border-color: #2b90c4;
-}
-QRadioButton::indicator {
-    border: 1px solid #c4c4c4;
-    background: #ffffff;
-    border-radius: 8px;
-}
-QRadioButton::indicator:checked {
-    background: #3daee9;
-    border-color: #2b90c4;
-}
-"""
+# ============================================
+# ThemeManager Class
+# ============================================
 
 
 class ThemeManager:
-    """
-    Manages theme switching for the application
-    """
-    DARK = "dark"
-    LIGHT = "light"
-
+    """Manages application styles and themes"""
+    
+    DARK = 'dark'
+    LIGHT = 'light'
+    
     def __init__(self, window):
         self.window = window
-        self.current_theme = self.DARK
-
-    def apply_theme(self, theme):
-        """Apply the specified theme"""
-        if theme == self.LIGHT:
-            self.window.setStyleSheet(LIGHT_THEME)
+        self.app = QApplication.instance()
+        self.current_theme = 'auto'  # Start with auto theme
+        self.current_style = 'Fusion'
+        self._available_styles = None  # Lazy-load on first access
+    
+    def apply_theme(self, theme=None, style=None):
+        """
+        Apply a theme and optionally change style
+        
+        Args:
+            theme: 'auto', 'dark' or 'light'
+            style: Style name like 'Fusion', 'Windows', 'macOS', etc.
+        """
+        if theme is not None:
+            self.current_theme = theme
+        if style is not None:
+            self.current_style = style
+        
+        # Set the style
+        self.app.setStyle(self.current_style)
+        
+        # Apply appropriate palette
+        if self.current_theme == 'auto':
+            # For auto theme, default to dark, but let ThemeAutoManager override it
+            palette = create_dark_palette()
+        elif self.current_theme == self.LIGHT:
+            palette = create_light_palette()
+        else:
+            palette = create_dark_palette()
+        
+        self.app.setPalette(palette)
+    
+    def set_style(self, style_name):
+        """Set a specific style"""
+        available = self.get_available_styles()
+        if style_name in available:
+            self.current_style = style_name
+            self.apply_theme()
+    
+    def toggle_theme(self):
+        """Toggle between dark and light"""
+        if self.current_theme == self.DARK:
             self.current_theme = self.LIGHT
         else:
-            self.window.setStyleSheet(DARK_THEME)
             self.current_theme = self.DARK
-
-    def toggle_theme(self):
-        """Toggle between dark and light themes"""
-        new_theme = self.LIGHT if self.current_theme == self.DARK else self.DARK
-        self.apply_theme(new_theme)
+        self.apply_theme()
         return self.current_theme
-
+    
+    def get_available_styles(self):
+        """Return list of available styles (lazy-loads on first call)"""
+        if self._available_styles is None:
+            self._available_styles = get_available_styles()
+        return self._available_styles
+    
+    def get_style_display_name(self, style):
+        """Get display name for a style"""
+        return style  # Style names are already display-friendly
+    
+    def get_available_themes(self):
+        """Return list of available theme keys"""
+        return ['auto', 'dark', 'light']
+    
+    def get_theme_display_name(self, theme_key):
+        """Get display name for a theme"""
+        names = {
+            'auto': '自动(Auto)',
+            'dark': '深色(Dark)',
+            'light': '浅色(Light)',
+        }
+        return names.get(theme_key, theme_key)
+    
     def get_current_theme(self):
-        """Get the current theme name"""
+        """Get the current active theme"""
         return self.current_theme
-
+    
+    def get_current_style(self):
+        """Get the current active style"""
+        return self.current_style
+    
     def is_dark(self):
         """Check if current theme is dark"""
         return self.current_theme == self.DARK
-
+    
     def is_light(self):
         """Check if current theme is light"""
         return self.current_theme == self.LIGHT
 
 
+# ============================================
+# ThemeAutoManager Class
+# ============================================
+
 class ThemeAutoManager:
     """Cross-platform automatic theme manager"""
-
+    
     def __init__(self, gui, enable_auto=True):
         """
         Initialize automatic theme manager
@@ -525,27 +241,27 @@ class ThemeAutoManager:
         
         if enable_auto:
             self.init_auto_theme()
-
+    
     def init_auto_theme(self):
         """Initialize automatic theme detection listeners"""
         if self.platform == "darwin":
             self._init_macos_listener()
         elif self.platform.startswith("linux"):
             self._init_linux_listener()
-
+        
         # Apply initial theme
         self.apply_system_theme()
-
+    
     def _init_macos_listener(self):
         """Initialize macOS system theme change listener (polling-based)"""
-        # Use polling for macOS as it's more reliable and doesn't require PyObjC
         from PySide6.QtCore import QTimer
         self.linux_timer = QTimer()
         self.linux_timer.timeout.connect(self.apply_system_theme)
         self.linux_timer.start(2000)  # Check every 2 seconds
-
+    
     def _get_macos_theme(self):
         """Get current macOS system theme"""
+        import subprocess
         try:
             result = subprocess.check_output(
                 ["defaults", "read", "-g", "AppleInterfaceStyle"],
@@ -554,31 +270,37 @@ class ThemeAutoManager:
             return "dark" if result == "Dark" else "light"
         except Exception:
             return "light"
-
+    
     def _init_linux_listener(self):
         """Initialize Linux system theme change listener (polling-based)"""
         from PySide6.QtCore import QTimer
         self.linux_timer = QTimer()
         self.linux_timer.timeout.connect(self.apply_system_theme)
         self.linux_timer.start(2000)  # Check every 2 seconds
-
+    
     def _get_linux_theme(self):
         """Get current Linux system theme (GNOME/KDE)"""
-        # Try GNOME via dbus
-        if dbus:
-            try:
-                session_bus = dbus.SessionBus()
-                settings = session_bus.get_object(
-                    "org.gnome.desktop.interface",
-                    "/org/gnome/desktop/interface"
-                )
-                iface = dbus.Interface(settings, "org.freedesktop.DBus.Properties")
-                gtk_theme = iface.Get("org.gnome.desktop.interface", "GtkTheme")
-                if "dark" in gtk_theme.lower():
-                    return "dark"
-            except Exception:
-                pass
-
+        import subprocess
+        
+        try:
+            import dbus as _dbus
+            # Try GNOME via dbus
+            if _dbus:
+                try:
+                    session_bus = _dbus.SessionBus()
+                    settings = session_bus.get_object(
+                        "org.gnome.desktop.interface",
+                        "/org/gnome/desktop/interface"
+                    )
+                    iface = _dbus.Interface(settings, "org.freedesktop.DBus.Properties")
+                    gtk_theme = iface.Get("org.gnome.desktop.interface", "GtkTheme")
+                    if "dark" in gtk_theme.lower():
+                        return "dark"
+                except Exception:
+                    pass
+        except ImportError:
+            pass
+        
         # Try KDE
         try:
             proc = subprocess.run(
@@ -588,9 +310,9 @@ class ThemeAutoManager:
                 return "dark"
         except Exception:
             pass
-
+        
         return "light"
-
+    
     def get_system_theme(self):
         """Get current system theme based on platform"""
         if self.platform == "darwin":
@@ -599,7 +321,7 @@ class ThemeAutoManager:
             return self._get_linux_theme()
         else:
             return "light"
-
+    
     def apply_system_theme(self):
         """Apply system theme to the application"""
         if not self.enable_auto:
@@ -610,19 +332,13 @@ class ThemeAutoManager:
             return
         
         theme = self.get_system_theme()
-        from PySide6.QtCore import Qt
         
+        self.gui.theme_manager.apply_theme(theme=theme)
+        
+        # Update combo box
+        self.gui.theme_combo.blockSignals(True)
         if theme == "dark":
-            self.gui.theme_manager.apply_theme(self.gui.theme_manager.DARK)
-            self.gui.theme_combo.blockSignals(True)
-            self.gui.theme_combo.setCurrentIndex(1)  # Dark option
-            self.gui.theme_combo.blockSignals(False)
+            self.gui.theme_combo.setCurrentIndex(1)  # Dark option (index 1)
         else:
-            self.gui.theme_manager.apply_theme(self.gui.theme_manager.LIGHT)
-            self.gui.theme_combo.blockSignals(True)
-            self.gui.theme_combo.setCurrentIndex(2)  # Light option
-            self.gui.theme_combo.blockSignals(False)
-
-    def on_system_theme_changed(self, *_):
-        """Callback for system theme change notification"""
-        self.apply_system_theme()
+            self.gui.theme_combo.setCurrentIndex(2)  # Light option (index 2)
+        self.gui.theme_combo.blockSignals(False)

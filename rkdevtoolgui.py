@@ -72,7 +72,7 @@ class RKDevToolGUI(QMainWindow):
 
         # Initialize theme manager
         self.theme_manager = ThemeManager(self)
-        self.theme_manager.apply_theme(ThemeManager.DARK)
+        self.theme_manager.apply_theme('auto')
 
         # Create main layout
         central_widget = QWidget()
@@ -213,10 +213,14 @@ class RKDevToolGUI(QMainWindow):
         self.partition_file_browse_btn = partition_widgets['file_browse']
         self.burn_partition_btn = partition_widgets['burn_btn']
         self.backup_partition_btn = partition_widgets['backup_btn']
+        self.erase_partition_btn = partition_widgets['erase_partition_btn']
+        self.erase_all_btn = partition_widgets['erase_all_btn']
         self.manual_address_enable = partition_widgets['manual_enable']
         self.manual_address = partition_widgets['manual_address']
         self.select_partition_label = partition_widgets.get('select_label')
         self.partition_file_label = partition_widgets.get('file_label')
+        self.danger_group = partition_widgets.get('danger_group')
+        self.danger_label = partition_widgets.get('danger_label')
 
         # Parameter tab
         parameter_tab, param_widgets = create_parameter_tab(self)
@@ -230,6 +234,7 @@ class RKDevToolGUI(QMainWindow):
         self.device_info_group = param_widgets['info_group']
         self.device_info_text = param_widgets['info_text']
         self.get_device_info_btn = param_widgets['info_btn']
+        self.get_security_info_btn = param_widgets['security_btn']
         self.timeout_label = param_widgets.get('timeout_label')
         self.retry_count_label = param_widgets.get('retry_label')
 
@@ -246,6 +251,7 @@ class RKDevToolGUI(QMainWindow):
         self.pack_ops_group = upgrade_widgets['ops_group']
         self.gpt_path = upgrade_widgets['gpt_path']
         self.gpt_browse_btn = upgrade_widgets['gpt_browse']
+        self.gpt_export_btn = upgrade_widgets['gpt_export_btn']
         self.gpt_btn = upgrade_widgets['gpt_btn']
         self.prm_text = upgrade_widgets['prm_text']
         self.prm_btn = upgrade_widgets['prm_btn']
@@ -276,6 +282,9 @@ class RKDevToolGUI(QMainWindow):
         self.calculate_md5_btn = advanced_widgets['md5_btn']
         self.verify_sector_combo = advanced_widgets['sector_combo']
         self.verify_sector_custom = advanced_widgets['sector_custom']
+        self.boot_group = advanced_widgets.get('boot_group')
+        self.download_boot_btn = advanced_widgets.get('download_boot')
+        self.upload_boot_btn = advanced_widgets.get('upload_boot')
         self.debug_group = advanced_widgets['debug_group']
         self.enable_debug_log = advanced_widgets['debug_log']
         self.export_log_btn = advanced_widgets['export_log']
@@ -319,22 +328,46 @@ class RKDevToolGUI(QMainWindow):
         return panel
 
     def create_status_bar(self):
-        """Create status bar with theme selector and language selector"""
+        """Create status bar with style, theme and language selectors"""
         self.statusBar()
 
-        # Theme selector combo
+        # Style selector combo
+        self.style_combo = QComboBox()
+        available_styles = self.theme_manager.get_available_styles()
+        for style in available_styles:
+            self.style_combo.addItem(style, style)
+        
+        current_style = self.theme_manager.get_current_style()
+        idx = self.style_combo.findData(current_style)
+        if idx >= 0:
+            self.style_combo.setCurrentIndex(idx)
+        
+        self.style_combo.setMinimumWidth(100)
+        self.style_combo.currentIndexChanged.connect(safe_slot(self.on_style_changed))
+        self.statusBar().addPermanentWidget(self.style_combo)
+
+        # Separator
+        separator1 = QLabel(" | ")
+        self.statusBar().addPermanentWidget(separator1)
+
+        # Theme selector combo (auto/dark/light)
         self.theme_combo = QComboBox()
-        self.theme_combo.addItem("自动 (Auto)", "auto")
-        self.theme_combo.addItem("深色 (Dark)", "dark")
-        self.theme_combo.addItem("浅色 (Light)", "light")
-        self.theme_combo.setMinimumWidth(120)
-        self.theme_combo.setCurrentIndex(0)
+        for theme_key in self.theme_manager.get_available_themes():
+            display_name = self.theme_manager.get_theme_display_name(theme_key)
+            self.theme_combo.addItem(display_name, theme_key)
+        
+        current_theme = self.theme_manager.get_current_theme()
+        idx = self.theme_combo.findData(current_theme)
+        if idx >= 0:
+            self.theme_combo.setCurrentIndex(idx)
+        
+        self.theme_combo.setMinimumWidth(140)
         self.theme_combo.currentIndexChanged.connect(safe_slot(self.on_theme_changed))
         self.statusBar().addPermanentWidget(self.theme_combo)
 
         # Separator
-        separator = QLabel(" | ")
-        self.statusBar().addPermanentWidget(separator)
+        separator2 = QLabel(" | ")
+        self.statusBar().addPermanentWidget(separator2)
 
         # Language selector
         self.lang_combo = QComboBox()
@@ -349,25 +382,26 @@ class RKDevToolGUI(QMainWindow):
         self.connection_status = QLabel()
         self.statusBar().addPermanentWidget(self.connection_status)
 
+    def on_style_changed(self):
+        """Handle style selection change"""
+        selected_style = self.style_combo.currentData()
+        if selected_style:
+            self.theme_manager.set_style(selected_style)
+
     def on_theme_changed(self):
         """Handle theme selection change"""
         selected_theme = self.theme_combo.currentData()
         
-        if selected_theme == "auto":
+        if selected_theme == 'auto':
             # Enable automatic theme detection
             if hasattr(self, 'theme_auto_manager'):
                 self.theme_auto_manager.enable_auto = True
                 self.theme_auto_manager.apply_system_theme()
-        elif selected_theme == "dark":
-            # Disable auto and apply dark theme
+        elif selected_theme:
+            # Disable auto and apply selected theme
             if hasattr(self, 'theme_auto_manager'):
                 self.theme_auto_manager.enable_auto = False
-            self.theme_manager.apply_theme(ThemeManager.DARK)
-        elif selected_theme == "light":
-            # Disable auto and apply light theme
-            if hasattr(self, 'theme_auto_manager'):
-                self.theme_auto_manager.enable_auto = False
-            self.theme_manager.apply_theme(ThemeManager.LIGHT)
+            self.theme_manager.apply_theme(theme=selected_theme)
 
     def update_ui_text(self):
         """Update all UI text based on current language"""
@@ -457,9 +491,9 @@ class RKDevToolGUI(QMainWindow):
 
     def show_message(self, title_key, message_key, icon="Information"):
         """Show message box"""
-        from operations import style_messagebox
         msg = QMessageBox()
-        style_messagebox(msg)
+        # Use application palette for automatic theme following
+        msg.setPalette(QApplication.palette())
         msg.setWindowTitle(self.tr(title_key))
         msg.setText(self.tr(message_key))
         msg.setMinimumWidth(600)
@@ -592,13 +626,13 @@ class RKDevToolGUI(QMainWindow):
 
     def _show_loader_hint(self, is_failure=False):
         """Show hint dialog to load Loader when in Maskrom mode"""
-        from operations import style_messagebox
         import operations
         
         if is_failure:
             # Show warning dialog when command fails
             msg = QMessageBox()
-            style_messagebox(msg)
+            # Use application palette for automatic theme following
+            msg.setPalette(QApplication.palette())
             msg.setWindowTitle(self.tr("warning_title"))
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setText(

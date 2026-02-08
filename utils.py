@@ -440,3 +440,152 @@ def format_flash_info_detailed(flash_info: dict) -> str:
         lines.append(f"  Wear Level: {flash_info['wear_level']}")
     
     return '\n'.join(lines)
+
+
+def parse_security_info(output: str) -> dict:
+    """Parse device security information from rkdeveloptool rcb output
+    
+    Returns a dict with security information including:
+    - secure_boot: Enabled/Disabled
+    - device_lock: Locked/Unlocked
+    - bootloader_version: Version info
+    - security_policy: Current security policy
+    """
+    info = {}
+    
+    # Check for Secure Boot status
+    if re.search(r'Secure\s+Boot.*Enabled', output, re.I):
+        info['secure_boot'] = True
+        info['secure_boot_status'] = "Enabled"
+    elif re.search(r'Secure\s+Boot.*Disabled', output, re.I):
+        info['secure_boot'] = False
+        info['secure_boot_status'] = "Disabled"
+    
+    # Check for Device Lock status
+    if re.search(r'Device\s+Lock.*Locked', output, re.I):
+        info['device_locked'] = True
+        info['device_lock_status'] = "Locked"
+    elif re.search(r'Device\s+(?:Lock|Status).*Unlocked', output, re.I):
+        info['device_locked'] = False
+        info['device_lock_status'] = "Unlocked"
+    
+    # Extract Bootloader version
+    bl_match = re.search(r'(?:Bootloader|BL)\s+(?:Version|Ver)\s*[:\s]*([0-9A-Fa-f.v]+)', output, re.I)
+    if bl_match:
+        info['bootloader_version'] = bl_match.group(1).strip()
+    
+    # Extract ROM version
+    rom_match = re.search(r'ROM\s+(?:Version|Ver)\s*[:\s]*([0-9A-Fa-f.v]+)', output, re.I)
+    if rom_match:
+        info['rom_version'] = rom_match.group(1).strip()
+    
+    # Check for Write Protection
+    if re.search(r'Write\s+Protection.*Enabled', output, re.I):
+        info['write_protection'] = True
+        info['write_protection_status'] = "Enabled"
+    
+    # Check for Read Protection
+    if re.search(r'Read\s+Protection.*Enabled', output, re.I):
+        info['read_protection'] = True
+        info['read_protection_status'] = "Enabled"
+    
+    # Check for special security modes
+    security_modes = []
+    if re.search(r'Verified\s+Boot|AVB', output, re.I):
+        security_modes.append("AVB (Verified Boot)")
+    if re.search(r'TEE|Trusted\s+Environment', output, re.I):
+        security_modes.append("TEE (Trusted Execution Environment)")
+    if re.search(r'DRM', output, re.I):
+        security_modes.append("DRM")
+    
+    if security_modes:
+        info['security_modes'] = ', '.join(security_modes)
+    
+    # Default values if not explicitly found in output
+    if 'secure_boot_status' not in info:
+        info['secure_boot'] = False
+        info['secure_boot_status'] = "Unknown"
+    
+    if 'device_lock_status' not in info:
+        info['device_locked'] = False
+        info['device_lock_status'] = "Unknown"
+    
+    return info
+
+
+def format_security_info(security: dict) -> str:
+    """Format security information as readable text"""
+    lines = ["🔒 Device Security Information:\n"]
+    
+    # Secure Boot Status
+    if 'secure_boot_status' in security:
+        icon = "🔒" if security.get('secure_boot') else "🔓"
+        lines.append(f"  {icon} Secure Boot: {security['secure_boot_status']}")
+    
+    # Device Lock Status
+    if 'device_lock_status' in security:
+        icon = "🔐" if security.get('device_locked') else "🔓"
+        lines.append(f"  {icon} Device Lock: {security['device_lock_status']}")
+    
+    # Bootloader Version
+    if 'bootloader_version' in security:
+        lines.append(f"  📦 Bootloader Version: {security['bootloader_version']}")
+    
+    # ROM Version
+    if 'rom_version' in security:
+        lines.append(f"  📦 ROM Version: {security['rom_version']}")
+    
+    # Write Protection
+    if 'write_protection_status' in security:
+        icon = "✅" if security.get('write_protection') else "❌"
+        lines.append(f"  {icon} Write Protection: {security['write_protection_status']}")
+    
+    # Read Protection
+    if 'read_protection_status' in security:
+        icon = "✅" if security.get('read_protection') else "❌"
+        lines.append(f"  {icon} Read Protection: {security['read_protection_status']}")
+    
+    # Security Modes
+    if 'security_modes' in security:
+        lines.append(f"  🛡️ Security Modes: {security['security_modes']}")
+    
+    # Add warnings if needed
+    lines.append("")
+    if security.get('secure_boot'):
+        lines.append("  ⚠️ Secure Boot is ENABLED - Some operations may be restricted")
+    if security.get('device_locked'):
+        lines.append("  ⚠️ Device is LOCKED - Unlocking required for certain operations")
+    
+    return '\n'.join(lines)
+
+
+def format_test_results(test_state: dict) -> str:
+    """Format connection test results as readable text"""
+    total = test_state['total']
+    success = test_state['success_count']
+    failed = test_state['failed_count']
+    success_rate = (success / total * 100) if total > 0 else 0
+    
+    lines = ["📊 Connection Stability Test Results:\n"]
+    lines.append(f"  Total Tests: {total}")
+    lines.append(f"  ✅ Successful: {success}")
+    lines.append(f"  ❌ Failed: {failed}")
+    lines.append(f"  📈 Success Rate: {success_rate:.1f}%")
+    
+    if success_rate >= 95:
+        lines.append("\n  🎉 Excellent! Connection is very stable")
+    elif success_rate >= 80:
+        lines.append("\n  ✅ Good connection stability")
+    elif success_rate >= 60:
+        lines.append("\n  ⚠️ Connection has some instability - consider checking USB cable/port")
+    else:
+        lines.append("\n  ❌ Poor connection stability - check USB connection and try again")
+    
+    if test_state.get('errors'):
+        lines.append("\n  📝 Errors:")
+        for error in test_state['errors'][:3]:  # Show first 3 errors
+            lines.append(f"    - {error}")
+        if len(test_state['errors']) > 3:
+            lines.append(f"    ... and {len(test_state['errors']) - 3} more")
+    
+    return '\n'.join(lines)

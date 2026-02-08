@@ -318,6 +318,14 @@ def create_partition_tab(gui):
     backup_btn.setProperty("class", "primary")
     backup_btn.clicked.connect(safe_slot(lambda: backup_partition(gui)))
 
+    erase_partition_btn = QPushButton()
+    erase_partition_btn.setProperty("class", "warning")
+    erase_partition_btn.clicked.connect(safe_slot(lambda: erase_selected_partition(gui)))
+
+    erase_all_btn = QPushButton()
+    erase_all_btn.setProperty("class", "danger")
+    erase_all_btn.clicked.connect(safe_slot(lambda: operations.erase_all_storage(gui)))
+
     manual_enable = QCheckBox()
     manual_address = QLineEdit()
     manual_address.setPlaceholderText("0x2000")
@@ -329,13 +337,26 @@ def create_partition_tab(gui):
     ops_layout.addWidget(file_browse, 1, 2)
     ops_layout.addWidget(burn_btn, 2, 0)
     ops_layout.addWidget(backup_btn, 2, 1)
+    ops_layout.addWidget(erase_partition_btn, 2, 2)
     ops_layout.addWidget(manual_enable, 3, 0)
     ops_layout.addWidget(manual_address, 3, 1)
+    ops_layout.addWidget(erase_all_btn, 3, 2)
 
     ops_group.setLayout(ops_layout)
     ops_group.hide()  # Hide by default as operations are in table
 
+    # Danger zone - erase all storage (not hidden, for visibility)
+    danger_group = QGroupBox()
+    danger_layout = QVBoxLayout()
+    danger_label = QLabel()
+    danger_label.setText(gui.tr("danger_zone_label"))
+    danger_label.setStyleSheet("QLabel { color: #ff6b6b; font-weight: bold; padding: 5px; }")
+    danger_layout.addWidget(danger_label)
+    danger_layout.addWidget(erase_all_btn)
+    danger_group.setLayout(danger_layout)
+
     layout.addWidget(list_group, 1)
+    layout.addWidget(danger_group)
 
     widgets = {
         'list_group': list_group,
@@ -347,10 +368,14 @@ def create_partition_tab(gui):
         'file_browse': file_browse,
         'burn_btn': burn_btn,
         'backup_btn': backup_btn,
+        'erase_partition_btn': erase_partition_btn,
+        'erase_all_btn': erase_all_btn,
         'manual_enable': manual_enable,
         'manual_address': manual_address,
         'select_label': select_label,
-        'file_label': file_label
+        'file_label': file_label,
+        'danger_group': danger_group,
+        'danger_label': danger_label
     }
 
     return widget, widgets
@@ -408,11 +433,20 @@ def create_parameter_tab(gui):
     info_text = QTextBrowser()
     info_text.setMaximumHeight(150)
 
+    # Button layout for capability and security info
+    button_layout = QHBoxLayout()
+    
     info_btn = QPushButton()
     info_btn.clicked.connect(safe_slot(lambda: operations.read_capability(gui)))
+    
+    security_btn = QPushButton()
+    security_btn.clicked.connect(safe_slot(lambda: operations.get_security_info(gui)))
+    
+    button_layout.addWidget(info_btn)
+    button_layout.addWidget(security_btn)
 
     info_layout.addWidget(info_text)
-    info_layout.addWidget(info_btn)
+    info_layout.addLayout(button_layout)
 
     info_group.setLayout(info_layout)
 
@@ -431,6 +465,7 @@ def create_parameter_tab(gui):
         'info_group': info_group,
         'info_text': info_text,
         'info_btn': info_btn,
+        'security_btn': security_btn,
         'timeout_label': timeout_label,
         'retry_label': retry_label
     }
@@ -491,6 +526,8 @@ def create_upgrade_tab(gui):
     gui.register_browse(gpt_browse, gpt_path, "file_dialog_all")
     gpt_btn = QPushButton()
     gpt_btn.clicked.connect(safe_slot(lambda: write_gpt(gui)))
+    gpt_export_btn = QPushButton()
+    gpt_export_btn.clicked.connect(safe_slot(lambda: operations.export_gpt_table(gui)))
 
     prm_label = QLabel()
     prm_text = QLineEdit()
@@ -508,7 +545,8 @@ def create_upgrade_tab(gui):
     ops_layout.addWidget(gpt_label, 0, 0)
     ops_layout.addWidget(gpt_path, 0, 1)
     ops_layout.addWidget(gpt_browse, 0, 2)
-    ops_layout.addWidget(gpt_btn, 0, 3)
+    ops_layout.addWidget(gpt_export_btn, 0, 3)
+    ops_layout.addWidget(gpt_btn, 0, 4)
 
     ops_layout.addWidget(prm_label, 1, 0)
     ops_layout.addWidget(prm_text, 1, 1)
@@ -539,6 +577,7 @@ def create_upgrade_tab(gui):
         'gpt_path': gpt_path,
         'gpt_browse': gpt_browse,
         'gpt_btn': gpt_btn,
+        'gpt_export_btn': gpt_export_btn,
         'prm_text': prm_text,
         'prm_btn': prm_btn,
         'tagspl_tag': tagspl_tag,
@@ -637,6 +676,21 @@ def create_advanced_tab(gui):
 
     verify_group.setLayout(verify_layout)
 
+    # Boot operations group (Week 6)
+    boot_group = QGroupBox()
+    boot_layout = QGridLayout()
+
+    download_boot_btn = QPushButton()
+    download_boot_btn.clicked.connect(safe_slot(lambda: operations.download_boot(gui)))
+
+    upload_boot_btn = QPushButton()
+    upload_boot_btn.clicked.connect(safe_slot(lambda: operations.upload_boot(gui)))
+
+    boot_layout.addWidget(download_boot_btn, 0, 0)
+    boot_layout.addWidget(upload_boot_btn, 0, 1)
+
+    boot_group.setLayout(boot_layout)
+
     # Debug group
     debug_group = QGroupBox()
     debug_layout = QGridLayout()
@@ -698,6 +752,7 @@ def create_advanced_tab(gui):
     # Add to main layout (skip flash_group if empty)
     layout.addWidget(rw_group)
     layout.addWidget(verify_group)
+    layout.addWidget(boot_group)
     layout.addWidget(debug_group)
     layout.addWidget(mass_group)
 
@@ -717,6 +772,9 @@ def create_advanced_tab(gui):
         'md5_btn': md5_btn,
         'sector_combo': sector_combo,
         'sector_custom': sector_custom,
+        'boot_group': boot_group,
+        'download_boot': download_boot_btn,
+        'upload_boot': upload_boot_btn,
         'debug_group': debug_group,
         'debug_log': debug_log,
         'export_log': export_log,
@@ -844,12 +902,12 @@ def change_storage(gui):
 
 def erase_flash(gui):
     """Erase entire flash"""
-    from PySide6.QtWidgets import QMessageBox
-    from operations import style_messagebox
+    from PySide6.QtWidgets import QMessageBox, QApplication
     from utils import RKTOOL
 
     msg = QMessageBox()
-    style_messagebox(msg)
+    # Use application palette for automatic theme following
+    msg.setPalette(QApplication.palette())
     msg.setWindowTitle(gui.tr("erase_flash_warning_title"))
     msg.setText(gui.tr("erase_flash_warning_message"))
     msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
@@ -862,8 +920,8 @@ def erase_flash(gui):
 
 def test_device(gui):
     """Test device connection"""
-    from utils import RKTOOL
-    gui.run_command([RKTOOL, "td"], "test_connection")
+    from operations import test_device_connection
+    test_device_connection(gui, test_count=10)
 
 
 def read_flash_id(gui):
@@ -1008,64 +1066,126 @@ def backup_partition(gui):
     gui.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
 
 
-def pack_bootloader(gui):
-    """Pack bootloader"""
-    import os
-    from utils import RKTOOL
-
-    outpath = gui.pack_output_path.text()
-    if not outpath:
-        gui.show_message("Warning", "select_pack_output", "Warning")
+def erase_selected_partition(gui):
+    """Erase a selected partition"""
+    selected_partition_key = gui.partition_combo.currentData()
+    selected_partition = gui.partition_combo.currentText()
+    
+    if not selected_partition:
+        gui.show_message("Warning", "select_partition", "Warning")
         return
-    gui.run_command([RKTOOL, "pack", outpath], "packing_bootloader")
+    
+    # Use the selected partition key/name for erase operation
+    partition_name = selected_partition_key if selected_partition_key else selected_partition
+    
+    # Call the erase_partition operation from operations module
+    operations.erase_partition(gui, partition_name)
+
+
+def pack_bootloader(gui):
+    """Pack bootloader and firmware images"""
+    operations.pack_firmware(gui)
 
 
 def unpack_bootloader(gui):
-    """Unpack bootloader"""
-    import os
-    from utils import RKTOOL
-
-    inpath = gui.unpack_input_path.text()
-    if not inpath or not os.path.exists(inpath):
-        gui.show_message("Warning", "select_unpack_input", "Warning")
-        return
-    gui.run_command([RKTOOL, "unpack", inpath], "unpacking_bootloader")
+    """Unpack bootloader and firmware images"""
+    operations.unpack_firmware(gui)
 
 
 def write_gpt(gui):
-    """Write GPT"""
-    import os
-    from utils import RKTOOL
-
-    gptfile = gui.gpt_path.text()
-    if not gptfile or not os.path.exists(gptfile):
-        gui.show_message("Warning", "select_gpt_file", "Warning")
-        return
-    gui.run_command([RKTOOL, "gpt", gptfile], "writing_gpt")
+    """Write/Import GPT table to device"""
+    operations.import_gpt_table(gui)
 
 
 def write_parameter(gui):
-    """Write parameter"""
+    """Read device parameters"""
     from utils import RKTOOL
+    from PySide6.QtWidgets import QApplication
 
-    prm = gui.prm_text.text()
-    if not prm:
-        gui.show_message("Warning", "select_parameter", "Warning")
-        return
-    gui.run_command([RKTOOL, "prm", prm], "writing_parameter")
+    def on_finished(success, output):
+        if success and output:
+            # Display parameters in dialog
+            msg = QMessageBox()
+            # Use application palette for automatic theme following
+            msg.setPalette(QApplication.palette())
+            msg.setWindowTitle(gui.tr("device_parameters") if hasattr(gui, 'tr') else "Device Parameters")
+            msg.setIcon(QMessageBox.Icon.Information)
+            
+            # Format parameter output
+            param_text = "Device Parameters:\n\n"
+            for line in output.split('\n'):
+                if line.strip():
+                    param_text += line + "\n"
+            
+            if param_text == "Device Parameters:\n\n":
+                param_text = "No parameters found or device not responding"
+            
+            msg.setText(param_text)
+            msg.setMinimumWidth(400)
+            msg.exec()
+        else:
+            gui.log_message(f"❌ {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
+    
+    gui.log_message(f"📋 {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
+    gui.run_command([RKTOOL, "prm"], "reading_device_params", on_finished)
 
 
 def tag_spl(gui):
     """Tag SPL"""
     import os
     from utils import RKTOOL
+    from PySide6.QtWidgets import QFileDialog
 
     tag = gui.tagspl_tag.text()
     spl = gui.tagspl_spl_path.text()
+    
     if not tag or not spl or not os.path.exists(spl):
         gui.show_message("Warning", "select_tagspl_input", "Warning")
         return
-    gui.run_command([RKTOOL, "tagspl", tag, spl], "tagging_spl")
+    
+    # Select output file
+    output_file, _ = QFileDialog.getSaveFileName(
+        gui,
+        gui.tr("save_tagged_spl") if hasattr(gui, 'tr') else "Save Tagged SPL File",
+        f"spl_tagged_{tag}.bin",
+        "Binary Files (*.bin);;All Files (*)"
+    )
+    
+    if not output_file:
+        gui.log_message(f"❌ SPL tagging cancelled")
+        return
+    
+    # Show confirmation
+    msg = QMessageBox()
+    from PySide6.QtWidgets import QApplication
+    # Use application palette for automatic theme following
+    msg.setPalette(QApplication.palette())
+    msg.setWindowTitle(gui.tr("confirm_tag_spl") if hasattr(gui, 'tr') else "Confirm Tag SPL")
+    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setText(f"Tag: {tag}\nInput: {os.path.basename(spl)}\nOutput: {os.path.basename(output_file)}\n\nContinue?")
+    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    
+    if msg.exec() != QMessageBox.StandardButton.Yes:
+        gui.log_message(f"❌ SPL tagging cancelled")
+        return
+    
+    def on_finished(success, output):
+        if success and output:
+            # Write output to file
+            try:
+                with open(output_file, 'wb') as f:
+                    f.write(output.encode() if isinstance(output, str) else output)
+                gui.log_message(f"✅ SPL tagged successfully: {output_file}")
+                gui.tagspl_tag.clear()
+                gui.tagspl_spl_path.clear()
+            except Exception as e:
+                gui.log_message(f"❌ Failed to write output file: {str(e)}")
+        else:
+            gui.log_message(f"❌ SPL tagging failed: {output if output else 'Unknown error'}")
+    
+    gui.log_message(f"🏷️ Tagging SPL with tag '{tag}'...")
+    # tagspl only accepts 2 parameters: tag and SPL file
+    gui.run_command([RKTOOL, "tagspl", tag, spl], "tagging_spl", on_finished)
 
 
 def read_flash(gui):
@@ -1185,21 +1305,15 @@ def toggle_debug_log(gui):
 
 
 def export_system_log(gui):
-    """Export system log"""
-    from PySide6.QtWidgets import QFileDialog
-
-    file_path, _ = QFileDialog.getSaveFileName(
-        gui, gui.tr("save_log_dialog"), "rkdevtool.log", "Log Files (*.log);;All Files (*)"
-    )
-    if file_path:
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(gui.log_output.toPlainText())
-        gui.show_message("Information", "log_saved")
+    """Export system log with device information"""
+    import operations
+    operations.export_logs_detailed(gui)
 
 
 def show_usb_info(gui):
-    """Show USB info"""
-    gui.show_message("Information", "usb_info_not_implemented")
+    """Show USB device information"""
+    import operations
+    operations.show_usb_device_info(gui)
 
 
 def save_log(gui):
@@ -1253,8 +1367,9 @@ def start_mass_production(gui):
 
     # Confirm
     msg = QMessageBox()
-    from operations import style_messagebox
-    style_messagebox(msg)
+    from PySide6.QtWidgets import QApplication
+    # Use application palette for automatic theme following
+    msg.setPalette(QApplication.palette())
     msg.setWindowTitle(gui.tr("confirm_mass_production"))
     msg.setText(gui.tr("mass_production_warning").format(len(selected_items)))
     msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)

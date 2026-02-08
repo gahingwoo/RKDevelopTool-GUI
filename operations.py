@@ -7,7 +7,7 @@ import re
 import subprocess
 import tempfile
 import math
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication, QLineEdit
 
 from utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
@@ -16,36 +16,9 @@ from utils import (
 from workers import PartitionPPTWorker, CommandWorker
 
 
-# Dark theme stylesheet for QMessageBox
-MESSAGEBOX_DARK_STYLE = """
-QMessageBox {
-    background-color: #232629;
-    color: #e5e9ef;
-}
-QMessageBox QLabel {
-    color: #e5e9ef;
-}
-QMessageBox QPushButton {
-    background-color: #31363b;
-    border: 1px solid #4d5257;
-    border-radius: 6px;
-    padding: 6px 14px;
-    color: #e5e9ef;
-    min-width: 60px;
-}
-QMessageBox QPushButton:hover {
-    background-color: #3b4045;
-    border-color: #5294e2;
-}
-QMessageBox QPushButton:pressed {
-    background-color: #44494e;
-}
-"""
-
-
 def style_messagebox(msg_box):
-    """Apply dark theme style to QMessageBox"""
-    msg_box.setStyleSheet(MESSAGEBOX_DARK_STYLE)
+    """Apply current application theme to QMessageBox via palette"""
+    msg_box.setPalette(QApplication.palette())
 
 
 def get_rkdeveloptool_version():
@@ -845,6 +818,615 @@ def _display_flash_info_dialog(gui):
         msg.exec()
 
 
+def get_security_info(gui):
+    """Get device security information and display in dialog"""
+    from utils import parse_security_info, format_security_info
+    
+    def on_security_info_finished(success, output):
+        if not success:
+            gui.log_message("❌ Failed to read security information")
+            return
+        
+        security_info = parse_security_info(output)
+        if security_info:
+            gui._security_info = security_info
+            
+            # Format and display
+            info_text = format_security_info(security_info)
+            gui.log_message(info_text)
+            
+            # Show in message box
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("security_info"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(info_text)
+            msg.exec()
+        else:
+            gui.log_message("⚠️ Could not parse security information")
+    
+    gui.run_command([RKTOOL, "rcb"], "reading_security_info", on_security_info_finished)
+
+
+def test_device_connection(gui, test_count=10):
+    """Test device connection stability
+    
+    Args:
+        gui: The main GUI instance
+        test_count: Number of tests to run (default: 10)
+    """
+    from utils import format_test_results
+    
+    # Initialize test state
+    test_state = {
+        'total': test_count,
+        'current': 0,
+        'success_count': 0,
+        'failed_count': 0,
+        'errors': []
+    }
+    
+    def run_single_test():
+        test_state['current'] += 1
+        
+        # Check if all tests complete
+        if test_state['current'] > test_state['total']:
+            # Display results
+            success_rate = (test_state['success_count'] / test_state['total']) * 100
+            result_text = format_test_results(test_state)
+            
+            gui.log_message(f"✅ Connection test completed!\n{result_text}")
+            
+            # Show in message box
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("connection_test_result"))
+            msg.setIcon(QMessageBox.Icon.Information if success_rate >= 80 else QMessageBox.Icon.Warning)
+            msg.setText(result_text)
+            msg.exec()
+            return
+        
+        # Run single test
+        def on_test_finished(success, output):
+            if success:
+                test_state['success_count'] += 1
+            else:
+                test_state['failed_count'] += 1
+                # Extract error message if available
+                if output:
+                    test_state['errors'].append(f"Test {test_state['current']}: {output[:50]}")
+            
+            # Update log with progress
+            progress = f"[{test_state['current']}/{test_state['total']}] "
+            status = "✅" if success else "❌"
+            gui.log_message(f"{progress}{status} Connection test {test_state['current']}")
+            
+            # Continue to next test
+            run_single_test()
+        
+        gui.run_command([RKTOOL, "td"], f"testing_device({test_state['current']}/{test_state['total']})", 
+                       on_test_finished)
+    
+    gui.log_message(f"🔍 Starting connection stability test ({test_count} iterations)...")
+    run_single_test()
+
+
+def erase_partition(gui, partition_name):
+    """Erase a specific partition
+    
+    Args:
+        gui: The main GUI instance
+        partition_name: Name of the partition to erase
+    """
+    if not partition_name or partition_name.strip() == "":
+        gui.show_message("Warning", "Please select a partition to erase")
+        return
+    
+    # Double confirmation dialog
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("erase_partition_warning_title"))
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setText(f"⚠️ {gui.tr('erase_partition_warning_message')}\n\n"
+                f"Partition: {partition_name}\n\n"
+                f"This operation cannot be undone!")
+    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg.setMinimumWidth(500)
+    
+    if msg.exec() != QMessageBox.StandardButton.Yes:
+        gui.log_message(f"❌ Partition erase cancelled by user")
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ Partition '{partition_name}' erased successfully")
+            gui.log_message(f"📦 Auto-refreshing partition table...")
+            # Auto-refresh partition table after successful erase
+            read_partition_table(gui)
+        else:
+            gui.log_message(f"❌ Failed to erase partition: {output if output else 'Unknown error'}")
+    
+    gui.log_message(f"🔄 Erasing partition '{partition_name}'...")
+    gui.run_command([RKTOOL, "ef", partition_name], f"erasing_partition_{partition_name}", on_finished)
+
+
+def erase_all_storage(gui):
+    """Erase entire storage device - requires multiple confirmations
+    
+    Implements three-layer confirmation:
+    1. Initial warning dialog
+    2. Storage name verification input
+    3. Final confirmation
+    """
+    current_storage = gui.change_storage_combo.currentText() if hasattr(gui, 'change_storage_combo') else "Storage"
+    
+    # Layer 1: Initial warning dialog
+    msg1 = QMessageBox()
+    style_messagebox(msg1)
+    msg1.setWindowTitle(gui.tr("erase_all_warning_title"))
+    msg1.setIcon(QMessageBox.Icon.Critical)
+    warning_text = gui.tr("erase_flash_warning_message")
+    # Replace {storage} placeholder if it exists
+    if "{storage}" in warning_text:
+        warning_text = warning_text.format(storage=current_storage)
+    msg1.setText(warning_text)
+    msg1.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg1.setMinimumWidth(500)
+    
+    if msg1.exec() != QMessageBox.StandardButton.Yes:
+        gui.log_message("❌ Erase all storage cancelled by user")
+        return
+    
+    # Layer 2: Verify storage name input
+    verification_prompt = gui.tr("erase_all_verification_title")
+    text, ok = QInputDialog.getText(
+        gui, 
+        gui.tr("erase_all_verification_title"),
+        f"{verification_prompt}:\n\n'{current_storage}'",
+        QLineEdit.EchoMode.Normal
+    )
+    
+    if not ok or text.strip() != current_storage:
+        gui.log_message("❌ Verification failed - storage name does not match. Operation cancelled.")
+        return
+    
+    # Layer 3: Final confirmation
+    msg2 = QMessageBox()
+    style_messagebox(msg2)
+    msg2.setWindowTitle(gui.tr("erase_all_final_confirmation_title"))
+    msg2.setIcon(QMessageBox.Icon.Critical)
+    msg2.setText(
+        f"{gui.tr('erase_all_about_to_erase')}\n"
+        f"{current_storage}\n\n"
+        f"{gui.tr('erase_all_confirm_certain')}"
+    )
+    msg2.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg2.setMinimumWidth(500)
+    
+    if msg2.exec() != QMessageBox.StandardButton.Yes:
+        gui.log_message("❌ Erase all storage cancelled at final confirmation")
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {current_storage} successfully erased")
+            gui.log_message(f"📦 Auto-refreshing partition table...")
+            # Auto-refresh partition table after successful erase
+            read_partition_table(gui)
+        else:
+            gui.log_message(f"❌ Failed to erase {current_storage}: {output if output else 'Unknown error'}")
+    
+    gui.log_message(f"🔄 Erasing all data on {current_storage}... This may take a moment.")
+    gui.run_command([RKTOOL, "ef", "all"], "erasing_all_storage", on_finished)
+
+
+# ============================================================================
+# Week 5: Firmware Packing/Unpacking and GPT Management
+# ============================================================================
+
+def pack_firmware(gui):
+    """
+    Pack firmware images into upgrade package
+    
+    Allows selecting input directory containing multiple .bin files and
+    creates a packaged firmware file.
+    """
+    # Select input directory
+    input_dir = QFileDialog.getExistingDirectory(
+        gui, 
+        gui.tr("select_pack_input_dir") if hasattr(gui, 'tr') else "Select input directory",
+        ""
+    )
+    if not input_dir:
+        return
+    
+    # Select output file path
+    output_path, _ = QFileDialog.getSaveFileName(
+        gui,
+        gui.tr("save_packed_firmware") if hasattr(gui, 'tr') else "Save packed firmware",
+        "firmware.img",
+        "Image Files (*.img);;All Files (*)"
+    )
+    if not output_path:
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('pack_complete') if hasattr(gui, 'tr') else 'Packing complete'}: {output_path}")
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('pack_failed') if hasattr(gui, 'tr') else 'Packing failed'}: {error_msg}")
+    
+    gui.log_message(f"📦 {gui.tr('packing_firmware') if hasattr(gui, 'tr') else 'Packing firmware'}...")
+    gui.run_command([RKTOOL, "pk", input_dir, output_path], "packing_firmware", on_finished)
+
+
+def unpack_firmware(gui):
+    """
+    Unpack upgrade package into individual images
+    
+    Allows selecting a firmware package file and extracts all contained
+    images to a selected output directory.
+    """
+    # Select input firmware package
+    input_file, _ = QFileDialog.getOpenFileName(
+        gui,
+        gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
+        "",
+        "Image Files (*.img *.uimg);;All Files (*)"
+    )
+    if not input_file or not os.path.exists(input_file):
+        return
+    
+    # Select output directory
+    output_dir = QFileDialog.getExistingDirectory(
+        gui,
+        gui.tr("select_unpack_output_dir") if hasattr(gui, 'tr') else "Select output directory",
+        ""
+    )
+    if not output_dir:
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('unpack_complete') if hasattr(gui, 'tr') else 'Unpacking complete'}")
+            # List extracted files
+            try:
+                files = os.listdir(output_dir)
+                if files:
+                    gui.log_message(f"📋 {gui.tr('extracted_files') if hasattr(gui, 'tr') else 'Extracted files'}:")
+                    for f in sorted(files):
+                        file_path = os.path.join(output_dir, f)
+                        if os.path.isfile(file_path):
+                            size_bytes = os.path.getsize(file_path)
+                            size_str = format_file_size(size_bytes)
+                            gui.log_message(f"  - {f} ({size_str})")
+            except Exception as e:
+                gui.log_message(f"⚠️ Could not list extracted files: {e}")
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('unpack_failed') if hasattr(gui, 'tr') else 'Unpacking failed'}: {error_msg}")
+    
+    gui.log_message(f"📦 {gui.tr('unpacking_firmware') if hasattr(gui, 'tr') else 'Unpacking firmware'}...")
+    gui.run_command([RKTOOL, "uk", input_file, output_dir], "unpacking_firmware", on_finished)
+
+
+def export_gpt_table(gui):
+    """
+    Export GPT partition table from device to file
+    
+    Reads the current GPT partition table from the device and saves it
+    to a binary file for backup or analysis.
+    """
+    # Select output file path
+    output_path, _ = QFileDialog.getSaveFileName(
+        gui,
+        gui.tr("save_gpt_table") if hasattr(gui, 'tr') else "Save GPT table",
+        "gpt.bin",
+        "Binary Files (*.bin);;All Files (*)"
+    )
+    if not output_path:
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('gpt_export_complete') if hasattr(gui, 'tr') else 'GPT table exported'}: {output_path}")
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('gpt_export_failed') if hasattr(gui, 'tr') else 'GPT export failed'}: {error_msg}")
+    
+    gui.log_message(f"📋 {gui.tr('exporting_gpt_table') if hasattr(gui, 'tr') else 'Exporting GPT table'}...")
+    gui.run_command([RKTOOL, "gpt", "export", output_path], "exporting_gpt", on_finished)
+
+
+def import_gpt_table(gui):
+    """
+    Import GPT partition table from file to device
+    
+    Reads a GPT partition table from a binary file and writes it to the
+    device. Requires multiple confirmations to prevent data loss.
+    """
+    # Select input GPT file
+    input_file, _ = QFileDialog.getOpenFileName(
+        gui,
+        gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
+        "",
+        "Binary Files (*.bin);;All Files (*)"
+    )
+    if not input_file or not os.path.exists(input_file):
+        return
+    
+    # First confirmation dialog
+    msg1 = QMessageBox()
+    style_messagebox(msg1)
+    msg1.setWindowTitle(gui.tr("confirm_import_gpt") if hasattr(gui, 'tr') else "Confirm GPT Import")
+    msg1.setIcon(QMessageBox.Icon.Warning)
+    msg1.setText(
+        gui.tr("import_gpt_warning") if hasattr(gui, 'tr') else
+        "⚠️ WARNING: Importing a new GPT table will modify the device partition structure!\n\n"
+        "This operation is potentially dangerous. Make sure you know what you're doing.\n\n"
+        "Do you want to continue?"
+    )
+    msg1.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg1.setMinimumWidth(500)
+    
+    if msg1.exec() != QMessageBox.StandardButton.Yes:
+        gui.log_message("❌ GPT import cancelled by user")
+        return
+    
+    # Show file preview if possible
+    try:
+        file_size = os.path.getsize(input_file)
+        size_str = format_file_size(file_size)
+        gui.log_message(f"📋 GPT file: {os.path.basename(input_file)} ({size_str})")
+    except:
+        pass
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('gpt_import_complete') if hasattr(gui, 'tr') else 'GPT table imported'}")
+            gui.log_message(f"📋 {gui.tr('refresh_partition_hint') if hasattr(gui, 'tr') else 'Reading partition table to reflect changes'}...")
+            # Auto-refresh partition table after successful import
+            read_partition_table(gui)
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('gpt_import_failed') if hasattr(gui, 'tr') else 'GPT import failed'}: {error_msg}")
+    
+    gui.log_message(f"🔄 {gui.tr('importing_gpt_table') if hasattr(gui, 'tr') else 'Importing GPT table'}...")
+    gui.run_command([RKTOOL, "gpt", "import", input_file], "importing_gpt", on_finished)
+
+
+def read_device_params(gui):
+    """
+    Read device parameters from device
+    
+    Reads the device parameters (like MAC address, serial number, etc.)
+    and displays them in a dialog.
+    """
+    def on_finished(success, output):
+        if success:
+            # Parse parameters from output
+            gui.log_message(f"✅ {gui.tr('read_params_complete') if hasattr(gui, 'tr') else 'Device parameters read'}")
+            
+            # Create simple display of parameters
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("device_params_title") if hasattr(gui, 'tr') else "Device Parameters")
+            msg.setIcon(QMessageBox.Icon.Information)
+            
+            # Format output for display
+            param_text = "Device Parameters:\n\n"
+            if output:
+                lines = output.split('\n')
+                for line in lines:
+                    if line.strip() and 'prm' in line.lower():
+                        param_text += line + "\n"
+            
+            if param_text == "Device Parameters:\n\n":
+                param_text = "No parameters found or device not responding"
+            
+            msg.setText(param_text)
+            msg.setMinimumWidth(400)
+            msg.exec()
+        else:
+            gui.log_message(f"❌ {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
+    
+    gui.log_message(f"📋 {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
+    gui.run_command([RKTOOL, "prm"], "reading_device_params", on_finished)
+
+
+def download_boot(gui):
+    """
+    Download (write) boot file to device
+    
+    Allows user to select a boot file and download it to the device.
+    """
+    boot_file, _ = QFileDialog.getOpenFileName(
+        gui,
+        gui.tr("select_boot_file") if hasattr(gui, 'tr') else "Select Boot File",
+        "",
+        "Boot Files (*.bin);;All Files (*)"
+    )
+    
+    if not boot_file or not os.path.exists(boot_file):
+        return
+    
+    # Show file info
+    try:
+        file_size = os.path.getsize(boot_file)
+        size_str = format_file_size(file_size)
+        gui.log_message(f"📦 Boot file: {os.path.basename(boot_file)} ({size_str})")
+    except:
+        pass
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('boot_download_complete') if hasattr(gui, 'tr') else 'Boot file downloaded successfully'}")
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('boot_download_failed') if hasattr(gui, 'tr') else 'Boot download failed'}: {error_msg}")
+    
+    gui.log_message(f"⬇️ {gui.tr('downloading_boot') if hasattr(gui, 'tr') else 'Downloading boot file'}...")
+    gui.run_command([RKTOOL, "db", boot_file], "downloading_boot", on_finished)
+
+
+def upload_boot(gui):
+    """
+    Upload (read) boot file from device
+    
+    Reads the Boot area from device to local filesystem.
+    Uses ReadLBA (rl) command to read from 0x8000 (Boot address)
+    """
+    output_path, _ = QFileDialog.getSaveFileName(
+        gui,
+        gui.tr("save_boot_file") if hasattr(gui, 'tr') else "Save Boot File",
+        "boot.bin",
+        "Binary Files (*.bin);;All Files (*)"
+    )
+    
+    if not output_path:
+        return
+    
+    def on_finished(success, output):
+        if success:
+            gui.log_message(f"✅ {gui.tr('boot_upload_complete') if hasattr(gui, 'tr') else 'Boot file uploaded successfully'}: {output_path}")
+        else:
+            error_msg = output if output else "Unknown error"
+            gui.log_message(f"❌ {gui.tr('boot_upload_failed') if hasattr(gui, 'tr') else 'Boot upload failed'}: {error_msg}")
+    
+    gui.log_message(f"⬆️ {gui.tr('uploading_boot') if hasattr(gui, 'tr') else 'Uploading boot file'}...")
+    # Use ReadLBA command: rl <BeginSec> <SectorLen> <File>
+    # Boot address: 0x8000, read 0x4000 sectors (32MB)
+    gui.run_command([RKTOOL, "rl", "0x8000", "0x4000", output_path], "uploading_boot", on_finished)
+
+
+def show_usb_device_info(gui):
+    """
+    Show detailed USB device information
+    
+    Displays VID/PID, serial number, bus information, etc.
+    """
+    import subprocess
+    
+    def on_finished(success, output):
+        if success and output:
+            gui.log_message(f"✅ {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'USB information'}")
+            
+            # Create dialog to show USB info
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(gui.tr("usb_device_info") if hasattr(gui, 'tr') else "USB Device Information")
+            msg.setIcon(QMessageBox.Icon.Information)
+            
+            # Format USB info
+            usb_info = "USB Device Information:\n\n"
+            
+            # Try to extract device info from output
+            lines = output.split('\n')
+            for line in lines:
+                if line.strip():
+                    # Look for important USB info patterns
+                    if any(keyword in line.lower() for keyword in ['device', 'bus', 'port', 'vid', 'pid', 'serial']):
+                        usb_info += line.strip() + "\n"
+            
+            # If no specific info found, show raw output
+            if usb_info == "USB Device Information:\n\n":
+                usb_info += output[:500]  # Show first 500 chars
+            
+            msg.setText(usb_info)
+            msg.setMinimumWidth(450)
+            msg.exec()
+        else:
+            # Try using lsusb if available
+            try:
+                result = subprocess.run(["lsusb"], capture_output=True, text=True, timeout=2)
+                if result.returncode == 0 and result.stdout:
+                    msg = QMessageBox()
+                    style_messagebox(msg)
+                    msg.setWindowTitle("USB Devices (lsusb)")
+                    msg.setIcon(QMessageBox.Icon.Information)
+                    msg.setText(result.stdout[:1000])
+                    msg.setMinimumWidth(450)
+                    msg.exec()
+                    return
+            except:
+                pass
+            
+            gui.log_message(f"⚠️ {gui.tr('usb_info_not_available') if hasattr(gui, 'tr') else 'USB information not available'}")
+    
+    gui.log_message(f"🔌 {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'Reading USB information'}...")
+    gui.run_command([RKTOOL, "ld"], "reading_usb_info", on_finished)
+
+
+def export_logs_detailed(gui):
+    """
+    Export system logs with device information
+    
+    Creates a ZIP file containing operation log, device info, and other diagnostics.
+    """
+    import zipfile
+    from datetime import datetime
+    
+    # Select output file
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_path, _ = QFileDialog.getSaveFileName(
+        gui,
+        gui.tr("export_logs") if hasattr(gui, 'tr') else "Export Logs",
+        f"rkdevtool_logs_{timestamp}.zip",
+        "ZIP Files (*.zip);;All Files (*)"
+    )
+    
+    if not output_path:
+        return
+    
+    try:
+        # Create ZIP file
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Add operation log
+            log_content = gui.log_output.toPlainText()
+            zf.writestr('operation_log.txt', log_content)
+            
+            # Add device information
+            device_info = f"""Device Information Report
+Generated: {datetime.now().isoformat()}
+
+Device Status: {gui.device_mode if hasattr(gui, 'device_mode') else 'Unknown'}
+Chip: {gui.chip_info if hasattr(gui, 'chip_info') else 'Unknown'}
+
+Connected Devices:
+"""
+            if hasattr(gui, 'connected_devices'):
+                for dev in gui.connected_devices:
+                    device_info += f"  - {dev}\n"
+            
+            zf.writestr('device_info.txt', device_info)
+            
+            # Add system information
+            import platform
+            system_info = f"""System Information Report
+Generated: {datetime.now().isoformat()}
+
+Platform: {platform.system()}
+Platform Release: {platform.release()}
+Platform Version: {platform.version()}
+Architecture: {platform.machine()}
+Processor: {platform.processor()}
+Python Version: {platform.python_version()}
+"""
+            zf.writestr('system_info.txt', system_info)
+            
+            # Try to add any existing log files
+            if hasattr(gui, 'log_file') and os.path.exists(gui.log_file):
+                try:
+                    zf.write(gui.log_file, arcname='full_application_log.txt')
+                except:
+                    pass
+        
+        gui.log_message(f"✅ {gui.tr('logs_exported') if hasattr(gui, 'tr') else 'Logs exported successfully'}: {output_path}")
+    except Exception as e:
+        gui.log_message(f"❌ {gui.tr('export_failed') if hasattr(gui, 'tr') else 'Export failed'}: {str(e)}")
+
+
 # Export all operation functions
 __all__ = [
     'enter_maskrom_mode', 'enter_loader_mode', 'reset_device',
@@ -854,5 +1436,10 @@ __all__ = [
     'on_partition_ppt_finished', 'backup_partition_by_name',
     'write_partition_by_name', 'confirm_burn_operation',
     'detect_supported_storage_types', 'update_storage_combo', 'get_storage_info',
-    'read_flash_id', 'read_capability', 'show_flash_info_detailed'
+    'read_flash_id', 'read_capability', 'show_flash_info_detailed',
+    'get_security_info', 'test_device_connection',
+    'erase_partition', 'erase_all_storage',
+    'pack_firmware', 'unpack_firmware', 'export_gpt_table', 'import_gpt_table',
+    'read_device_params', 'download_boot', 'upload_boot', 'show_usb_device_info',
+    'export_logs_detailed'
 ]
