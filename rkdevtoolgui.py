@@ -6,6 +6,7 @@ import sys
 import os
 import tempfile
 import math
+import locale
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase
@@ -26,13 +27,37 @@ from workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from widgets import AutoLoadCombo
 from i18n import TRANSLATIONS
 from themes import ThemeManager, ThemeAutoManager
+from operations import style_messagebox
 
 
 class TranslationManager:
-    """Manages language translations for the application."""
 
-    def __init__(self, lang="zh"):
+    @staticmethod
+    def detect_system_language():
+        try:
+            system_lang = locale.getdefaultlocale()[0]
+            
+            if system_lang:
+                # get the language code (e.g., 'en' from 'en_US')
+                lang_code = system_lang.split('_')[0].lower()
+                
+                # only support Chinese and English, default to Chinese if not supported
+                supported_langs = {'zh', 'en'}
+                
+                if lang_code in supported_langs:
+                    return lang_code
+        except Exception as e:
+            print(f"Failed to detect system language: {e}")
+        
+        # Return Chinese as default if detection fails or language not supported
+        return 'zh'
+
+    def __init__(self, lang=None):
+        if lang is None or lang == 'auto':
+            lang = self.detect_system_language()
+        
         self.lang = lang
+        self.auto_mode = False
         self.translations = TRANSLATIONS
 
     def tr(self, key):
@@ -41,7 +66,11 @@ class TranslationManager:
 
     def set_language(self, lang):
         """Sets the active language."""
-        if lang in self.translations:
+        if lang == 'auto':
+            self.auto_mode = True
+            self.lang = self.detect_system_language()
+        elif lang in self.translations:
+            self.auto_mode = False
             self.lang = lang
 
 
@@ -371,10 +400,21 @@ class RKDevToolGUI(QMainWindow):
 
         # Language selector
         self.lang_combo = QComboBox()
-        self.lang_combo.addItem("中文 (Chinese)", "zh")
+        self.lang_combo.addItem("自动(Auto)", "auto")
+        self.lang_combo.addItem("中文(Chinese)", "zh")
         self.lang_combo.addItem("English", "en")
-        self.lang_combo.setMinimumWidth(120)
-        self.lang_combo.setCurrentIndex(0)
+        self.lang_combo.setMinimumWidth(140)
+        
+        # Set current language based on manager's state
+        if self.manager.auto_mode:
+            self.lang_combo.setCurrentIndex(0)  # Auto
+        else:
+            idx = self.lang_combo.findData(self.manager.lang)
+            if idx >= 0:
+                self.lang_combo.setCurrentIndex(idx)
+            else:
+                self.lang_combo.setCurrentIndex(1)  # Default to Chinese
+        
         self.lang_combo.currentTextChanged.connect(safe_slot(self.on_language_changed))
         self.statusBar().addPermanentWidget(self.lang_combo)
 
@@ -622,7 +662,13 @@ class RKDevToolGUI(QMainWindow):
         """Handle language change"""
         selected_lang = self.lang_combo.currentData()
         self.manager.set_language(selected_lang)
+        # Update UI with new language
         self.update_ui_text()
+        # Update language combo display
+        if selected_lang == 'auto':
+            print(f"🌐 语言切换为自动模式 (检测到: {self.manager.lang})")
+        else:
+            print(f"🌐 语言切换为: {selected_lang}")
 
     def _show_loader_hint(self, is_failure=False):
         """Show hint dialog to load Loader when in Maskrom mode"""
