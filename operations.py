@@ -24,13 +24,17 @@ def style_messagebox(msg_box):
 def get_rkdeveloptool_version():
     """Get rkdeveloptool version"""
     try:
-        result = subprocess.run([RKTOOL, "--version"], capture_output=True, text=True, timeout=2)
+        env = os.environ.copy()
+        env['NO_COLOR'] = '1'
+        env['CLICOLOR'] = '0'
+        env['CLICOLOR_FORCE'] = '0'
+        result = subprocess.run([RKTOOL, "--version"], capture_output=True, text=True, timeout=2, env=env)
         output = (result.stdout or "") + (result.stderr or "")
         # Parse "rkdeveloptool ver 1.32" format
         m = re.search(r'ver\s+([\d.]+)', output)
         if m:
             return m.group(1)
-    except:
+    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
         pass
     return "unknown"
 
@@ -63,7 +67,11 @@ def get_flash_capacity_bytes(gui):
 
     # Query device for flash info
     try:
-        result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+        env = os.environ.copy()
+        env['NO_COLOR'] = '1'
+        env['CLICOLOR'] = '0'
+        env['CLICOLOR_FORCE'] = '0'
+        result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6, env=env)
         out = (result.stdout or "") + "\n" + (result.stderr or "")
 
         # Try to parse capacity
@@ -117,8 +125,8 @@ def backup_firmware(gui):
         else:
             size_display = f"{size_mb:.2f} MB"
 
-        gui.log_message(f"🔧 {gui.tr('detected_flash_size')}: {size_display} ({source})")
-        gui.log_message(f"📊 {gui.tr('backup_sectors')}: {length_arg} ({sectors:,} sectors)")
+        gui.log_message(f"[INFO] {gui.tr('detected_flash_size')}: {size_display} ({source})")
+        gui.log_message(f"[INFO] {gui.tr('backup_sectors')}: {length_arg} ({sectors:,} sectors)")
 
         # Confirm with user
         msg = QMessageBox()
@@ -147,7 +155,7 @@ def backup_firmware(gui):
         return
 
     # Fallback: ask user for length
-    gui.log_message(f"⚠️ {gui.tr('auto_detect_failed')}: {source}")
+    gui.log_message(f"[WARNING] {gui.tr('auto_detect_failed')}: {source}")
 
     text, ok = QInputDialog.getText(
         gui,
@@ -169,7 +177,7 @@ def backup_firmware(gui):
         bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
         sectors = (bytes_size + 511) // 512
         length_arg = hex(sectors)
-        gui.log_message(f"📊 {gui.tr('calculated_sectors')}: {length_arg} ({sectors:,} sectors)")
+        gui.log_message(f"[INFO] {gui.tr('calculated_sectors')}: {length_arg} ({sectors:,} sectors)")
 
     gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
 
@@ -218,7 +226,11 @@ def read_partition_table(gui):
     except Exception:
         gui._partition_refresh_lock = True
         try:
-            result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=5)
+            env = os.environ.copy()
+            env['NO_COLOR'] = '1'
+            env['CLICOLOR'] = '0'
+            env['CLICOLOR_FORCE'] = '0'
+            result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=5, env=env)
             if result.returncode == 0:
                 gui.partitions = parse_partition_info(result.stdout)
                 populate_partition_table(gui)
@@ -246,7 +258,7 @@ def on_partition_ppt_finished(gui, out, code):
             gui.log_message(out or gui.tr('reading_partitions'))
             gui.statusBar().showMessage(gui.tr('reading_partitions'))
     except Exception as e:
-        gui.log_message(f"⚠️ parse ppt failed: {e}")
+        gui.log_message(f"[WARNING] parse ppt failed: {e}")
     finally:
         gui._restore_splitter_sizes()
         gui._partition_refresh_lock = False
@@ -292,8 +304,8 @@ def populate_partition_table(gui):
         gui.partition_table.resizeColumnsToContents()
         gui.partition_table.resizeRowsToContents()
         gui.partition_table.horizontalHeader().setStretchLastSection(True)
-    except:
-        pass
+    except (RuntimeError, AttributeError) as e:
+        print(f"Warning: Failed to resize partition table: {e}")
 
 
 def populate_partition_combo(gui):
@@ -317,8 +329,8 @@ def populate_address_combo(gui):
             for name, info in gui.partitions.items():
                 addr = info.get('address', '')
                 gui.address_combo.addItem(f"{name} ({addr})")
-    except:
-        pass
+    except (KeyError, AttributeError) as e:
+        print(f"Warning: Failed to populate address combo: {e}")
 
 
 def backup_partition_by_name(gui, name):
@@ -335,8 +347,8 @@ def backup_partition_by_name(gui, name):
                 return
             gui.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
             return
-    except:
-        pass
+    except (AttributeError, RuntimeError) as e:
+        print(f"Warning: Failed to check manual address: {e}")
 
     if name in gui.partitions:
         addr = gui.partitions[name].get('address')
@@ -421,16 +433,17 @@ def load_loader(gui):
         def on_loader_finished(success, error_msg):
             if success:
                 gui.loader_loaded = True
-                gui.log_message("✅ " + gui.tr("loader_loaded_success"))
+                gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
                 # Re-detect storage types now that loader is loaded
                 # This allows hardware like SD cards and SSDs to be recognized
-                gui.log_message("🔄 Re-detecting storage types...")
+                gui.log_message("[INFO] Re-detecting storage types...")
                 detect_supported_storage_types(gui)
             gui.on_command_finished(success, error_msg)
         
         try:
             gui.command_worker.finished_signal.disconnect()
-        except:
+        except RuntimeError:
+            # Signal not connected, which is fine
             pass
         gui.command_worker.finished_signal.connect(safe_slot(on_loader_finished))
 
@@ -500,7 +513,7 @@ def confirm_burn_operation(gui, file_path, address):
         return msg.exec() == QMessageBox.StandardButton.Yes
 
     except Exception as e:
-        gui.log_message(f"⚠️ Confirmation dialog error: {e}")
+        gui.log_message(f"[WARNING] Confirmation dialog error: {e}")
         reply = QMessageBox.question(
             gui, gui.tr("confirm_burn_title"), gui.tr("confirm_burn_simple"),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
@@ -544,7 +557,7 @@ def detect_supported_storage_types(gui):
             )
             
             if is_maskrom_no_loader:
-                gui.log_message("⚠️ Device in Maskrom mode - load firmware to detect storage types")
+                gui.log_message("[WARNING] Device in Maskrom mode - load firmware to detect storage types")
                 # Use default types that are most likely available
                 gui._supported_storages = {
                     '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
@@ -556,11 +569,16 @@ def detect_supported_storage_types(gui):
                 available = []
                 for code, info in all_types.items():
                     try:
+                        env = os.environ.copy()
+                        env['NO_COLOR'] = '1'
+                        env['CLICOLOR'] = '0'
+                        env['CLICOLOR_FORCE'] = '0'
                         result = subprocess.run(
                             [RKTOOL, "cs", code],
                             capture_output=True,
                             text=True,
-                            timeout=3
+                            timeout=3,
+                            env=env
                         )
                         output = (result.stdout or "") + (result.stderr or "")
                         
@@ -588,18 +606,18 @@ def detect_supported_storage_types(gui):
                         gui.log_message(f"✗ Storage {code} error: {str(e)[:50]}")
                 
                 if available:
-                    gui.log_message(f"📦 Detected {len(available)} storage type(s): {', '.join(available)}")
+                    gui.log_message(f"[INFO] Detected {len(available)} storage type(s): {', '.join(available)}")
                 elif gui._supported_storages:
                     # Some were added despite errors
-                    gui.log_message(f"📦 Detected storage types: {', '.join([info['name'] for info in gui._supported_storages.values()])}")
+                    gui.log_message(f"[INFO] Detected storage types: {', '.join([info['name'] for info in gui._supported_storages.values()])}")
                 else:
                     # No storage detected - use defaults
                     gui._supported_storages = {
                         '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
                         '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
                     }
-                    gui.log_message("📦 Using default storage types (EMMC, SPI NOR)")
-                    gui.log_message("💡 If your device has other storage, check:")
+                    gui.log_message("[INFO] Using default storage types (EMMC, SPI NOR)")
+                    gui.log_message("[INFO] If your device has other storage, check:")
                     gui.log_message("   - Is eMMC/SD physically installed on the board?")
                     gui.log_message("   - Is rkdeveloptool up to date? (current: 1.32)")
         
@@ -616,8 +634,8 @@ def detect_supported_storage_types(gui):
             }
         try:
             update_storage_combo(gui)
-        except:
-            pass
+        except (AttributeError, RuntimeError) as e:
+            print(f"Warning: Failed to update storage combo: {e}")
 
 
 def update_storage_combo(gui):
@@ -658,7 +676,7 @@ def update_storage_combo(gui):
                 gui.change_storage_combo.setCurrentIndex(idx)
         
     except Exception as e:
-        gui.log_message(f"⚠️ Error updating storage combo: {e}")
+        gui.log_message(f"[WARNING] Error updating storage combo: {e}")
 
 
 def get_storage_info(gui, storage_code):
@@ -686,7 +704,7 @@ def read_flash_id(gui):
     
     def on_flash_id_finished(success, output):
         if not success:
-            gui.log_message("❌ Failed to read Flash ID")
+            gui.log_message("[ERROR] Failed to read Flash ID")
             return
         
         flash_id_info = parse_flash_id(output)
@@ -714,7 +732,7 @@ def read_flash_id(gui):
             msg.setText(info_text)
             msg.exec()
         else:
-            gui.log_message("⚠️ Could not parse Flash ID information")
+            gui.log_message("[WARNING] Could not parse Flash ID information")
     
     gui.run_command([RKTOOL, "rid"], "reading_flash_id", on_flash_id_finished)
 
@@ -726,7 +744,7 @@ def read_capability(gui):
     
     def on_capability_finished(success, output):
         if not success:
-            gui.log_message("❌ Failed to read device capability")
+            gui.log_message("[ERROR] Failed to read device capability")
             return
         
         capability_info = parse_capability(output)
@@ -750,7 +768,7 @@ def read_capability(gui):
             msg.setText(info_text)
             msg.exec()
         else:
-            gui.log_message("⚠️ Could not parse device capability information")
+            gui.log_message("[WARNING] Could not parse device capability information")
     
     gui.run_command([RKTOOL, "rcb"], "reading_device_capability", on_capability_finished)
 
@@ -761,7 +779,7 @@ def show_flash_info_detailed(gui):
     
     def on_flash_info_finished(success, output):
         if not success:
-            gui.log_message("❌ Failed to read Flash information")
+            gui.log_message("[ERROR] Failed to read Flash information")
             return
         
         # Parse the output
@@ -772,7 +790,7 @@ def show_flash_info_detailed(gui):
             # Display dialog
             _display_flash_info_dialog(gui)
         else:
-            gui.log_message("❌ Failed to parse Flash information")
+            gui.log_message("[ERROR] Failed to parse Flash information")
     
     gui.run_command([RKTOOL, "rfi"], "reading_flash_info", on_flash_info_finished)
 
@@ -824,7 +842,7 @@ def get_security_info(gui):
     
     def on_security_info_finished(success, output):
         if not success:
-            gui.log_message("❌ Failed to read security information")
+            gui.log_message("[ERROR] Failed to read security information")
             return
         
         security_info = parse_security_info(output)
@@ -843,7 +861,7 @@ def get_security_info(gui):
             msg.setText(info_text)
             msg.exec()
         else:
-            gui.log_message("⚠️ Could not parse security information")
+            gui.log_message("[WARNING] Could not parse security information")
     
     gui.run_command([RKTOOL, "rcb"], "reading_security_info", on_security_info_finished)
 
@@ -875,7 +893,7 @@ def test_device_connection(gui, test_count=10):
             success_rate = (test_state['success_count'] / test_state['total']) * 100
             result_text = format_test_results(test_state)
             
-            gui.log_message(f"✅ Connection test completed!\n{result_text}")
+            gui.log_message(f"[OK] Connection test completed!\n{result_text}")
             
             # Show in message box
             msg = QMessageBox()
@@ -934,19 +952,19 @@ def erase_partition(gui, partition_name):
     msg.setMinimumWidth(500)
     
     if msg.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message(f"❌ Partition erase cancelled by user")
+        gui.log_message(f"[ERROR] Partition erase cancelled by user")
         return
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ Partition '{partition_name}' erased successfully")
-            gui.log_message(f"📦 Auto-refreshing partition table...")
+            gui.log_message(f"[OK] Partition '{partition_name}' erased successfully")
+            gui.log_message(f"[INFO] Auto-refreshing partition table...")
             # Auto-refresh partition table after successful erase
             read_partition_table(gui)
         else:
-            gui.log_message(f"❌ Failed to erase partition: {output if output else 'Unknown error'}")
+            gui.log_message(f"[ERROR] Failed to erase partition: {output if output else 'Unknown error'}")
     
-    gui.log_message(f"🔄 Erasing partition '{partition_name}'...")
+    gui.log_message(f"[INFO] Erasing partition '{partition_name}'...")
     gui.run_command([RKTOOL, "ef", partition_name], f"erasing_partition_{partition_name}", on_finished)
 
 
@@ -974,7 +992,7 @@ def erase_all_storage(gui):
     msg1.setMinimumWidth(500)
     
     if msg1.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("❌ Erase all storage cancelled by user")
+        gui.log_message("[ERROR] Erase all storage cancelled by user")
         return
     
     # Layer 2: Verify storage name input
@@ -987,7 +1005,7 @@ def erase_all_storage(gui):
     )
     
     if not ok or text.strip() != current_storage:
-        gui.log_message("❌ Verification failed - storage name does not match. Operation cancelled.")
+        gui.log_message("[ERROR] Verification failed - storage name does not match. Operation cancelled.")
         return
     
     # Layer 3: Final confirmation
@@ -1004,19 +1022,19 @@ def erase_all_storage(gui):
     msg2.setMinimumWidth(500)
     
     if msg2.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("❌ Erase all storage cancelled at final confirmation")
+        gui.log_message("[ERROR] Erase all storage cancelled at final confirmation")
         return
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {current_storage} successfully erased")
-            gui.log_message(f"📦 Auto-refreshing partition table...")
+            gui.log_message(f"[OK] {current_storage} successfully erased")
+            gui.log_message(f"[INFO] Auto-refreshing partition table...")
             # Auto-refresh partition table after successful erase
             read_partition_table(gui)
         else:
-            gui.log_message(f"❌ Failed to erase {current_storage}: {output if output else 'Unknown error'}")
+            gui.log_message(f"[ERROR] Failed to erase {current_storage}: {output if output else 'Unknown error'}")
     
-    gui.log_message(f"🔄 Erasing all data on {current_storage}... This may take a moment.")
+    gui.log_message(f"[INFO] Erasing all data on {current_storage}... This may take a moment.")
     gui.run_command([RKTOOL, "ef", "all"], "erasing_all_storage", on_finished)
 
 
@@ -1052,12 +1070,12 @@ def pack_firmware(gui):
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('pack_complete') if hasattr(gui, 'tr') else 'Packing complete'}: {output_path}")
+            gui.log_message(f"[OK] {gui.tr('pack_complete') if hasattr(gui, 'tr') else 'Packing complete'}: {output_path}")
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('pack_failed') if hasattr(gui, 'tr') else 'Packing failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('pack_failed') if hasattr(gui, 'tr') else 'Packing failed'}: {error_msg}")
     
-    gui.log_message(f"📦 {gui.tr('packing_firmware') if hasattr(gui, 'tr') else 'Packing firmware'}...")
+    gui.log_message(f"[INFO] {gui.tr('packing_firmware') if hasattr(gui, 'tr') else 'Packing firmware'}...")
     gui.run_command([RKTOOL, "pk", input_dir, output_path], "packing_firmware", on_finished)
 
 
@@ -1089,12 +1107,12 @@ def unpack_firmware(gui):
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('unpack_complete') if hasattr(gui, 'tr') else 'Unpacking complete'}")
+            gui.log_message(f"[OK] {gui.tr('unpack_complete') if hasattr(gui, 'tr') else 'Unpacking complete'}")
             # List extracted files
             try:
                 files = os.listdir(output_dir)
                 if files:
-                    gui.log_message(f"📋 {gui.tr('extracted_files') if hasattr(gui, 'tr') else 'Extracted files'}:")
+                    gui.log_message(f"[INFO] {gui.tr('extracted_files') if hasattr(gui, 'tr') else 'Extracted files'}:")
                     for f in sorted(files):
                         file_path = os.path.join(output_dir, f)
                         if os.path.isfile(file_path):
@@ -1102,12 +1120,12 @@ def unpack_firmware(gui):
                             size_str = format_file_size(size_bytes)
                             gui.log_message(f"  - {f} ({size_str})")
             except Exception as e:
-                gui.log_message(f"⚠️ Could not list extracted files: {e}")
+                gui.log_message(f"[WARNING] Could not list extracted files: {e}")
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('unpack_failed') if hasattr(gui, 'tr') else 'Unpacking failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('unpack_failed') if hasattr(gui, 'tr') else 'Unpacking failed'}: {error_msg}")
     
-    gui.log_message(f"📦 {gui.tr('unpacking_firmware') if hasattr(gui, 'tr') else 'Unpacking firmware'}...")
+    gui.log_message(f"[INFO] {gui.tr('unpacking_firmware') if hasattr(gui, 'tr') else 'Unpacking firmware'}...")
     gui.run_command([RKTOOL, "uk", input_file, output_dir], "unpacking_firmware", on_finished)
 
 
@@ -1130,12 +1148,12 @@ def export_gpt_table(gui):
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('gpt_export_complete') if hasattr(gui, 'tr') else 'GPT table exported'}: {output_path}")
+            gui.log_message(f"[OK] {gui.tr('gpt_export_complete') if hasattr(gui, 'tr') else 'GPT table exported'}: {output_path}")
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('gpt_export_failed') if hasattr(gui, 'tr') else 'GPT export failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('gpt_export_failed') if hasattr(gui, 'tr') else 'GPT export failed'}: {error_msg}")
     
-    gui.log_message(f"📋 {gui.tr('exporting_gpt_table') if hasattr(gui, 'tr') else 'Exporting GPT table'}...")
+    gui.log_message(f"[INFO] {gui.tr('exporting_gpt_table') if hasattr(gui, 'tr') else 'Exporting GPT table'}...")
     gui.run_command([RKTOOL, "gpt", "export", output_path], "exporting_gpt", on_finished)
 
 
@@ -1171,28 +1189,28 @@ def import_gpt_table(gui):
     msg1.setMinimumWidth(500)
     
     if msg1.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("❌ GPT import cancelled by user")
+        gui.log_message("[ERROR] GPT import cancelled by user")
         return
     
     # Show file preview if possible
     try:
         file_size = os.path.getsize(input_file)
         size_str = format_file_size(file_size)
-        gui.log_message(f"📋 GPT file: {os.path.basename(input_file)} ({size_str})")
-    except:
-        pass
+        gui.log_message(f"[INFO] GPT file: {os.path.basename(input_file)} ({size_str})")
+    except (OSError, FileNotFoundError) as e:
+        print(f"Warning: Could not get file size: {e}")
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('gpt_import_complete') if hasattr(gui, 'tr') else 'GPT table imported'}")
-            gui.log_message(f"📋 {gui.tr('refresh_partition_hint') if hasattr(gui, 'tr') else 'Reading partition table to reflect changes'}...")
+            gui.log_message(f"[OK] {gui.tr('gpt_import_complete') if hasattr(gui, 'tr') else 'GPT table imported'}")
+            gui.log_message(f"[INFO] {gui.tr('refresh_partition_hint') if hasattr(gui, 'tr') else 'Reading partition table to reflect changes'}...")
             # Auto-refresh partition table after successful import
             read_partition_table(gui)
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('gpt_import_failed') if hasattr(gui, 'tr') else 'GPT import failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('gpt_import_failed') if hasattr(gui, 'tr') else 'GPT import failed'}: {error_msg}")
     
-    gui.log_message(f"🔄 {gui.tr('importing_gpt_table') if hasattr(gui, 'tr') else 'Importing GPT table'}...")
+    gui.log_message(f"[INFO] {gui.tr('importing_gpt_table') if hasattr(gui, 'tr') else 'Importing GPT table'}...")
     gui.run_command([RKTOOL, "gpt", "import", input_file], "importing_gpt", on_finished)
 
 
@@ -1206,7 +1224,7 @@ def read_device_params(gui):
     def on_finished(success, output):
         if success:
             # Parse parameters from output
-            gui.log_message(f"✅ {gui.tr('read_params_complete') if hasattr(gui, 'tr') else 'Device parameters read'}")
+            gui.log_message(f"[OK] {gui.tr('read_params_complete') if hasattr(gui, 'tr') else 'Device parameters read'}")
             
             # Create simple display of parameters
             msg = QMessageBox()
@@ -1229,9 +1247,9 @@ def read_device_params(gui):
             msg.setMinimumWidth(400)
             msg.exec()
         else:
-            gui.log_message(f"❌ {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
+            gui.log_message(f"[ERROR] {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
     
-    gui.log_message(f"📋 {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
+    gui.log_message(f"[INFO] {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
     gui.run_command([RKTOOL, "prm"], "reading_device_params", on_finished)
 
 
@@ -1255,18 +1273,18 @@ def download_boot(gui):
     try:
         file_size = os.path.getsize(boot_file)
         size_str = format_file_size(file_size)
-        gui.log_message(f"📦 Boot file: {os.path.basename(boot_file)} ({size_str})")
+        gui.log_message(f"[INFO] Boot file: {os.path.basename(boot_file)} ({size_str})")
     except:
         pass
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('boot_download_complete') if hasattr(gui, 'tr') else 'Boot file downloaded successfully'}")
+            gui.log_message(f"[OK] {gui.tr('boot_download_complete') if hasattr(gui, 'tr') else 'Boot file downloaded successfully'}")
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('boot_download_failed') if hasattr(gui, 'tr') else 'Boot download failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('boot_download_failed') if hasattr(gui, 'tr') else 'Boot download failed'}: {error_msg}")
     
-    gui.log_message(f"⬇️ {gui.tr('downloading_boot') if hasattr(gui, 'tr') else 'Downloading boot file'}...")
+    gui.log_message(f"[INFO] {gui.tr('downloading_boot') if hasattr(gui, 'tr') else 'Downloading boot file'}...")
     gui.run_command([RKTOOL, "db", boot_file], "downloading_boot", on_finished)
 
 
@@ -1289,12 +1307,12 @@ def upload_boot(gui):
     
     def on_finished(success, output):
         if success:
-            gui.log_message(f"✅ {gui.tr('boot_upload_complete') if hasattr(gui, 'tr') else 'Boot file uploaded successfully'}: {output_path}")
+            gui.log_message(f"[OK] {gui.tr('boot_upload_complete') if hasattr(gui, 'tr') else 'Boot file uploaded successfully'}: {output_path}")
         else:
             error_msg = output if output else "Unknown error"
-            gui.log_message(f"❌ {gui.tr('boot_upload_failed') if hasattr(gui, 'tr') else 'Boot upload failed'}: {error_msg}")
+            gui.log_message(f"[ERROR] {gui.tr('boot_upload_failed') if hasattr(gui, 'tr') else 'Boot upload failed'}: {error_msg}")
     
-    gui.log_message(f"⬆️ {gui.tr('uploading_boot') if hasattr(gui, 'tr') else 'Uploading boot file'}...")
+    gui.log_message(f"[INFO] {gui.tr('uploading_boot') if hasattr(gui, 'tr') else 'Uploading boot file'}...")
     # Use ReadLBA command: rl <BeginSec> <SectorLen> <File>
     # Boot address: 0x8000, read 0x4000 sectors (32MB)
     gui.run_command([RKTOOL, "rl", "0x8000", "0x4000", output_path], "uploading_boot", on_finished)
@@ -1310,7 +1328,7 @@ def show_usb_device_info(gui):
     
     def on_finished(success, output):
         if success and output:
-            gui.log_message(f"✅ {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'USB information'}")
+            gui.log_message(f"[OK] {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'USB information'}")
             
             # Create dialog to show USB info
             msg = QMessageBox()
@@ -1352,9 +1370,9 @@ def show_usb_device_info(gui):
             except:
                 pass
             
-            gui.log_message(f"⚠️ {gui.tr('usb_info_not_available') if hasattr(gui, 'tr') else 'USB information not available'}")
+            gui.log_message(f"[WARNING] {gui.tr('usb_info_not_available') if hasattr(gui, 'tr') else 'USB information not available'}")
     
-    gui.log_message(f"🔌 {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'Reading USB information'}...")
+    gui.log_message(f"[INFO] {gui.tr('reading_usb_info') if hasattr(gui, 'tr') else 'Reading USB information'}...")
     gui.run_command([RKTOOL, "ld"], "reading_usb_info", on_finished)
 
 
@@ -1422,9 +1440,9 @@ Python Version: {platform.python_version()}
                 except:
                     pass
         
-        gui.log_message(f"✅ {gui.tr('logs_exported') if hasattr(gui, 'tr') else 'Logs exported successfully'}: {output_path}")
+        gui.log_message(f"[OK] {gui.tr('logs_exported') if hasattr(gui, 'tr') else 'Logs exported successfully'}: {output_path}")
     except Exception as e:
-        gui.log_message(f"❌ {gui.tr('export_failed') if hasattr(gui, 'tr') else 'Export failed'}: {str(e)}")
+        gui.log_message(f"[ERROR] {gui.tr('export_failed') if hasattr(gui, 'tr') else 'Export failed'}: {str(e)}")
 
 
 # Export all operation functions

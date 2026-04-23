@@ -28,6 +28,7 @@ from widgets import AutoLoadCombo
 from i18n import TRANSLATIONS
 from themes import ThemeManager, ThemeAutoManager
 from operations import style_messagebox
+from log_widget import RealtimeLogWidget
 
 
 class TranslationManager:
@@ -94,6 +95,7 @@ class RKDevToolGUI(QMainWindow):
         self._partition_refresh_lock = False
         self.loader_loaded = False  # Track if loader has been loaded
         self.maskrom_device_shown_hint = False  # Track if we've shown loader hint for current device
+        self.debug_enabled = False  # Track debug logging state
 
         # UI Setup
         self.setMinimumSize(1300, 720)
@@ -343,15 +345,21 @@ class RKDevToolGUI(QMainWindow):
 
         layout.addWidget(self.tab_widget)
 
-        # Log panel
-        self.log_group, log_widgets = create_log_panel(self)
-        self.clear_log_btn = log_widgets['clear']
-        self.save_log_btn = log_widgets['save']
-        self.log_output = log_widgets['output']
-        self.progress_bar = log_widgets['progress']
-        self.progress_label = log_widgets['label']
+        # Log panel - using enhanced real-time log widget
+        self.log_widget = RealtimeLogWidget()
+        self.log_output = self.log_widget.log_display
+        self.progress_bar = self.log_widget.progress_bar
+        self.progress_label = self.log_widget.progress_label
+        self.clear_log_btn = self.log_widget.clear_btn
+        self.save_log_btn = self.log_widget.export_btn
+        
+        # Set up export callback
+        from ui_panels import save_log
+        self.log_widget.set_export_callback(
+            safe_slot(lambda: save_log(self))
+        )
 
-        layout.addWidget(self.log_group)
+        layout.addWidget(self.log_widget)
         layout.addStretch()
 
         return panel
@@ -523,8 +531,9 @@ class RKDevToolGUI(QMainWindow):
 
     # Utility methods
     def log_message(self, message):
-        """Add message to log output"""
-        self.log_output.append(message)
+        """Add message to real-time log output"""
+        self.log_widget.add_log(message)
+        # Also append to text browser for backward compatibility
         self.log_output.verticalScrollBar().setValue(
             self.log_output.verticalScrollBar().maximum()
         )
@@ -614,7 +623,7 @@ class RKDevToolGUI(QMainWindow):
                     output = self.command_worker.output
                 self._command_callback(success, output)
             except Exception as e:
-                self.log_message(f"❌ Callback error: {e}")
+                self.log_message(f"[ERROR] Callback error: {e}")
             finally:
                 self._command_callback = None
         # If command failed and in Maskrom mode and no chip info, suggest loading Loader
@@ -640,19 +649,19 @@ class RKDevToolGUI(QMainWindow):
 
                 if md5_tmp == md5_expected:
                     self.show_message('Information', 'verification_success')
-                    self.log_message(f"✅ Verification succeeded: {md5_expected}")
+                    self.log_message(f"[OK] Verification succeeded: {md5_expected}")
                 else:
                     self.show_message('Warning', 'verification_mismatch', 'Warning')
-                    self.log_message(f"❌ Verification mismatch: expected {md5_expected}, got {md5_tmp}")
+                    self.log_message(f"[ERROR] Verification mismatch: expected {md5_expected}, got {md5_tmp}")
             except Exception as e:
-                self.log_message(f"❌ Verification failed: {e}")
+                self.log_message(f"[ERROR] Verification failed: {e}")
                 self.show_message('Warning', 'verification_failed', 'Warning')
             finally:
                 try:
                     if os.path.exists(tmpfile):
                         os.remove(tmpfile)
                 except Exception as e:
-                    self.log_message(f"⚠️ Failed to remove temp file: {e}")
+                    self.log_message(f"[WARNING] Failed to remove temp file: {e}")
 
         # Clean up verification state
         self._verify_tmpfile = None

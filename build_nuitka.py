@@ -15,7 +15,7 @@ def find_rkdeveloptool():
         tool_path = result.stdout.strip()
         if tool_path and os.path.exists(tool_path):
             return tool_path
-    except:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
     # Common installation paths

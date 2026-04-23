@@ -211,13 +211,11 @@ TRANSLATIONS = {
         ,
         "downloading_boot": "正在下载引导文件 (db)...",
         "md5_failed": "MD5 计算失败。",
-        "backup_not_implemented": "完整固件备份功能尚未实现。",
         "detected_flash_size": "检测到闪存大小",
         "enter_backup_length_title": "请输入备份长度",
         "enter_backup_length_prompt": "请输入备份长度（扇区数或类似 '128MB'/'0x1E0000'）",
         "backup_cancelled": "备份已取消。",
         "log_saved": "日志已保存。",
-        "usb_info_not_implemented": "USB 信息功能尚未实现。",
         "select_file_dialog": "选择文件"
         ,
         "verification_success": "校验成功：文件一致。",
@@ -284,8 +282,8 @@ TRANSLATIONS = {
         "downloading_boot_file": "正在下载 Boot 文件...",
         "uploading_boot_file": "正在上传 Boot 文件...",
         "uploading_boot": "正在上传 Boot 文件...",
-        "download_boot_btn": "⬇️ 下载 Boot",
-        "upload_boot_btn": "⬆️ 上传 Boot",
+        "download_boot_btn": "下载 Boot",
+        "upload_boot_btn": "上传 Boot",
         
         # Week 6: Tag SPL
         "save_tagged_spl": "保存标签化 SPL 文件",
@@ -385,7 +383,7 @@ TRANSLATIONS = {
         "flash_ops_group": "Flash Operations",
         "erase_flash_btn": "Erase Entire Flash",
         "test_device_btn": "Test Device Connection",
-        "get_security_info_btn": "🔒 Security Info",
+        "get_security_info_btn": "Security Info",
         
         "rw_ops_group": "Read/Write Operations",
         "start_address_placeholder": "Start Address (e.g., 0x0)",
@@ -411,8 +409,8 @@ TRANSLATIONS = {
         "connected_maskrom": "Connected (Maskrom)",
         "connected_loader": "Connected (Loader)",
         "not_connected_status": "Not Connected",
-        "start_executing": "🚀 Starting Execution: ",
-        "command": "📝 Command: ",
+        "start_executing": "Starting Execution: ",
+        "command": "Command: ",
         "success": "Execution successful",
         "failure": "Execution failed: ",
         "abnormal_execution": "Execution abnormal: ",
@@ -515,13 +513,11 @@ TRANSLATIONS = {
         ,
         "downloading_boot": "Downloading boot loader (db)...",
         "md5_failed": "MD5 calculation failed.",
-        "backup_not_implemented": "Full firmware backup not yet implemented.",
         "detected_flash_size": "Detected flash size",
         "enter_backup_length_title": "Enter backup length",
         "enter_backup_length_prompt": "Enter length to backup (sectors, hex or e.g. '128MB')",
         "backup_cancelled": "Backup cancelled.",
         "log_saved": "Log saved successfully.",
-        "usb_info_not_implemented": "USB information not yet implemented.",
         "select_file_dialog": "Select file"
         ,
         "verification_success": "Verification succeeded: files match.",
@@ -559,7 +555,7 @@ TRANSLATIONS = {
         "gpt_export_complete": "GPT table exported",
         "gpt_export_failed": "GPT export failed",
         "exporting_gpt_table": "Exporting GPT table",
-        "gpt_export_btn": "📥 Export GPT",
+        "gpt_export_btn": "Export GPT",
         "confirm_import_gpt": "Confirm GPT Import",
         "import_gpt_warning": "⚠️ WARNING: Importing a new GPT partition table will modify the device partition structure!\n\nThis operation is potentially dangerous. Make sure you understand the consequences.\n\nDo you want to continue?",
         "refresh_partition_hint": "Reading partition table to reflect changes",
@@ -588,8 +584,8 @@ TRANSLATIONS = {
         "downloading_boot_file": "Downloading boot file...",
         "uploading_boot_file": "Uploading boot file...",
         "uploading_boot": "Uploading boot file...",
-        "download_boot_btn": "⬇️ Download Boot",
-        "upload_boot_btn": "⬆️ Upload Boot",
+        "download_boot_btn": "Download Boot",
+        "upload_boot_btn": "Upload Boot",
         
         # Week 6: Tag SPL
         "save_tagged_spl": "Save Tagged SPL File",
@@ -606,6 +602,6 @@ TRANSLATIONS = {
         "export_logs": "Export Logs",
         "logs_exported": "Logs exported successfully",
         "export_failed": "Export failed",
-        "export_logs_detailed": "📦 Export Detailed Logs (ZIP)",
+        "export_logs_detailed": "Export Detailed Logs (ZIP)",
     }
 }

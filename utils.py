@@ -318,8 +318,8 @@ def parse_flash_id(output: str) -> dict:
                     info['capacity'] = f"{capacity_bytes / (1024 ** 3):.1f} GB"
                 else:
                     info['capacity'] = f"{capacity_bytes / (1024 ** 2):.0f} MB"
-        except:
-            pass
+        except (ValueError, KeyError, TypeError) as e:
+            print(f"Warning: Could not parse device capacity: {e}")
     
     # Extract capacity from text if not already found
     cap_match = re.search(r'([0-9.]+)\s*(MB|GB)', output, re.I)

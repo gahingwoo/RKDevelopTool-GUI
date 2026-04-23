@@ -41,7 +41,6 @@ def update_download_tab_texts(gui):
     """Update download tab texts"""
     gui.tab_widget.setTabText(0, gui.tr("download_tab"))
 
-    gui.log_group.setTitle(gui.tr("log_progress_group"))
     gui.clear_log_btn.setText(gui.tr("clear_log_btn"))
     gui.save_log_btn.setText(gui.tr("save_log_btn"))
     gui.progress_label.setText(gui.tr("ready"))

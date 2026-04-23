@@ -282,8 +282,8 @@ def create_partition_tab(gui):
         table_font = QApplication.font()
         table_font.setPointSize(max(table_font.pointSize(), 11))
         partition_table.setFont(table_font)
-    except:
-        pass
+    except (AttributeError, RuntimeError) as e:
+        print(f"Warning: Could not set partition table font: {e}")
 
     partition_table.verticalHeader().setDefaultSectionSize(28)
     partition_table.setMinimumHeight(320)
@@ -863,7 +863,7 @@ def change_storage(gui):
         return
     
     storage_name = gui.change_storage_combo.currentText()
-    gui.log_message(f"🔄 Switching storage to {storage_name}...")
+    gui.log_message(f"[INFO] Switching storage to {storage_name}...")
     
     # Store the storage name for use in callback
     gui._storage_switch_target = storage_name
@@ -884,12 +884,12 @@ def change_storage(gui):
             """Handle storage change completion and auto-refresh partition table"""
             target_name = getattr(gui, '_storage_switch_target', 'Storage')
             if success:
-                gui.log_message(f"✅ Storage switched to {target_name}")
-                gui.log_message(f"📦 Auto-refreshing partition table...")
+                gui.log_message(f"[OK] Storage switched to {target_name}")
+                gui.log_message(f"[INFO] Auto-refreshing partition table...")
                 # Auto-refresh partition table after successful storage switch
                 operations.read_partition_table(gui)
             else:
-                gui.log_message(f"❌ Failed to switch storage: {error_msg if error_msg else 'Unknown error'}")
+                gui.log_message(f"[ERROR] Failed to switch storage: {error_msg if error_msg else 'Unknown error'}")
             # Call the original on_command_finished
             gui.on_command_finished(success, error_msg)
         
@@ -1124,9 +1124,9 @@ def write_parameter(gui):
             msg.setMinimumWidth(400)
             msg.exec()
         else:
-            gui.log_message(f"❌ {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
+            gui.log_message(f"[ERROR] {gui.tr('read_params_failed') if hasattr(gui, 'tr') else 'Failed to read device parameters'}")
     
-    gui.log_message(f"📋 {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
+    gui.log_message(f"[INFO] {gui.tr('reading_device_params') if hasattr(gui, 'tr') else 'Reading device parameters'}...")
     gui.run_command([RKTOOL, "prm"], "reading_device_params", on_finished)
 
 
@@ -1152,7 +1152,7 @@ def tag_spl(gui):
     )
     
     if not output_file:
-        gui.log_message(f"❌ SPL tagging cancelled")
+        gui.log_message(f"[ERROR] SPL tagging cancelled")
         return
     
     # Show confirmation
@@ -1166,7 +1166,7 @@ def tag_spl(gui):
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     
     if msg.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message(f"❌ SPL tagging cancelled")
+        gui.log_message(f"[ERROR] SPL tagging cancelled")
         return
     
     def on_finished(success, output):
@@ -1175,15 +1175,15 @@ def tag_spl(gui):
             try:
                 with open(output_file, 'wb') as f:
                     f.write(output.encode() if isinstance(output, str) else output)
-                gui.log_message(f"✅ SPL tagged successfully: {output_file}")
+                gui.log_message(f"[OK] SPL tagged successfully: {output_file}")
                 gui.tagspl_tag.clear()
                 gui.tagspl_spl_path.clear()
             except Exception as e:
-                gui.log_message(f"❌ Failed to write output file: {str(e)}")
+                gui.log_message(f"[ERROR] Failed to write output file: {str(e)}")
         else:
-            gui.log_message(f"❌ SPL tagging failed: {output if output else 'Unknown error'}")
+            gui.log_message(f"[ERROR] SPL tagging failed: {output if output else 'Unknown error'}")
     
-    gui.log_message(f"🏷️ Tagging SPL with tag '{tag}'...")
+    gui.log_message(f"[INFO] Tagging SPL with tag '{tag}'...")
     # tagspl only accepts 2 parameters: tag and SPL file
     gui.run_command([RKTOOL, "tagspl", tag, spl], "tagging_spl", on_finished)
 
@@ -1301,7 +1301,9 @@ def on_verify_sector_changed(gui):
 
 def toggle_debug_log(gui):
     """Toggle debug logging"""
-    pass  # Placeholder for debug log functionality
+    gui.debug_enabled = gui.enable_debug_log.isChecked()
+    status = "🟢 Enabled" if gui.debug_enabled else "🔴 Disabled"
+    gui.log_message(f"[INFO] Debug logging {status}")
 
 
 def export_system_log(gui):
@@ -1345,7 +1347,7 @@ def scan_mass_devices(gui):
 
         gui.log_message(f"🔍 {gui.tr('found_devices')}: {len(devices)}")
     except Exception as e:
-        gui.log_message(f"⚠️ {gui.tr('scan_failed')}: {e}")
+        gui.log_message(f"[WARNING] {gui.tr('scan_failed')}: {e}")
 
 
 def start_mass_production(gui):
@@ -1411,15 +1413,15 @@ def stop_mass_production(gui):
     gui.mass_start_btn.setEnabled(True)
     gui.mass_stop_btn.setEnabled(False)
     gui.mass_progress_label.setText(gui.tr("mass_production_stopped"))
-    gui.log_message("⏹️ " + gui.tr("mass_production_stopped"))
+    gui.log_message("[INFO] " + gui.tr("mass_production_stopped"))
 
 
 def on_mass_device_finished(gui, device, success, error):
     """Handle mass device completion"""
     if success:
-        gui.log_message(f"✅ [{device}] {gui.tr('success')}")
+        gui.log_message(f"[OK] [{device}] {gui.tr('success')}")
     else:
-        gui.log_message(f"❌ [{device}] {gui.tr('failure')}: {error}")
+        gui.log_message(f"[ERROR] [{device}] {gui.tr('failure')}: {error}")
 
     # Check if all done
     all_done = all(not w.isRunning() for w in gui.mass_workers)
