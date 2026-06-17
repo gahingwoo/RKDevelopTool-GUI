@@ -44,7 +44,11 @@ jobs:
 
       - name: Bundle rkdeveloptool into the .app
         run: |
+          # Nuitka names the bundle after the script (rkdevtoolgui.app); give it
+          # the friendly name and drop the bundled tool next to the executable.
+          SRC_APP="$(ls -d dist/*.app | head -1)"
           APP="dist/RKDevelopTool-GUI.app"
+          [ "$SRC_APP" = "$APP" ] || mv "$SRC_APP" "$APP"
           cp dist/rkdeveloptool "$APP/Contents/MacOS/rkdeveloptool"
           chmod +x "$APP/Contents/MacOS/rkdeveloptool"
 
@@ -85,6 +89,14 @@ jobs:
 
       - name: Build app (Nuitka onefile)
         run: python build_nuitka.py
+
+      - name: Normalize binary name
+        run: |
+          # Nuitka onefile emits rkdevtoolgui.bin on Linux; normalize the name
+          # that nfpm and the AppImage script expect.
+          if [ -f dist/rkdevtoolgui.bin ]; then mv dist/rkdevtoolgui.bin dist/rkdevtoolgui; fi
+          test -f dist/rkdevtoolgui
+          chmod +x dist/rkdevtoolgui
 
       - name: Install nfpm
         run: |
