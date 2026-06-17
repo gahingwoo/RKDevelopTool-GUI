@@ -98,18 +98,9 @@ def build_with_nuitka():
 
     system = platform.system().lower()
     patched = False
-
-    # For macOS .app bundle, patch source with absolute tool path
-    if system == "darwin":
-        tool_path = find_rkdeveloptool()
-        if tool_path:
-            print(f"Found rkdeveloptool at: {tool_path}")
-            patched = patch_source_with_tool_path(tool_path)
-            if not patched:
-                print("Building without patched path - tool may not work in .app")
-        else:
-            print("rkdeveloptool not found - .app may not function properly")
-            print("Install it with: brew install rkdeveloptool")
+    # Note: the app locates rkdeveloptool at runtime (see utils._find_rkdeveloptool),
+    # preferring a copy bundled next to the executable, so no source patching is
+    # needed here. Drop the bundled binary into the build output to ship it.
 
     try:
         # Base compilation command

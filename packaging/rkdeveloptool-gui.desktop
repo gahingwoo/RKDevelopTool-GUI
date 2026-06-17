@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RKDevelopTool GUI
+Comment=Flash and manage Rockchip devices
+Exec=rkdeveloptool-gui
+Icon=rkdeveloptool-gui
+Categories=Utility;Development;
+Terminal=false

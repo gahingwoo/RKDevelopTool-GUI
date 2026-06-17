@@ -27,22 +27,32 @@ RKDevelopTool GUI is a graphical front-end for Rockchip's official rkdeveloptool
 
 ---
 
-## Requirements
+## Download (recommended)
 
-- Python 3.8 or later
-- PySide6 (Qt 6 for Python)
-- `rkdeveloptool` (must be installed and added to PATH)
+Prebuilt packages are attached to every [GitHub Release](https://github.com/gahingwoo/RKDevelopTool-GUI/releases).
+They **bundle `rkdeveloptool`**, so there is nothing else to install.
 
-To verify `rkdeveloptool` is properly installed:
-```bash
-rkdeveloptool --version
-```
+| Platform | File |
+| --- | --- |
+| macOS (Apple Silicon) | `RKDevelopTool-GUI-arm64.dmg` |
+| macOS (Intel) | `RKDevelopTool-GUI-x86_64.dmg` |
+| Linux (portable) | `RKDevelopTool-GUI-*-x86_64.AppImage` |
+| Debian/Ubuntu | `rkdeveloptool-gui_*.deb` |
+| Fedora/openSUSE | `rkdeveloptool-gui-*.rpm` |
 
-For `rkdeveloptool` installation instructions, see the [Rockchip documentation](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool).
+> **macOS note:** the app is not notarized yet, so on first launch macOS may say
+> it "cannot be opened". Right-click the app → **Open** → **Open**, or run
+> `xattr -dr com.apple.quarantine /Applications/RKDevelopTool-GUI.app`.
 
 ---
 
-## Installation
+## Running from source
+
+If you run from source instead of a prebuilt package, you need:
+
+- Python 3.8 or later, PySide6 (Qt 6 for Python)
+- `rkdeveloptool` installed and on PATH — verify with `rkdeveloptool --version`
+  ([installation instructions](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool))
 
 ### From Source
 

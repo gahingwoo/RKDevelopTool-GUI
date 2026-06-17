@@ -6,7 +6,7 @@
 
 [project]
 name = "rkdeveloptool-gui"
-version = "1.0.0"
+version = "5.0.0"
 description = "Cross-platform graphical front-end for Rockchip's rkdeveloptool"
 readme = "README.md"
 requires-python = ">=3.8"

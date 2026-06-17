@@ -3,10 +3,53 @@ Utility functions and helpers for RKDevelopTool GUI
 """
 import re
 import os
+import sys
+import shutil
 import hashlib
 import subprocess
 
-RKTOOL = "rkdeveloptool"
+
+def _candidate_tool_dirs():
+    """Directories that may hold a bundled rkdeveloptool, most specific first."""
+    dirs = []
+    # Next to the running (frozen) executable, e.g. .app Contents/MacOS,
+    # AppImage AppRun dir, or the onefile extraction dir.
+    try:
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        dirs += [exe_dir, os.path.join(exe_dir, "bin"),
+                 os.path.normpath(os.path.join(exe_dir, "..", "Resources"))]
+    except Exception:
+        pass
+    # Next to this source module (running from a checkout).
+    try:
+        mod_dir = os.path.dirname(os.path.abspath(__file__))
+        dirs += [mod_dir, os.path.join(mod_dir, "bin")]
+    except Exception:
+        pass
+    # AppImage mount point.
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        dirs += [os.path.join(appdir, "usr", "bin"),
+                 os.path.join(appdir, "usr", "lib", "rkdeveloptool-gui")]
+    # System install location used by the .deb / .rpm packages.
+    dirs += ["/usr/lib/rkdeveloptool-gui", "/usr/libexec/rkdeveloptool-gui"]
+    return dirs
+
+
+def _find_rkdeveloptool():
+    """Locate rkdeveloptool: explicit override, bundled copy, then PATH."""
+    override = os.environ.get("RKDEVELOPTOOL_BIN")
+    if override and os.path.isfile(override) and os.access(override, os.X_OK):
+        return override
+    name = "rkdeveloptool.exe" if os.name == "nt" else "rkdeveloptool"
+    for d in _candidate_tool_dirs():
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return shutil.which("rkdeveloptool") or "rkdeveloptool"
+
+
+RKTOOL = _find_rkdeveloptool()
 
 # Chip ID mapping (common Rockchip IDs)
 CHIP_ID_MAP = {

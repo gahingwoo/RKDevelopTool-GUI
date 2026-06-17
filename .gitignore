@@ -14,6 +14,13 @@ dist/
 *.dist/
 *.onefile-build/
 
+# Packaging output
+AppDir/
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
 # Runtime logs
 log/
 *.log
