@@ -7,6 +7,7 @@ Updates all UI text when language is changed
 def update_all_ui_text(gui):
     """Update all UI text based on current language"""
     update_window_and_device_texts(gui)
+    update_home_tab_texts(gui)
     update_download_tab_texts(gui)
     update_partition_tab_texts(gui)
     update_parameter_tab_texts(gui)
@@ -37,9 +38,29 @@ def update_window_and_device_texts(gui):
     gui.read_flash_info_btn.setText(gui.tr("read_flash_info_btn"))
 
 
+def update_home_tab_texts(gui):
+    """Update home tab texts and the equivalent-command bar."""
+    gui.tab_widget.setTabText(0, gui.tr("home_tab"))
+
+    gui.home_cards_label.setText(gui.tr("home_tasks_label"))
+    gui.home_flash_card.setText(gui.tr("home_card_flash"))
+    gui.home_backup_card.setText(gui.tr("home_card_backup"))
+    gui.home_partition_card.setText(gui.tr("home_card_partition"))
+    gui.home_maskrom_card.setText(gui.tr("home_card_maskrom"))
+    gui.home_guide_group.setTitle(gui.tr("home_guide_title"))
+    gui.home_guide_text.setText(gui.tr("home_guide_body"))
+
+    # Equivalent-command bar
+    gui.equiv_command_label.setText(gui.tr("equiv_command_label"))
+    gui.equiv_command_copy_btn.setText(gui.tr("copy_btn"))
+
+    # Reflect current connection state in the banner
+    gui.update_device_status()
+
+
 def update_download_tab_texts(gui):
     """Update download tab texts"""
-    gui.tab_widget.setTabText(0, gui.tr("download_tab"))
+    gui.tab_widget.setTabText(1, gui.tr("download_tab"))
 
     gui.clear_log_btn.setText(gui.tr("clear_log_btn"))
     gui.save_log_btn.setText(gui.tr("save_log_btn"))
@@ -78,7 +99,7 @@ def update_download_tab_texts(gui):
 
 def update_partition_tab_texts(gui):
     """Update partition tab texts"""
-    gui.tab_widget.setTabText(1, gui.tr("partition_tab"))
+    gui.tab_widget.setTabText(2, gui.tr("partition_tab"))
 
     gui.partition_list_group.setTitle(gui.tr("partition_info_group"))
     gui.partition_table.setHorizontalHeaderLabels([
@@ -110,7 +131,7 @@ def update_partition_tab_texts(gui):
 
 def update_parameter_tab_texts(gui):
     """Update parameter tab texts"""
-    gui.tab_widget.setTabText(2, gui.tr("parameter_tab"))
+    gui.tab_widget.setTabText(3, gui.tr("parameter_tab"))
 
     gui.burn_params_group.setTitle(gui.tr("burn_params_group"))
     gui.verify_after_burn.setText(gui.tr("verify_after_burn"))
@@ -130,7 +151,7 @@ def update_parameter_tab_texts(gui):
 
 def update_upgrade_tab_texts(gui):
     """Update upgrade/pack tab texts"""
-    gui.tab_widget.setTabText(3, gui.tr("upgrade_tab"))
+    gui.tab_widget.setTabText(4, gui.tr("upgrade_tab"))
 
     gui.pack_group.setTitle(gui.tr("firmware_upgrade_group"))
     gui.pack_label.setText(gui.tr("pack_label"))
@@ -159,7 +180,7 @@ def update_upgrade_tab_texts(gui):
 
 def update_advanced_tab_texts(gui):
     """Update advanced tab texts"""
-    gui.tab_widget.setTabText(4, gui.tr("advanced_tab"))
+    gui.tab_widget.setTabText(5, gui.tr("advanced_tab"))
 
     gui.flash_ops_group.setTitle(gui.tr("flash_ops_group"))
 
@@ -191,7 +212,7 @@ def update_advanced_tab_texts(gui):
 
     # Boot operations (Week 6)
     if hasattr(gui, 'boot_group') and gui.boot_group:
-        gui.boot_group.setTitle("🔧 Boot 文件操作" if gui.manager.lang == "zh" else "Boot File Operations")
+        gui.boot_group.setTitle("Boot 文件操作" if gui.manager.lang == "zh" else "Boot File Operations")
         if hasattr(gui, 'download_boot_btn') and gui.download_boot_btn:
             gui.download_boot_btn.setText(gui.tr("download_boot_btn"))
         if hasattr(gui, 'upload_boot_btn') and gui.upload_boot_btn:
@@ -222,7 +243,7 @@ def update_statusbar_texts(gui):
     gui.statusBar().showMessage(
         f"{gui.tr('ready_status')}{gui.tr('status_line_delimiter')}{gui.tr('not_connected_status')}"
     )
-    gui.connection_status.setText(f"⚪ {gui.tr('not_connected')}")
+    gui.connection_status.setText(f"{gui.tr('not_connected')}")
     gui.update_device_status()
 
 

@@ -380,7 +380,7 @@ def parse_capability(output: str) -> dict:
 
 def format_capability_info(capability: dict) -> str:
     """Format capability information as readable text"""
-    lines = ["📋 Device Capability Information:\n"]
+    lines = ["Device Capability Information:\n"]
     
     if 'chip_name' in capability:
         lines.append(f"  Chip: {capability['chip_name']}")
@@ -411,7 +411,7 @@ def format_capability_info(capability: dict) -> str:
 
 def format_flash_info_detailed(flash_info: dict) -> str:
     """Format flash information as detailed readable text"""
-    lines = ["📦 Detailed Flash Information:\n"]
+    lines = ["Detailed Flash Information:\n"]
     
     # Basic info
     if 'flash_type' in flash_info:
@@ -515,46 +515,42 @@ def parse_security_info(output: str) -> dict:
 
 def format_security_info(security: dict) -> str:
     """Format security information as readable text"""
-    lines = ["🔒 Device Security Information:\n"]
+    lines = ["Device Security Information:\n"]
     
     # Secure Boot Status
     if 'secure_boot_status' in security:
-        icon = "🔒" if security.get('secure_boot') else "🔓"
-        lines.append(f"  {icon} Secure Boot: {security['secure_boot_status']}")
-    
+        lines.append(f"  Secure Boot: {security['secure_boot_status']}")
+
     # Device Lock Status
     if 'device_lock_status' in security:
-        icon = "🔐" if security.get('device_locked') else "🔓"
-        lines.append(f"  {icon} Device Lock: {security['device_lock_status']}")
+        lines.append(f"  Device Lock: {security['device_lock_status']}")
     
     # Bootloader Version
     if 'bootloader_version' in security:
-        lines.append(f"  📦 Bootloader Version: {security['bootloader_version']}")
+        lines.append(f"Bootloader Version: {security['bootloader_version']}")
     
     # ROM Version
     if 'rom_version' in security:
-        lines.append(f"  📦 ROM Version: {security['rom_version']}")
+        lines.append(f"ROM Version: {security['rom_version']}")
     
     # Write Protection
     if 'write_protection_status' in security:
-        icon = "✅" if security.get('write_protection') else "❌"
-        lines.append(f"  {icon} Write Protection: {security['write_protection_status']}")
-    
+        lines.append(f"  Write Protection: {security['write_protection_status']}")
+
     # Read Protection
     if 'read_protection_status' in security:
-        icon = "✅" if security.get('read_protection') else "❌"
-        lines.append(f"  {icon} Read Protection: {security['read_protection_status']}")
+        lines.append(f"  Read Protection: {security['read_protection_status']}")
     
     # Security Modes
     if 'security_modes' in security:
-        lines.append(f"  🛡️ Security Modes: {security['security_modes']}")
+        lines.append(f"Security Modes: {security['security_modes']}")
     
     # Add warnings if needed
     lines.append("")
     if security.get('secure_boot'):
-        lines.append("  ⚠️ Secure Boot is ENABLED - Some operations may be restricted")
+        lines.append("Secure Boot is ENABLED - Some operations may be restricted")
     if security.get('device_locked'):
-        lines.append("  ⚠️ Device is LOCKED - Unlocking required for certain operations")
+        lines.append("Device is LOCKED - Unlocking required for certain operations")
     
     return '\n'.join(lines)
 
@@ -566,23 +562,23 @@ def format_test_results(test_state: dict) -> str:
     failed = test_state['failed_count']
     success_rate = (success / total * 100) if total > 0 else 0
     
-    lines = ["📊 Connection Stability Test Results:\n"]
+    lines = ["Connection Stability Test Results:\n"]
     lines.append(f"  Total Tests: {total}")
-    lines.append(f"  ✅ Successful: {success}")
-    lines.append(f"  ❌ Failed: {failed}")
-    lines.append(f"  📈 Success Rate: {success_rate:.1f}%")
+    lines.append(f"Successful: {success}")
+    lines.append(f"Failed: {failed}")
+    lines.append(f"Success Rate: {success_rate:.1f}%")
     
     if success_rate >= 95:
-        lines.append("\n  🎉 Excellent! Connection is very stable")
+        lines.append("\nExcellent! Connection is very stable")
     elif success_rate >= 80:
-        lines.append("\n  ✅ Good connection stability")
+        lines.append("\nGood connection stability")
     elif success_rate >= 60:
-        lines.append("\n  ⚠️ Connection has some instability - consider checking USB cable/port")
+        lines.append("\nConnection has some instability - consider checking USB cable/port")
     else:
-        lines.append("\n  ❌ Poor connection stability - check USB connection and try again")
+        lines.append("\nPoor connection stability - check USB connection and try again")
     
     if test_state.get('errors'):
-        lines.append("\n  📝 Errors:")
+        lines.append("\nErrors:")
         for error in test_state['errors'][:3]:  # Show first 3 errors
             lines.append(f"    - {error}")
         if len(test_state['errors']) > 3:

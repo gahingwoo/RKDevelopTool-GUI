@@ -38,8 +38,8 @@ def patch_source_with_tool_path(tool_path):
     if not tool_path:
         return False
 
-    source_file = "utils.py"
-    backup_file = "utils.py.backup"
+    source_file = os.path.join("rkdeveloptool-gui", "utils.py")
+    backup_file = os.path.join("rkdeveloptool-gui", "utils.py.backup")
 
     # Create backup
     shutil.copy2(source_file, backup_file)
@@ -58,7 +58,7 @@ def patch_source_with_tool_path(tool_path):
             with open(source_file, 'w', encoding='utf-8') as f:
                 f.write(content)
 
-            print(f"Patched utils.py with tool path: {tool_path}")
+            print(f"Patched {source_file} with tool path: {tool_path}")
             return True
         else:
             print(f"Could not find line to patch in {source_file}")
@@ -74,8 +74,8 @@ def patch_source_with_tool_path(tool_path):
 
 def restore_source():
     """Restore original source file"""
-    backup_file = "utils.py.backup"
-    source_file = "utils.py"
+    backup_file = os.path.join("rkdeveloptool-gui", "utils.py.backup")
+    source_file = os.path.join("rkdeveloptool-gui", "utils.py")
 
     if os.path.exists(backup_file):
         shutil.copy2(backup_file, source_file)
@@ -138,14 +138,13 @@ def build_with_nuitka():
                 "--onefile",
             ])
 
-        # Include necessary files
-        if os.path.exists("i18n.py"):
-            cmd.extend(["--include-data-file=./i18n.py=i18n.py"])
-        if os.path.exists("readme.md"):
-            cmd.extend(["--include-data-file=./readme.md=readme.md"])
+        # Bundle the package's runtime assets (fonts, etc.)
+        assets_dir = os.path.join("rkdeveloptool-gui", "assets")
+        if os.path.isdir(assets_dir) and os.listdir(assets_dir):
+            cmd.append(f"--include-data-dir={assets_dir}=rkdeveloptool-gui/assets")
 
-        # Add main script
-        cmd.append("rkdevtoolgui.py")
+        # Add main script (pulls in the sibling modules via --follow-imports)
+        cmd.append(os.path.join("rkdeveloptool-gui", "rkdevtoolgui.py"))
 
         # Execute compilation
         print(f"Building RKDevelopTool-GUI ({platform.system()})...")
@@ -160,7 +159,7 @@ def build_with_nuitka():
                 if item.is_dir() and item.suffix == ".app":
                     print(f"Output: {item.name} (macOS App Bundle)")
                     print(f"Location: dist/{item.name}")
-                elif item.is_file() and item.name == "rkdevtoolgui":
+                elif item.is_file() and item.name in ("rkdevtoolgui", "rkdevtoolgui.bin"):
                     size = item.stat().st_size / (1024 * 1024)  # MB
                     print(f"Output: {item.name} ({size:.2f} MB)")
                     print(f"Location: dist/{item.name}")

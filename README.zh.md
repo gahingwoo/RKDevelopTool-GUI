@@ -1,12 +1,12 @@
 # RKDevelopTool GUI
 
-English | [中文](readme.md)
+[English](README.md) | 中文
 
 RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在为用户提供一个直观易用的界面，简化固件烧录、分区管理和设备调试的操作流程。
 
 **GitHub:** https://github.com/gahingwoo/RKDevelopTool-GUI
 
-![项目界面截图](images/home_zh.png)  
+![项目界面截图](docs/images/home_zh.png)  
 *RKDevelopTool GUI 主界面*
 
 ## 功能特性

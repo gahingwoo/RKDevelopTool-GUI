@@ -1,0 +1,27 @@
+# Project metadata and tool configuration.
+#
+# The application runs as plain scripts from the rkdeveloptool-gui/ directory
+# (see README) and is distributed via AUR, so there is no importable Python
+# package / pip entry point here.
+
+[project]
+name = "rkdeveloptool-gui"
+version = "1.0.0"
+description = "Cross-platform graphical front-end for Rockchip's rkdeveloptool"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [{ name = "gahingwoo" }]
+keywords = ["rockchip", "rkdeveloptool", "firmware", "flashing", "gui", "qt"]
+dependencies = ["PySide6>=6.5.0"]
+
+[project.optional-dependencies]
+build = ["nuitka>=1.8.0"]
+dev = ["pytest>=7.4.0", "pytest-qt>=4.2.0", "black>=23.0.0", "flake8>=6.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/gahingwoo/RKDevelopTool-GUI"
+Issues = "https://github.com/gahingwoo/RKDevelopTool-GUI/issues"
+
+[tool.black]
+line-length = 100

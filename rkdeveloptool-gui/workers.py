@@ -133,41 +133,21 @@ class CommandWorker(QThread):
             env['NO_COLOR'] = '1'  # Disable color output (standard convention)
             env['CLICOLOR'] = '0'  # Disable color for BSD tools
             env['CLICOLOR_FORCE'] = '0'  # Disable forced color
-            
-            process = subprocess.Popen(
-                self.cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                universal_newlines=True,
-                env=env
-            )
 
-            self._process = process
-            line_buffer = ""
             self.output = ""  # Reset output buffer
             self.chunk_buffer = ""
+            self.last_logged_progress = -1
+            self.last_logged_line = ""
 
-            # Read output line by line for real-time streaming
-            while True:
-                char = process.stdout.read(1)
-                if not char:
-                    # Process final buffered content if any
-                    if line_buffer:
-                        self._process_line(line_buffer)
-                    if self.chunk_buffer:
-                        self._flush_chunk_buffer()
-                    break
-                
-                line_buffer += char
-                self.output += char  # Accumulate output
-                
-                # Process when we get a complete line or carriage return
-                if char == '\n' or char == '\r':
-                    self._process_line(line_buffer)
-                    line_buffer = ""
+            # rkdeveloptool fully buffers its stdout when it isn't attached to a
+            # terminal, so progress (e.g. "Write LBA from file (NN%)") only
+            # arrives in one burst at the end -> the bar jumps 0 -> 100. Run it
+            # under a pseudo-terminal on POSIX so it streams progress live.
+            if os.name == 'posix':
+                returncode = self._run_with_pty(env)
+            else:
+                returncode = self._run_with_pipe(env)
 
-            returncode = process.wait()
             if returncode == 0:
                 self.log.emit(f"[OK] {description} {self.tr('success')}")
                 # Only emit 100% if we haven't already reached it
@@ -185,6 +165,79 @@ class CommandWorker(QThread):
             self.log.emit(f"[ERROR] {description} {self.tr('abnormal_execution')}{error_msg}")
             self.progress.emit(0)
             self.finished_signal.emit(False, error_msg)
+
+    def _consume(self, text, line_buffer):
+        """Feed raw output text, flushing a line on each newline/carriage return."""
+        for ch in text:
+            self.output += ch
+            if ch == '\n' or ch == '\r':
+                self._process_line(line_buffer)
+                line_buffer = ""
+            else:
+                line_buffer += ch
+        return line_buffer
+
+    def _run_with_pty(self, env):
+        """Run the command attached to a pseudo-terminal for live output."""
+        import pty
+        master_fd, slave_fd = pty.openpty()
+        process = subprocess.Popen(
+            self.cmd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+            close_fds=True,
+        )
+        self._process = process
+        os.close(slave_fd)  # parent only reads from the master end
+
+        line_buffer = ""
+        try:
+            while True:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError:
+                    # Linux raises EIO on the master once the child exits.
+                    break
+                if not data:
+                    # macOS signals EOF with an empty read.
+                    break
+                line_buffer = self._consume(data.decode('utf-8', errors='replace'), line_buffer)
+        finally:
+            if line_buffer:
+                self._process_line(line_buffer)
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+
+        return process.wait()
+
+    def _run_with_pipe(self, env):
+        """Fallback streaming via a regular pipe (e.g. on Windows)."""
+        process = subprocess.Popen(
+            self.cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            universal_newlines=True,
+            env=env,
+        )
+        self._process = process
+
+        line_buffer = ""
+        while True:
+            char = process.stdout.read(1)
+            if not char:
+                if line_buffer:
+                    self._process_line(line_buffer)
+                if self.chunk_buffer:
+                    self._flush_chunk_buffer()
+                break
+            line_buffer = self._consume(char, line_buffer)
+
+        return process.wait()
 
     def _process_line(self, line):
         """Process a single line of output - remove ANSI codes and parse progress"""

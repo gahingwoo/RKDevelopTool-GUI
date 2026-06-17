@@ -160,7 +160,7 @@ class ThemeManager:
             palette = create_light_palette()
         else:
             palette = create_dark_palette()
-        
+
         self.app.setPalette(palette)
     
     def set_style(self, style_name):

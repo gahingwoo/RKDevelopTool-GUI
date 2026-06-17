@@ -1,12 +1,12 @@
 # RKDevelopTool GUI
 
-[中文](readme.zh.md) | English
+[中文](README.zh.md) | English
 
 RKDevelopTool GUI is a graphical front-end for Rockchip's official rkdeveloptool. It provides an intuitive interface to perform firmware flashing, partition management, and device debugging tasks without using the command line.
 
 **GitHub:** https://github.com/gahingwoo/RKDevelopTool-GUI
 
-![App Screenshot](images/home_en.png)  
+![App Screenshot](docs/images/home_en.png)  
 *RKDevelopTool GUI Main Interface*
 
 ## Features

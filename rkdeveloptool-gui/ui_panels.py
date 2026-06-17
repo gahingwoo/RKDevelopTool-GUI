@@ -17,6 +17,87 @@ from widgets import AutoLoadCombo
 import operations
 
 
+def create_home_tab(gui):
+    """Create a task-oriented home tab.
+
+    Instead of confronting the user with every rkdeveloptool command at once,
+    this surfaces the handful of things people actually come to do, as large
+    cards that jump straight to the right place. Newbies get orientation;
+    experts can ignore it and go to the relevant tab directly.
+    """
+    widget = QWidget()
+    layout = QVBoxLayout(widget)
+
+    # Connection status banner
+    status_banner = QLabel()
+    status_banner.setObjectName("home_status_banner")
+    status_banner.setWordWrap(True)
+    status_banner.setStyleSheet("QLabel { padding: 4px 2px; font-weight: bold; }")
+    layout.addWidget(status_banner)
+
+    # Task cards
+    cards_label = QLabel()
+    cards_label.setStyleSheet("QLabel { font-weight: bold; padding: 6px 2px; }")
+    layout.addWidget(cards_label)
+
+    cards_grid = QGridLayout()
+    cards_grid.setSpacing(12)
+
+    def make_card(cls, on_click):
+        btn = QPushButton()
+        if cls:
+            btn.setProperty("class", cls)
+        # Comfortable, fixed-ish size; the surrounding stretches center the
+        # whole block vertically so leftover space isn't dumped at the bottom.
+        btn.setMinimumHeight(64)
+        btn.setMaximumHeight(80)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        btn.clicked.connect(safe_slot(on_click))
+        return btn
+
+    def goto_download():
+        gui.tab_widget.setCurrentWidget(gui.download_tab)
+        gui.firmware_path.setFocus()
+
+    def goto_partition():
+        gui.tab_widget.setCurrentWidget(gui.partition_tab)
+        operations.read_partition_table(gui)
+
+    flash_card = make_card("success", goto_download)
+    backup_card = make_card("primary", lambda: operations.backup_firmware(gui))
+    partition_card = make_card("", goto_partition)
+    maskrom_card = make_card("warning", lambda: operations.enter_maskrom_mode(gui))
+
+    cards_grid.addWidget(flash_card, 0, 0)
+    cards_grid.addWidget(backup_card, 0, 1)
+    cards_grid.addWidget(partition_card, 1, 0)
+    cards_grid.addWidget(maskrom_card, 1, 1)
+    layout.addLayout(cards_grid)
+
+    # Newbie guidance: the 3-step flashing flow
+    guide_group = QGroupBox()
+    guide_layout = QVBoxLayout()
+    guide_text = QLabel()
+    guide_text.setWordWrap(True)
+    guide_text.setTextFormat(Qt.TextFormat.RichText)
+    guide_layout.addWidget(guide_text)
+    guide_group.setLayout(guide_layout)
+    layout.addWidget(guide_group)
+    layout.addStretch(1)
+
+    widgets = {
+        'status_banner': status_banner,
+        'cards_label': cards_label,
+        'flash_card': flash_card,
+        'backup_card': backup_card,
+        'partition_card': partition_card,
+        'maskrom_card': maskrom_card,
+        'guide_group': guide_group,
+        'guide_text': guide_text,
+    }
+    return widget, widgets
+
+
 def create_device_panel(gui):
     """Create device status panel"""
     group = QGroupBox()
@@ -940,7 +1021,7 @@ def on_flash_id_read(gui, success):
     flash_info = parse_flash_info(log_text)
 
     if flash_info:
-        info_text = "🔍 Flash Information:\n"
+        info_text = "Flash Information:\n"
         if 'manufacturer' in flash_info:
             info_text += f"  Manufacturer: {flash_info['manufacturer']}\n"
         if 'id' in flash_info:
@@ -966,7 +1047,7 @@ def on_flash_info_read(gui, success):
     flash_info = parse_flash_info(log_text)
 
     if flash_info:
-        info_text = "📊 Detailed Flash Info:\n"
+        info_text = "Detailed Flash Info:\n"
         if 'manufacturer' in flash_info:
             info_text += f"  Manufacturer: {flash_info['manufacturer']}\n"
         if 'id' in flash_info:
@@ -1302,7 +1383,7 @@ def on_verify_sector_changed(gui):
 def toggle_debug_log(gui):
     """Toggle debug logging"""
     gui.debug_enabled = gui.enable_debug_log.isChecked()
-    status = "🟢 Enabled" if gui.debug_enabled else "🔴 Disabled"
+    status = "Enabled" if gui.debug_enabled else "Disabled"
     gui.log_message(f"[INFO] Debug logging {status}")
 
 
@@ -1345,7 +1426,7 @@ def scan_mass_devices(gui):
         for device in devices:
             gui.mass_device_list.addItem(device)
 
-        gui.log_message(f"🔍 {gui.tr('found_devices')}: {len(devices)}")
+        gui.log_message(f"{gui.tr('found_devices')}: {len(devices)}")
     except Exception as e:
         gui.log_message(f"[WARNING] {gui.tr('scan_failed')}: {e}")
 

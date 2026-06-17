@@ -137,9 +137,9 @@ def backup_firmware(gui):
         detail_text = f"""
 {gui.tr("backup_confirmation_message")}
 
-💾 {gui.tr("flash_capacity")}: {size_display}
-📊 {gui.tr("total_sectors")}: {sectors:,} ({length_arg})
-📁 {gui.tr("save_to")}: {os.path.basename(save_path)}
+{gui.tr("flash_capacity")}: {size_display}
+{gui.tr("total_sectors")}: {sectors:,} ({length_arg})
+{gui.tr("save_to")}: {os.path.basename(save_path)}
 
 {gui.tr("backup_time_warning")}
         """
@@ -160,7 +160,7 @@ def backup_firmware(gui):
     text, ok = QInputDialog.getText(
         gui,
         gui.tr('enter_backup_length_title'),
-        gui.tr('enter_backup_length_prompt') + f"\n\n💡 {gui.tr('format_examples')}"
+        gui.tr('enter_backup_length_prompt') + f"\n\n{gui.tr('format_examples')}"
     )
 
     if not ok or not text:
@@ -494,12 +494,12 @@ def confirm_burn_operation(gui, file_path, address):
         detail_text = f"""
 {gui.tr("burn_confirmation_message")}
 
-📁 {gui.tr("file_name")}: {file_name}
-📊 {gui.tr("file_size")}: {size_str} ({file_size:,} bytes)
-📍 {gui.tr("target_address")}: {address}
-🔐 MD5: {md5sum}
+{gui.tr("file_name")}: {file_name}
+{gui.tr("file_size")}: {size_str} ({file_size:,} bytes)
+{gui.tr("target_address")}: {address}
+MD5: {md5sum}
 
-💾 {gui.tr("storage_type")}: {current_storage_name} ({storage_info.get('type', 'Unknown')})
+{gui.tr("storage_type")}: {current_storage_name} ({storage_info.get('type', 'Unknown')})
 
 {gui.tr("confirm_proceed")}
         """
@@ -597,13 +597,13 @@ def detect_supported_storage_types(gui):
                                 'enabled': True
                             }
                             available.append(f"{info['name']} ({code})")
-                            gui.log_message(f"✓ Storage {code}: {info['name']}")
+                            gui.log_message(f"Storage {code}: {info['name']}")
                         else:
                             # Only log if explicitly not available
                             if has_not_available:
-                                gui.log_message(f"✗ Storage {code}: {info['name']} not available")
+                                gui.log_message(f"Storage {code}: {info['name']} not available")
                     except Exception as e:
-                        gui.log_message(f"✗ Storage {code} error: {str(e)[:50]}")
+                        gui.log_message(f"Storage {code} error: {str(e)[:50]}")
                 
                 if available:
                     gui.log_message(f"[INFO] Detected {len(available)} storage type(s): {', '.join(available)}")
@@ -712,7 +712,7 @@ def read_flash_id(gui):
             gui._flash_id_info = flash_id_info
             
             # Build info text
-            info_text = "📦 Flash ID Information:\n\n"
+            info_text = "Flash ID Information:\n\n"
             if 'manufacturer' in flash_id_info:
                 info_text += f"  Manufacturer: {flash_id_info['manufacturer']}\n"
             if 'manufacturer_id' in flash_id_info:
@@ -803,7 +803,7 @@ def _display_flash_info_dialog(gui):
         flash_info = gui._cached_flash_info
         
         # Build detailed info text
-        info_text = "📦 Detailed Flash Information:\n\n"
+        info_text = "Detailed Flash Information:\n\n"
         
         # Basic information
         if 'manufacturer' in flash_info:
@@ -916,7 +916,7 @@ def test_device_connection(gui, test_count=10):
             
             # Update log with progress
             progress = f"[{test_state['current']}/{test_state['total']}] "
-            status = "✅" if success else "❌"
+            status = "[OK]" if success else "[FAIL]"
             gui.log_message(f"{progress}{status} Connection test {test_state['current']}")
             
             # Continue to next test
@@ -925,7 +925,7 @@ def test_device_connection(gui, test_count=10):
         gui.run_command([RKTOOL, "td"], f"testing_device({test_state['current']}/{test_state['total']})", 
                        on_test_finished)
     
-    gui.log_message(f"🔍 Starting connection stability test ({test_count} iterations)...")
+    gui.log_message(f"Starting connection stability test ({test_count} iterations)...")
     run_single_test()
 
 
@@ -945,7 +945,7 @@ def erase_partition(gui, partition_name):
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr("erase_partition_warning_title"))
     msg.setIcon(QMessageBox.Icon.Warning)
-    msg.setText(f"⚠️ {gui.tr('erase_partition_warning_message')}\n\n"
+    msg.setText(f"{gui.tr('erase_partition_warning_message')}\n\n"
                 f"Partition: {partition_name}\n\n"
                 f"This operation cannot be undone!")
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
@@ -1181,7 +1181,7 @@ def import_gpt_table(gui):
     msg1.setIcon(QMessageBox.Icon.Warning)
     msg1.setText(
         gui.tr("import_gpt_warning") if hasattr(gui, 'tr') else
-        "⚠️ WARNING: Importing a new GPT table will modify the device partition structure!\n\n"
+        "WARNING: Importing a new GPT table will modify the device partition structure!\n\n"
         "This operation is potentially dangerous. Make sure you know what you're doing.\n\n"
         "Do you want to continue?"
     )
