@@ -35,21 +35,49 @@ class TranslationManager:
 
     @staticmethod
     def detect_system_language():
+        # NOTE: do NOT use locale.getdefaultlocale() here. It is deprecated and,
+        # when compiled with Nuitka on Python 3.14, emitting its DeprecationWarning
+        # crashes (SystemError: bad argument to internal function -> segfault).
+        # Detect the language from the standard locale environment variables
+        # instead (this is what getdefaultlocale did internally on POSIX).
         try:
-            system_lang = locale.getdefaultlocale()[0]
-            
+            system_lang = None
+
+            for var in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+                value = os.environ.get(var)
+                if value and value not in ("C", "POSIX"):
+                    # LANGUAGE can be a colon-separated list; take the first
+                    system_lang = value.split(":")[0]
+                    break
+
+            # Fallback to the configured locale (non-deprecated call)
+            if not system_lang:
+                try:
+                    system_lang = locale.getlocale()[0]
+                except Exception:
+                    system_lang = None
+
+            # Windows: ask the OS for the UI language
+            if not system_lang and sys.platform == "win32":
+                try:
+                    import ctypes
+                    lcid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+                    system_lang = locale.windows_locale.get(lcid)
+                except Exception:
+                    system_lang = None
+
             if system_lang:
-                # get the language code (e.g., 'en' from 'en_US')
-                lang_code = system_lang.split('_')[0].lower()
-                
+                # get the language code (e.g., 'en' from 'en_US.UTF-8')
+                lang_code = system_lang.split('.')[0].split('_')[0].lower()
+
                 # only support Chinese and English, default to Chinese if not supported
                 supported_langs = {'zh', 'en'}
-                
+
                 if lang_code in supported_langs:
                     return lang_code
         except Exception as e:
             print(f"Failed to detect system language: {e}")
-        
+
         # Return Chinese as default if detection fails or language not supported
         return 'zh'
 
