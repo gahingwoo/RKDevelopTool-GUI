@@ -7,6 +7,14 @@ import os
 import tempfile
 import math
 import locale
+import warnings
+
+# Nuitka-compiled builds on Python 3.14 can crash inside CPython's warnings
+# machinery (SystemError: funcobject.c:446 -> segfault) when a warning is
+# emitted. Silence warnings only in the compiled binary so the GUI starts
+# reliably; source runs keep their warnings for development.
+if "__compiled__" in globals():
+    warnings.simplefilter("ignore")
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase
