@@ -1,8 +1,24 @@
 # Project metadata and tool configuration.
 #
-# The application runs as plain scripts from the rkdeveloptool-gui/ directory
-# (see README) and is distributed via AUR, so there is no importable Python
-# package / pip entry point here.
+# === Primary build: standard Python wheel ===
+#   pip install build && python -m build --wheel
+# The wheel installs the console script ``rkdevtoolgui`` into the active Python
+# prefix (e.g. /usr/bin/rkdevtoolgui on a system install).
+#
+# === Optional: standalone binary via Nuitka ===
+#   pip install "rkdeveloptool-gui[nuitka]" && python build_nuitka.py
+# This is only useful when a self-contained executable is needed; it is not
+# required to build or install the project itself.
+#
+# Because the source directory name contains a hyphen ("rkdeveloptool-gui/"),
+# which is not a valid Python identifier, setuptools maps it to the
+# importable package name "rkdeveloptool_gui" via [tool.setuptools.package-dir].
+# All intra-package imports use explicit relative imports (``from .utils`` etc.)
+# so the package works correctly when installed into site-packages.
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkdeveloptool-gui"
@@ -10,18 +26,47 @@ version = "5.0.0"
 description = "Cross-platform graphical front-end for Rockchip's rkdeveloptool"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "gahingwoo" }]
 keywords = ["rockchip", "rkdeveloptool", "firmware", "flashing", "gui", "qt"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Manufacturing",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
 dependencies = ["PySide6>=6.5.0"]
 
+[project.scripts]
+rkdeveloptool-gui = "rkdeveloptool_gui.rkdevtoolgui:main"
+
 [project.optional-dependencies]
-build = ["nuitka>=1.8.0"]
+linux = ["dbus-python>=1.2.0"]
+nuitka = ["nuitka>=1.8.0"]
 dev = ["pytest>=7.4.0", "pytest-qt>=4.2.0", "black>=23.0.0", "flake8>=6.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/gahingwoo/RKDevelopTool-GUI"
 Issues = "https://github.com/gahingwoo/RKDevelopTool-GUI/issues"
+
+[tool.setuptools]
+packages = ["rkdeveloptool_gui"]
+
+[tool.setuptools.package-dir]
+"rkdeveloptool_gui" = "rkdeveloptool-gui"
+
+[tool.setuptools.package-data]
+"rkdeveloptool_gui" = ["assets/**/*"]
 
 [tool.black]
 line-length = 100

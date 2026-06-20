@@ -27,16 +27,16 @@ from PySide6.QtWidgets import (
 )
 
 # Import our modularized components
-from utils import (
+from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
     format_file_size, parse_partition_info, safe_slot, parse_chip_info
 )
-from workers import DeviceWorker, PartitionPPTWorker, CommandWorker
-from widgets import AutoLoadCombo
-from i18n import TRANSLATIONS
-from themes import ThemeManager, ThemeAutoManager
-from operations import style_messagebox
-from log_widget import RealtimeLogWidget
+from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
+from .widgets import AutoLoadCombo
+from .i18n import TRANSLATIONS
+from .themes import ThemeManager, ThemeAutoManager
+from .operations import style_messagebox
+from .log_widget import RealtimeLogWidget
 
 
 class TranslationManager:
@@ -200,7 +200,7 @@ class RKDevToolGUI(QMainWindow):
 
     def create_left_panel(self):
         """Create left sidebar with device info and quick actions"""
-        from ui_panels import create_device_panel, create_mode_panel, create_quick_panel
+        from .ui_panels import create_device_panel, create_mode_panel, create_quick_panel
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -234,7 +234,7 @@ class RKDevToolGUI(QMainWindow):
 
     def create_right_panel(self):
         """Create right main panel with tabs"""
-        from ui_panels import (
+        from .ui_panels import (
             create_home_tab, create_download_tab, create_partition_tab,
             create_parameter_tab, create_upgrade_tab, create_advanced_tab,
             create_log_panel
@@ -428,7 +428,7 @@ class RKDevToolGUI(QMainWindow):
         self.save_log_btn = self.log_widget.export_btn
         
         # Set up export callback
-        from ui_panels import save_log
+        from .ui_panels import save_log
         self.log_widget.set_export_callback(
             safe_slot(lambda: save_log(self))
         )
@@ -550,7 +550,7 @@ class RKDevToolGUI(QMainWindow):
 
     def update_ui_text(self):
         """Update all UI text based on current language"""
-        from ui_text_updates import update_all_ui_text
+        from .ui_text_updates import update_all_ui_text
         update_all_ui_text(self)
 
     # Device management methods
@@ -571,7 +571,7 @@ class RKDevToolGUI(QMainWindow):
 
     def on_device_found(self, devices, mode, chip_info):
         """Handle device found event"""
-        from operations import detect_supported_storage_types
+        from .operations import detect_supported_storage_types
         
         self.connected_devices = devices
         self.device_mode = mode
@@ -834,7 +834,7 @@ class RKDevToolGUI(QMainWindow):
 
     def _show_loader_hint(self, is_failure=False):
         """Show hint dialog to load Loader when in Maskrom mode"""
-        import operations
+        from . import operations
         
         if is_failure:
             # Show warning dialog when command fails
@@ -871,7 +871,7 @@ class RKDevToolGUI(QMainWindow):
 
     def _auto_load_loader(self):
         """Automatically load Loader"""
-        import operations
+        from . import operations
         
         loader_path = self.loader_path.text()
         if not loader_path or not os.path.exists(loader_path):

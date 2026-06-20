@@ -9,11 +9,11 @@ import tempfile
 import math
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication, QLineEdit
 
-from utils import (
+from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot
 )
-from workers import PartitionPPTWorker, CommandWorker
+from .workers import PartitionPPTWorker, CommandWorker
 
 
 def style_messagebox(msg_box):
@@ -699,8 +699,8 @@ def get_storage_info(gui, storage_code):
 
 def read_flash_id(gui):
     """Read Flash ID and display in dialog"""
-    from utils import parse_flash_id
-    from workers import CommandWorker
+    from .utils import parse_flash_id
+    from .workers import CommandWorker
     
     def on_flash_id_finished(success, output):
         if not success:
@@ -739,8 +739,8 @@ def read_flash_id(gui):
 
 def read_capability(gui):
     """Read device capability information and display in dialog"""
-    from utils import parse_capability, format_capability_info
-    from workers import CommandWorker
+    from .utils import parse_capability, format_capability_info
+    from .workers import CommandWorker
     
     def on_capability_finished(success, output):
         if not success:
@@ -775,7 +775,7 @@ def read_capability(gui):
 
 def show_flash_info_detailed(gui):
     """Show detailed flash information in a dialog"""
-    from utils import parse_flash_info
+    from .utils import parse_flash_info
     
     def on_flash_info_finished(success, output):
         if not success:
@@ -797,7 +797,7 @@ def show_flash_info_detailed(gui):
 
 def _display_flash_info_dialog(gui):
     """Display cached flash information in a dialog"""
-    from utils import format_flash_info_detailed
+    from .utils import format_flash_info_detailed
     
     if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
         flash_info = gui._cached_flash_info
@@ -838,7 +838,7 @@ def _display_flash_info_dialog(gui):
 
 def get_security_info(gui):
     """Get device security information and display in dialog"""
-    from utils import parse_security_info, format_security_info
+    from .utils import parse_security_info, format_security_info
     
     def on_security_info_finished(success, output):
         if not success:
@@ -873,7 +873,7 @@ def test_device_connection(gui, test_count=10):
         gui: The main GUI instance
         test_count: Number of tests to run (default: 10)
     """
-    from utils import format_test_results
+    from .utils import format_test_results
     
     # Initialize test state
     test_state = {

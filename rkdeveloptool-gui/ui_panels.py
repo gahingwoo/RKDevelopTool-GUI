@@ -12,9 +12,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
-from utils import safe_slot
-from widgets import AutoLoadCombo
-import operations
+from .utils import safe_slot
+from .widgets import AutoLoadCombo
+from . import operations
 
 
 def create_home_tab(gui):
@@ -937,7 +937,7 @@ def on_address_changed(gui):
 
 def change_storage(gui):
     """Change storage medium and auto-refresh partition table"""
-    from utils import RKTOOL
+    from .utils import RKTOOL
     storage = gui.change_storage_combo.currentData()
     if not storage:
         gui.show_message("Warning", "select_storage", "Warning")
@@ -984,7 +984,7 @@ def change_storage(gui):
 def erase_flash(gui):
     """Erase entire flash"""
     from PySide6.QtWidgets import QMessageBox, QApplication
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     msg = QMessageBox()
     # Use application palette for automatic theme following
@@ -1001,13 +1001,13 @@ def erase_flash(gui):
 
 def test_device(gui):
     """Test device connection"""
-    from operations import test_device_connection
+    from .operations import test_device_connection
     test_device_connection(gui, test_count=10)
 
 
 def read_flash_id(gui):
     """Read Flash ID using enhanced operations function"""
-    from operations import read_flash_id as read_flash_id_op
+    from .operations import read_flash_id as read_flash_id_op
     read_flash_id_op(gui)
 
 
@@ -1016,7 +1016,7 @@ def on_flash_id_read(gui, success):
     if not success:
         return
 
-    from utils import parse_flash_info
+    from .utils import parse_flash_info
     log_text = gui.log_output.toPlainText()
     flash_info = parse_flash_info(log_text)
 
@@ -1033,7 +1033,7 @@ def on_flash_id_read(gui, success):
 
 def read_flash_info(gui):
     """Read detailed flash info using enhanced operations function"""
-    from operations import show_flash_info_detailed
+    from .operations import show_flash_info_detailed
     show_flash_info_detailed(gui)
 
 
@@ -1042,7 +1042,7 @@ def on_flash_info_read(gui, success):
     if not success:
         return
 
-    from utils import parse_flash_info
+    from .utils import parse_flash_info
     log_text = gui.log_output.toPlainText()
     flash_info = parse_flash_info(log_text)
 
@@ -1061,7 +1061,7 @@ def burn_partition(gui):
     """Burn partition"""
     import re
     import os
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     selected_partition_key = gui.partition_combo.currentData()
     selected_partition = gui.partition_combo.currentText()
@@ -1105,7 +1105,7 @@ def backup_partition(gui):
     import re
     import os
     from PySide6.QtWidgets import QFileDialog
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     selected_partition_key = gui.partition_combo.currentData()
     selected_partition = gui.partition_combo.currentText()
@@ -1180,7 +1180,7 @@ def write_gpt(gui):
 
 def write_parameter(gui):
     """Read device parameters"""
-    from utils import RKTOOL
+    from .utils import RKTOOL
     from PySide6.QtWidgets import QApplication
 
     def on_finished(success, output):
@@ -1214,7 +1214,7 @@ def write_parameter(gui):
 def tag_spl(gui):
     """Tag SPL"""
     import os
-    from utils import RKTOOL
+    from .utils import RKTOOL
     from PySide6.QtWidgets import QFileDialog
 
     tag = gui.tagspl_tag.text()
@@ -1271,7 +1271,7 @@ def tag_spl(gui):
 
 def read_flash(gui):
     """Read flash"""
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     address = gui.read_address.text()
     length = gui.read_length.text()
@@ -1289,7 +1289,7 @@ def verify_flash(gui):
     import math
     import tempfile
     import hashlib
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     file_path = gui.verify_file_path.text()
     address = gui.verify_address.text()
@@ -1351,7 +1351,7 @@ def calculate_md5(gui):
     """Calculate MD5 of file"""
     import os
     from PySide6.QtWidgets import QFileDialog
-    from utils import calculate_file_md5
+    from .utils import calculate_file_md5
 
     file_path = gui.verify_file_path.text()
     if not file_path or not os.path.exists(file_path):
@@ -1389,13 +1389,13 @@ def toggle_debug_log(gui):
 
 def export_system_log(gui):
     """Export system log with device information"""
-    import operations
+    from . import operations
     operations.export_logs_detailed(gui)
 
 
 def show_usb_info(gui):
     """Show USB device information"""
-    import operations
+    from . import operations
     operations.show_usb_device_info(gui)
 
 
@@ -1414,7 +1414,7 @@ def save_log(gui):
 def scan_mass_devices(gui):
     """Scan for mass production devices"""
     import subprocess
-    from utils import RKTOOL
+    from .utils import RKTOOL
 
     try:
         result = subprocess.run([RKTOOL, "ld"], capture_output=True, text=True, timeout=3)
@@ -1435,8 +1435,8 @@ def start_mass_production(gui):
     """Start mass production"""
     import os
     from PySide6.QtWidgets import QMessageBox
-    from utils import RKTOOL
-    from workers import CommandWorker
+    from .utils import RKTOOL
+    from .workers import CommandWorker
 
     firmware = gui.mass_firmware_path.text()
     if not firmware or not os.path.exists(firmware):
