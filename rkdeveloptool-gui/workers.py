@@ -6,7 +6,7 @@ import re
 import os
 from PySide6.QtCore import QThread, Signal
 
-from utils import RKTOOL, parse_chip_info
+from .utils import RKTOOL, parse_chip_info
 
 
 class DeviceWorker(QThread):
