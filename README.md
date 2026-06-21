@@ -46,6 +46,30 @@ They **bundle `rkdeveloptool`**, so there is nothing else to install.
 
 ---
 
+## Install via pip
+
+Install a standard Python wheel — this adds the `rkdeveloptool-gui` command to
+your `PATH`. Unlike the prebuilt packages above, the wheel does **not** bundle
+`rkdeveloptool`, so install that separately (see [Running from source](#running-from-source)
+for the requirements).
+
+```bash
+git clone https://github.com/gahingwoo/RKDevelopTool-GUI
+cd RKDevelopTool-GUI
+pip install .
+rkdeveloptool-gui
+```
+
+Or build a redistributable wheel and install it anywhere:
+
+```bash
+pip install build
+python -m build --wheel
+pip install dist/rkdeveloptool_gui-*.whl
+```
+
+---
+
 ## Running from source
 
 If you run from source instead of a prebuilt package, you need:
