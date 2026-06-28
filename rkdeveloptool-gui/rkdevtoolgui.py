@@ -648,7 +648,7 @@ class RKDevToolGUI(QMainWindow):
             # Parse chip info to show readable chip name
             chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
             self.device_status_label.setText(mode_text)
-            self.device_status_label.setStyleSheet("QLabel { padding: 5px; }")
+            self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
             self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{mode_text}")
             self.connection_status.setText(f"{self.tr('connected')}")
@@ -969,6 +969,7 @@ def main():
             manager.tr("tool_not_found_title"),
             manager.tr("tool_not_found_message")
         )
+        sys.exit(1)
 
     # Launch GUI
     manager = TranslationManager()

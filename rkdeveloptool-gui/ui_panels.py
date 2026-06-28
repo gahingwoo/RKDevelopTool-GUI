@@ -37,8 +37,7 @@ def create_home_tab(gui):
 
     # Task cards
     cards_label = QLabel()
-    cards_label.setStyleSheet("")
-    cards_label.setFont(cards_label.font())
+    cards_label.setStyleSheet("QLabel { font-weight: bold; padding: 6px 2px; }")
     layout.addWidget(cards_label)
 
     cards_grid = QGridLayout()

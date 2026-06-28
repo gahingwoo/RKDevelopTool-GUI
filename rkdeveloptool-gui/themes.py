@@ -60,6 +60,7 @@ def create_dark_palette():
     palette.setColor(QPalette.ColorRole.ToolTipBase, dark)
     palette.setColor(QPalette.ColorRole.ToolTipText, light)
     palette.setColor(QPalette.ColorRole.Text, light)
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(255, 255, 255, 120))
     palette.setColor(QPalette.ColorRole.Button, dark)
     palette.setColor(QPalette.ColorRole.ButtonText, light)
     palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
@@ -98,6 +99,7 @@ def create_light_palette():
     palette.setColor(QPalette.ColorRole.ToolTipBase, lighter)
     palette.setColor(QPalette.ColorRole.ToolTipText, dark)
     palette.setColor(QPalette.ColorRole.Text, dark)
+    palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(0, 0, 0, 120))
     palette.setColor(QPalette.ColorRole.Button, light)
     palette.setColor(QPalette.ColorRole.ButtonText, dark)
     palette.setColor(QPalette.ColorRole.BrightText, QColor(0, 0, 0))
@@ -161,35 +163,16 @@ class ThemeManager:
         else:
             palette = create_dark_palette()
 
+        # Apply the palette to the app and force-repaint already-created
+        # widgets so theme switches take effect immediately. Text, Base and
+        # PlaceholderText roles are defined in the palette, so QLineEdit text
+        # and placeholder colors follow the theme without any stylesheet hacks
+        # (Qt has no CSS ``::placeholder`` selector).
         self.app.setPalette(palette)
         for widget in self.app.allWidgets():
             widget.setPalette(palette)
             widget.update()
 
-        if self.current_theme == self.LIGHT:
-            placeholder_color = "rgba(0, 0, 0, 120)"
-        else:
-            placeholder_color = "rgba(255, 255, 255, 120)"
-
-        if self.current_theme == self.LIGHT:
-            placeholder_color = "rgba(0, 0, 0, 120)"
-            text_color = "#282828"
-            bg_color = "#ffffff"
-        else:
-            placeholder_color = "rgba(255, 255, 255, 120)"
-            text_color = "#ffffff"
-            bg_color = "#1e1e1e"
-
-        self.app.setStyleSheet(f"""
-            QLineEdit {{
-                color: {text_color};
-                background-color: {bg_color};
-            }}
-            QLineEdit::placeholder {{
-                color: {placeholder_color};
-            }}
-        """)
-    
     def set_style(self, style_name):
         """Set a specific style"""
         available = self.get_available_styles()
