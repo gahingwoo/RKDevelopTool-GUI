@@ -104,10 +104,10 @@ def create_device_panel(gui):
     layout = QVBoxLayout()
 
     status_label = QLabel()
-    status_label.setStyleSheet("QLabel { color: #aaaaaa; padding: 5px; }")
+    status_label.setStyleSheet("QLabel { padding: 5px; }")
 
     chip_label = QLabel()
-    chip_label.setStyleSheet("QLabel { color: #f0f0f0; font-weight: bold; padding: 5px; }")
+    chip_label.setStyleSheet("QLabel { font-weight: bold; padding: 5px; }")
 
     devices_label = QLabel()
 

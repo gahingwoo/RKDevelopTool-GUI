@@ -655,7 +655,7 @@ class RKDevToolGUI(QMainWindow):
             self._update_home_banner(True, f"{mode_text} · {self.tr('chip')}: {chip_text}")
         else:
             self.device_status_label.setText(self.tr("detecting_device"))
-            self.device_status_label.setStyleSheet("QLabel { color: #aaaaaa; padding: 5px; }")
+            self.device_status_label.setStyleSheet("QLabel { padding: 5px; }")
             self.chip_info_label.setText(f"{self.tr('chip')}: {self.tr('unknown_chip')}")
             self.statusBar().showMessage(
                 f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{self.tr('not_connected_status')}")
