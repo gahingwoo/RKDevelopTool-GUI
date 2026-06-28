@@ -163,15 +163,17 @@ class ThemeManager:
         else:
             palette = create_dark_palette()
 
-        # Apply the palette to the app and force-repaint already-created
-        # widgets so theme switches take effect immediately. Text, Base and
-        # PlaceholderText roles are defined in the palette, so QLineEdit text
-        # and placeholder colors follow the theme without any stylesheet hacks
-        # (Qt has no CSS ``::placeholder`` selector).
+        # Apply the palette to the app and to already-created widgets so theme
+        # switches take effect immediately (setPalette schedules a repaint on
+        # its own). Text, Base and PlaceholderText roles are defined in the
+        # palette, so QLineEdit text and placeholder colors follow the theme
+        # without any stylesheet hacks (Qt has no CSS ``::placeholder``
+        # selector). Note: don't call widget.update() here -- QAbstractItemView
+        # subclasses (QListView/QTreeView/QTableView) override update() to
+        # require a QModelIndex, so a no-arg call raises TypeError.
         self.app.setPalette(palette)
         for widget in self.app.allWidgets():
             widget.setPalette(palette)
-            widget.update()
 
     def set_style(self, style_name):
         """Set a specific style"""
