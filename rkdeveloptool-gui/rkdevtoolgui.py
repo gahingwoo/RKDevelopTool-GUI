@@ -17,7 +17,7 @@ if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QFileDialog, QLabel, QLineEdit,
@@ -183,18 +183,17 @@ class RKDevToolGUI(QMainWindow):
         self.start_device_detection()
 
     def set_application_font(self):
-        """Set application font for better CJK support"""
+        """Use the system default font at a consistent size.
+
+        CJK glyphs are provided by the platform's system fonts; no font file
+        is bundled.
+        """
         try:
-            font_path = os.path.join(
-                os.path.dirname(__file__), "assets", "NotoSansCJKsc-Regular.otf"
-            )
-            font_id = QFontDatabase.addApplicationFont(font_path)
-            if font_id != -1:
-                font_families = QFontDatabase.applicationFontFamilies(font_id)
-                if font_families:
-                    app_font = QFont(font_families[0])
-                    app_font.setPointSize(11)
-                    QApplication.setFont(app_font)
+            # Use the platform's general-purpose system font; CJK glyphs come
+            # from the system fonts, so no font file is bundled.
+            app_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+            app_font.setPointSize(11)
+            QApplication.setFont(app_font)
         except Exception:
             pass
 
@@ -411,7 +410,11 @@ class RKDevToolGUI(QMainWindow):
         self.equiv_command_field = QLineEdit()
         self.equiv_command_field.setReadOnly(True)
         self.equiv_command_field.setPlaceholderText("rkdeveloptool ...")
-        self.equiv_command_field.setStyleSheet("font-family: monospace;")
+        # Use the platform's default fixed-width font (Menlo/Consolas/etc.)
+        # instead of the literal family "monospace", which doesn't exist on
+        # macOS/Windows and triggers a slow font-alias lookup at startup.
+        self.equiv_command_field.setFont(
+            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.equiv_command_copy_btn = QPushButton()
         self.equiv_command_copy_btn.clicked.connect(safe_slot(self._copy_equiv_command))
         equiv_row.addWidget(self.equiv_command_label)
