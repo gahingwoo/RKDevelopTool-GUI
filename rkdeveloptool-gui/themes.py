@@ -162,6 +162,33 @@ class ThemeManager:
             palette = create_dark_palette()
 
         self.app.setPalette(palette)
+        for widget in self.app.allWidgets():
+            widget.setPalette(palette)
+            widget.update()
+
+        if self.current_theme == self.LIGHT:
+            placeholder_color = "rgba(0, 0, 0, 120)"
+        else:
+            placeholder_color = "rgba(255, 255, 255, 120)"
+
+        if self.current_theme == self.LIGHT:
+            placeholder_color = "rgba(0, 0, 0, 120)"
+            text_color = "#282828"
+            bg_color = "#ffffff"
+        else:
+            placeholder_color = "rgba(255, 255, 255, 120)"
+            text_color = "#ffffff"
+            bg_color = "#1e1e1e"
+
+        self.app.setStyleSheet(f"""
+            QLineEdit {{
+                color: {text_color};
+                background-color: {bg_color};
+            }}
+            QLineEdit::placeholder {{
+                color: {placeholder_color};
+            }}
+        """)
     
     def set_style(self, style_name):
         """Set a specific style"""
@@ -320,7 +347,13 @@ class ThemeAutoManager:
         elif self.platform.startswith("linux"):
             return self._get_linux_theme()
         else:
-            return "light"
+            try:
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return "light" if value == 1 else "dark"
+            except Exception:
+                return "light"
     
     def apply_system_theme(self):
         """Apply system theme to the application"""
