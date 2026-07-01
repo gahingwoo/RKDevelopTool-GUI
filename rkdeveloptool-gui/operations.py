@@ -14,6 +14,7 @@ from .utils import (
     calculate_file_md5, format_file_size, safe_slot
 )
 from .workers import PartitionPPTWorker, CommandWorker
+from .ui_text_updates import populate_address_combo, populate_partition_combo
 
 
 def style_messagebox(msg_box):
@@ -167,19 +168,54 @@ def backup_firmware(gui):
         gui.show_message('Information', 'backup_cancelled')
         return
 
-    length_arg = text.strip()
+    length_arg = _parse_length_arg(text)
+    if length_arg != text.strip():
+        gui.log_message(f"[INFO] {gui.tr('calculated_sectors')}: {length_arg}")
 
-    # Convert MB/GB to sectors
-    m = re.match(r'^([0-9.]+)\s*(MB|GB)$', length_arg, re.I)
+    gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
+
+
+def _parse_length_arg(text):
+    """Convert a user-entered length ('128MB', '1.5GB', or a raw sector-count hex
+    string like '0x1E0000') into the sector-count hex string rkdeveloptool expects."""
+    text = text.strip()
+    m = re.match(r'^([0-9.]+)\s*(MB|GB)$', text, re.I)
     if m:
         val = float(m.group(1))
         unit = m.group(2).upper()
         bytes_size = int(val * 1024 ** (3 if unit == 'GB' else 2))
         sectors = (bytes_size + 511) // 512
-        length_arg = hex(sectors)
-        gui.log_message(f"[INFO] {gui.tr('calculated_sectors')}: {length_arg} ({sectors:,} sectors)")
+        return hex(sectors)
+    return text
 
-    gui.run_command([RKTOOL, "rl", "0x0", length_arg, save_path], "backing_up")
+
+def _partition_length_arg(gui, info):
+    """Return the sector-count CLI argument needed to read/write a partition in full.
+
+    `info['size']` from parse_partition_info() is already the sector count between this
+    partition's start and the next one's, except for the last partition where the size
+    is unknown - there we read to the end of the detected flash capacity instead.
+    """
+    size = info.get('size')
+    if size and size != 'unknown':
+        try:
+            int(size, 16)
+            return size
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        start_sectors = int(info.get('address', '0x0'), 16)
+    except (TypeError, ValueError):
+        return None
+
+    bytes_size, _ = get_flash_capacity_bytes(gui)
+    if not bytes_size:
+        return None
+
+    total_sectors = bytes_size // 512
+    remaining = total_sectors - start_sectors
+    return hex(remaining) if remaining > 0 else None
 
 
 def enter_maskrom_mode(gui):
@@ -308,31 +344,6 @@ def populate_partition_table(gui):
         print(f"Warning: Failed to resize partition table: {e}")
 
 
-def populate_partition_combo(gui):
-    """Populate partition combo box"""
-    gui.partition_combo.clear()
-    if gui.partitions:
-        for name, info in gui.partitions.items():
-            addr = info.get('address', '')
-            display = f"{name} ({addr})"
-            gui.partition_combo.addItem(display, name)
-
-
-def populate_address_combo(gui):
-    """Populate address combo box"""
-    try:
-        gui.address_combo.clear()
-        gui.address_combo.addItem(gui.tr("address_full_firmware"))
-        gui.address_combo.addItem(gui.tr("custom_address"))
-
-        if gui.partitions:
-            for name, info in gui.partitions.items():
-                addr = info.get('address', '')
-                gui.address_combo.addItem(f"{name} ({addr})")
-    except (KeyError, AttributeError) as e:
-        print(f"Warning: Failed to populate address combo: {e}")
-
-
 def backup_partition_by_name(gui, name):
     """Backup partition by name"""
     save_path, _ = QFileDialog.getSaveFileName(gui, gui.tr('save_file_dialog'), f"{name}.bin")
@@ -345,16 +356,26 @@ def backup_partition_by_name(gui, name):
             if not addr:
                 gui.show_message("Warning", "enter_manual_address", "Warning")
                 return
-            gui.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
+            text, ok = QInputDialog.getText(
+                gui, gui.tr('enter_backup_length_title'),
+                gui.tr('enter_backup_length_prompt') + f"\n\n{gui.tr('format_examples')}"
+            )
+            if not ok or not text:
+                gui.show_message('Information', 'backup_cancelled')
+                return
+            gui.run_command([RKTOOL, "rl", addr, _parse_length_arg(text), save_path], "backing_up")
             return
     except (AttributeError, RuntimeError) as e:
         print(f"Warning: Failed to check manual address: {e}")
 
     if name in gui.partitions:
-        addr = gui.partitions[name].get('address')
-        if addr:
-            gui.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
+        info = gui.partitions[name]
+        addr = info.get('address')
+        length_arg = _partition_length_arg(gui, info)
+        if addr and length_arg:
+            gui.run_command([RKTOOL, "rl", addr, length_arg, save_path], "backing_up")
             return
+        gui.log_message(f"[WARNING] Could not determine size of partition '{name}'; backup aborted.")
 
     gui.show_message("Warning", "select_partition", "Warning")
 
@@ -371,12 +392,17 @@ def write_partition_by_name(gui, name):
             if not addr:
                 gui.show_message("Warning", "enter_manual_address", "Warning")
                 return
+            if not confirm_burn_operation(gui, file_path, addr):
+                return
             gui.run_command([RKTOOL, "wl", addr, file_path], "burning")
             return
-    except:
-        pass
+    except (AttributeError, RuntimeError) as e:
+        print(f"Warning: Failed to check manual address: {e}")
 
     if name:
+        addr = gui.partitions.get(name, {}).get('address', name) if hasattr(gui, 'partitions') else name
+        if not confirm_burn_operation(gui, file_path, addr):
+            return
         gui.run_command([RKTOOL, "wlx", name, file_path], "burning")
         return
 
@@ -388,6 +414,8 @@ def onekey_burn(gui):
     firmware_path = gui.firmware_path.text()
     if not firmware_path or not os.path.exists(firmware_path):
         gui.show_message("Warning", "select_firmware_file", "Warning")
+        return
+    if not confirm_burn_operation(gui, firmware_path, "0x0"):
         return
     gui.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning")
 
@@ -1274,8 +1302,8 @@ def download_boot(gui):
         file_size = os.path.getsize(boot_file)
         size_str = format_file_size(file_size)
         gui.log_message(f"[INFO] Boot file: {os.path.basename(boot_file)} ({size_str})")
-    except:
-        pass
+    except OSError as e:
+        print(f"Warning: Failed to stat boot file: {e}")
     
     def on_finished(success, output):
         if success:
@@ -1367,8 +1395,8 @@ def show_usb_device_info(gui):
                     msg.setMinimumWidth(450)
                     msg.exec()
                     return
-            except:
-                pass
+            except (subprocess.SubprocessError, OSError) as e:
+                print(f"Warning: lsusb fallback failed: {e}")
             
             gui.log_message(f"[WARNING] {gui.tr('usb_info_not_available') if hasattr(gui, 'tr') else 'USB information not available'}")
     
@@ -1437,8 +1465,8 @@ Python Version: {platform.python_version()}
             if hasattr(gui, 'log_file') and os.path.exists(gui.log_file):
                 try:
                     zf.write(gui.log_file, arcname='full_application_log.txt')
-                except:
-                    pass
+                except OSError as e:
+                    print(f"Warning: Failed to include log file in export: {e}")
         
         gui.log_message(f"[OK] {gui.tr('logs_exported') if hasattr(gui, 'tr') else 'Logs exported successfully'}: {output_path}")
     except Exception as e:

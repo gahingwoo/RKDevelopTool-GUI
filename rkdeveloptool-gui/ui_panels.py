@@ -419,12 +419,18 @@ def create_partition_tab(gui):
     ops_layout.addWidget(burn_btn, 2, 0)
     ops_layout.addWidget(backup_btn, 2, 1)
     ops_layout.addWidget(erase_partition_btn, 2, 2)
-    ops_layout.addWidget(manual_enable, 3, 0)
-    ops_layout.addWidget(manual_address, 3, 1)
     ops_layout.addWidget(erase_all_btn, 3, 2)
 
     ops_group.setLayout(ops_layout)
     ops_group.hide()  # Hide by default as operations are in table
+
+    # Manual address override - kept visible (unlike ops_group above) since the
+    # per-row table buttons have no equivalent for overriding the target address.
+    manual_group = QGroupBox()
+    manual_layout = QHBoxLayout()
+    manual_layout.addWidget(manual_enable)
+    manual_layout.addWidget(manual_address)
+    manual_group.setLayout(manual_layout)
 
     # Danger zone - erase all storage (not hidden, for visibility)
     danger_group = QGroupBox()
@@ -437,6 +443,7 @@ def create_partition_tab(gui):
     danger_group.setLayout(danger_layout)
 
     layout.addWidget(list_group, 1)
+    layout.addWidget(manual_group)
     layout.addWidget(danger_group)
 
     widgets = {
@@ -1471,7 +1478,7 @@ def start_mass_production(gui):
         device = item.text()
         worker = CommandWorker([RKTOOL, "wl", "0x0", firmware], "burning", gui.manager)
         worker.log.connect(safe_slot(lambda msg, d=device: gui.log_message(f"[{d}] {msg}")))
-        worker.finished_signal.connect(safe_slot(lambda s, e, d=device: on_mass_device_finished(gui, d, s, e)))
+        worker.finished_signal.connect(safe_slot(lambda s, e, d=device, w=worker: on_mass_device_finished(gui, d, s, e, w)))
         gui.mass_workers.append(worker)
         worker.start()
 
@@ -1497,8 +1504,11 @@ def stop_mass_production(gui):
     gui.log_message("[INFO] " + gui.tr("mass_production_stopped"))
 
 
-def on_mass_device_finished(gui, device, success, error):
+def on_mass_device_finished(gui, device, success, error, worker=None):
     """Handle mass device completion"""
+    if worker is not None:
+        worker._success = success
+
     if success:
         gui.log_message(f"[OK] [{device}] {gui.tr('success')}")
     else:

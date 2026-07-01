@@ -83,7 +83,7 @@ def update_download_tab_texts(gui):
     gui.image_label.setText(gui.tr("image_file_placeholder"))
     gui.image_path.setPlaceholderText(gui.tr("image_file_placeholder"))
     gui.image_browse_btn.setText(gui.tr("browse_btn"))
-    gui.address_label.setText(gui.tr("target_address"))
+    gui.address_label.setText(gui.tr("target_address_label"))
     gui.custom_address.setPlaceholderText(gui.tr("custom_address_placeholder"))
     gui.burn_image_btn.setText(gui.tr("burn_image_btn"))
 
@@ -111,7 +111,7 @@ def update_partition_tab_texts(gui):
     gui.refresh_partitions_btn.setText(gui.tr("refresh_partitions_btn"))
 
     gui.partition_ops_group.setTitle(gui.tr("partition_ops_group"))
-    gui.select_partition_label.setText(gui.tr("select_partition"))
+    gui.select_partition_label.setText(gui.tr("select_partition_label"))
     gui.partition_file_label.setText(gui.tr("file_path"))
     gui.partition_file_path.setPlaceholderText(gui.tr("file_path"))
     gui.partition_file_browse_btn.setText(gui.tr("browse_btn"))
@@ -204,15 +204,20 @@ def update_advanced_tab_texts(gui):
     gui.calculate_md5_btn.setText(gui.tr("calculate_md5_btn"))
 
     gui.verify_sector_label.setText(gui.tr("verify_sector_label"))
+    # Preserve the user's selection across language switches: item order/data
+    # ("512"/"4096"/"custom") is stable, only the displayed label changes.
+    _prev_sector_idx = gui.verify_sector_combo.currentIndex()
     gui.verify_sector_combo.clear()
     gui.verify_sector_combo.addItem(gui.tr("verify_sector_512"), "512")
     gui.verify_sector_combo.addItem(gui.tr("verify_sector_4096"), "4096")
     gui.verify_sector_combo.addItem(gui.tr("verify_sector_custom"), "custom")
+    if 0 <= _prev_sector_idx < gui.verify_sector_combo.count():
+        gui.verify_sector_combo.setCurrentIndex(_prev_sector_idx)
     gui.verify_sector_custom.setPlaceholderText(gui.tr("verify_sector_custom_placeholder"))
 
     # Boot operations (Week 6)
     if hasattr(gui, 'boot_group') and gui.boot_group:
-        gui.boot_group.setTitle("Boot 文件操作" if gui.manager.lang == "zh" else "Boot File Operations")
+        gui.boot_group.setTitle(gui.tr("boot_ops_group"))
         if hasattr(gui, 'download_boot_btn') and gui.download_boot_btn:
             gui.download_boot_btn.setText(gui.tr("download_boot_btn"))
         if hasattr(gui, 'upload_boot_btn') and gui.upload_boot_btn:
@@ -248,8 +253,14 @@ def update_statusbar_texts(gui):
 
 
 def populate_address_combo(gui):
-    """Populate address combo box in download tab"""
+    """Populate address combo box in download tab.
+
+    Preserves the user's current selection across language switches: item order
+    (full-firmware, custom-address, then partitions) is stable, only the
+    displayed label text changes with the language.
+    """
     try:
+        current_idx = gui.address_combo.currentIndex()
         gui.address_combo.clear()
         gui.address_combo.addItem(gui.tr("address_full_firmware"))
         gui.address_combo.addItem(gui.tr("custom_address"))
@@ -259,18 +270,26 @@ def populate_address_combo(gui):
             for name, info in gui.partitions.items():
                 addr = info.get('address', '')
                 gui.address_combo.addItem(f"{name} ({addr})")
-    except:
-        pass
+
+        if 0 <= current_idx < gui.address_combo.count():
+            gui.address_combo.setCurrentIndex(current_idx)
+    except (RuntimeError, AttributeError) as e:
+        print(f"Warning: Failed to populate address combo: {e}")
 
 
 def populate_partition_combo(gui):
-    """Populate partition combo box"""
+    """Populate partition combo box, preserving the current selection (the
+    partition list itself doesn't change with the language, so this only
+    matters when it's called as part of a language-switch retranslate)."""
     try:
+        current_idx = gui.partition_combo.currentIndex()
         gui.partition_combo.clear()
         if hasattr(gui, 'partitions') and gui.partitions:
             for name, info in gui.partitions.items():
                 addr = info.get('address', '')
                 display = f"{name} ({addr})"
                 gui.partition_combo.addItem(display, name)
-    except:
-        pass
+        if 0 <= current_idx < gui.partition_combo.count():
+            gui.partition_combo.setCurrentIndex(current_idx)
+    except (RuntimeError, AttributeError) as e:
+        print(f"Warning: Failed to populate partition combo: {e}")

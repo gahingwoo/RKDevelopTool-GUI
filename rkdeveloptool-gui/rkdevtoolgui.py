@@ -608,13 +608,18 @@ class RKDevToolGUI(QMainWindow):
         self.device_mode = "not_connected_status"
         self.chip_info = "unknown_chip"
         self.device_list.clear()
+        # Reset per-device state so a newly plugged-in device (which may differ
+        # in loader/flash-capacity terms) isn't treated as if it were the one we lost.
+        self.loader_loaded = False
+        self.maskrom_device_shown_hint = False
+        self._cached_flash_info = None
         self.update_device_status()
 
     # Buttons / inputs that only make sense when a device is connected.
     # Used by _update_action_states to avoid the "click then get an error" trap.
     _DEVICE_DEPENDENT_WIDGETS = [
         'enter_loader_btn', 'reset_device_btn',
-        'read_info_btn', 'read_partitions_btn', 'backup_firmware_btn',
+        'read_info_btn', 'read_partitions_btn', 'backup_firmware_btn', 'home_backup_card',
         'read_flash_id_btn', 'read_flash_info_btn',
         'onekey_burn_btn', 'load_loader_btn', 'burn_image_btn',
         'change_storage_btn', 'erase_flash_btn', 'test_device_btn',
@@ -895,11 +900,14 @@ class RKDevToolGUI(QMainWindow):
                 except Exception as e:
                     print(f"Failed to stop theme timer: {e}")
 
-            # Stop device worker
+            # Stop device worker. Its loop can block up to ~3s in a subprocess call
+            # plus a 2s sleep before it re-checks the stop flag, so give it enough
+            # time to actually exit rather than racing ahead while it's still running.
             if self.device_worker:
                 try:
                     self.device_worker.stop()
-                    self.device_worker.wait(1000)
+                    if not self.device_worker.wait(6000):
+                        print("Warning: device worker did not stop within timeout")
                 except Exception as e:
                     print(f"Failed to stop device worker: {e}")
 
@@ -936,6 +944,18 @@ class RKDevToolGUI(QMainWindow):
     def closeEvent(self, event):
         """Handle window close event"""
         try:
+            busy = (self.command_worker is not None and self.command_worker.isRunning()) or \
+                   any(w.isRunning() for w in self.mass_workers)
+            if busy:
+                reply = QMessageBox.question(
+                    self, self.tr("warning_title"), self.tr("close_while_busy_warning"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+
             self.cleanup()
             event.accept()
         except Exception as e:

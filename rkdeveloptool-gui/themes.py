@@ -223,11 +223,12 @@ class ThemeManager:
         return self.current_style
     
     def is_dark(self):
-        """Check if current theme is dark"""
-        return self.current_theme == self.DARK
-    
+        """Check if the currently applied palette is dark (matches apply_theme's
+        'auto' -> dark default, since 'auto' doesn't have its own palette)"""
+        return self.current_theme != self.LIGHT
+
     def is_light(self):
-        """Check if current theme is light"""
+        """Check if the currently applied palette is light"""
         return self.current_theme == self.LIGHT
 
 
@@ -293,36 +294,35 @@ class ThemeAutoManager:
     def _get_linux_theme(self):
         """Get current Linux system theme (GNOME/KDE)"""
         import subprocess
-        
-        try:
-            import dbus as _dbus
-            # Try GNOME via dbus
-            if _dbus:
-                try:
-                    session_bus = _dbus.SessionBus()
-                    settings = session_bus.get_object(
-                        "org.gnome.desktop.interface",
-                        "/org/gnome/desktop/interface"
-                    )
-                    iface = _dbus.Interface(settings, "org.freedesktop.DBus.Properties")
-                    gtk_theme = iface.Get("org.gnome.desktop.interface", "GtkTheme")
-                    if "dark" in gtk_theme.lower():
-                        return "dark"
-                except Exception:
-                    pass
-        except ImportError:
-            pass
-        
+
+        # GNOME exposes its dark-mode preference as a GSettings key, not as a
+        # standalone D-Bus service - query it via the `gsettings` CLI, which is
+        # present on virtually every GNOME install (unlike the optional dbus-python
+        # dependency this previously required).
+        for schema, key in (
+            ("org.gnome.desktop.interface", "color-scheme"),
+            ("org.gnome.desktop.interface", "gtk-theme"),
+        ):
+            try:
+                result = subprocess.run(
+                    ["gsettings", "get", schema, key],
+                    capture_output=True, text=True, timeout=2
+                )
+                if result.returncode == 0 and "dark" in result.stdout.lower():
+                    return "dark"
+            except Exception:
+                pass
+
         # Try KDE
         try:
             proc = subprocess.run(
-                ["lookandfeeltool", "-d"], capture_output=True, text=True
+                ["lookandfeeltool", "-d"], capture_output=True, text=True, timeout=2
             )
             if "dark" in proc.stdout.lower():
                 return "dark"
         except Exception:
             pass
-        
+
         return "light"
     
     def get_system_theme(self):

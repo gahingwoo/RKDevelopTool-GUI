@@ -169,7 +169,10 @@ class RealtimeLogWidget(QWidget):
     
     def set_clear_callback(self, callback):
         """Set callback for clear button"""
-        self.clear_btn.clicked.disconnect()
+        try:
+            self.clear_btn.clicked.disconnect()
+        except RuntimeError:
+            pass
         self.clear_btn.clicked.connect(callback)
     
     def set_export_callback(self, callback):
