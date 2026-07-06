@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkdeveloptool-gui"
-version = "5.0.5"
+version = "5.0.6"
 description = "Cross-platform graphical front-end for Rockchip's rkdeveloptool"
 readme = "README.md"
 requires-python = ">=3.8"
