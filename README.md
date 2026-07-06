@@ -41,7 +41,7 @@ They **bundle `rkdeveloptool`**, so there is nothing else to install.
 
 > **macOS note:** the app is not notarized yet, so on first launch macOS may say
 > it "cannot be opened". Right-click the app → **Open** → **Open**, or run
-> `xattr -dr com.apple.quarantine /Applications/RKDevelopTool-GUI.app`.
+> `xattr -cr /Applications/RKDevelopTool-GUI.app`.
 
 ---
 

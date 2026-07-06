@@ -40,7 +40,7 @@ RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在�
 
 > **macOS 提示：** 应用尚未做公证，首次打开 macOS 可能提示「无法打开」。
 > 右键应用 → **打开** → **打开**，或执行
-> `xattr -dr com.apple.quarantine /Applications/RKDevelopTool-GUI.app`。
+> `xattr -cr /Applications/RKDevelopTool-GUI.app`。
 
 ---
 
