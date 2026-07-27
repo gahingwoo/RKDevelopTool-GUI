@@ -215,6 +215,20 @@ def parse_flash_info(flash_text):
     return info if info else None
 
 
+def is_rkfw_image(file_path):
+    """Check whether a file is an RKFW-packed firmware image (e.g. update.img).
+
+    RKFW containers start with the 4-byte magic b"RKFW" and hold a Loader
+    plus an RKAF partition archive - they must not be written raw to
+    sector 0 via `wl 0x0`, which only works for unpacked GPT disk images.
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            return f.read(4) == b'RKFW'
+    except OSError:
+        return False
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:

@@ -4,17 +4,27 @@ Contains all device interaction methods with improved flash capacity detection
 """
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import math
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication, QLineEdit
 
+from . import rkfw
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
-    calculate_file_md5, format_file_size, safe_slot
+    calculate_file_md5, format_file_size, safe_slot, is_rkfw_image
 )
 from .workers import PartitionPPTWorker, CommandWorker
 from .ui_text_updates import populate_address_combo, populate_partition_combo
+
+
+def _is_sector_zero(address):
+    """Return True if address resolves to LBA/sector 0 (the GPT/boot area)."""
+    try:
+        return int(str(address).strip(), 16) == 0
+    except (TypeError, ValueError):
+        return False
 
 
 def style_messagebox(msg_box):
@@ -392,6 +402,9 @@ def write_partition_by_name(gui, name):
             if not addr:
                 gui.show_message("Warning", "enter_manual_address", "Warning")
                 return
+            if _is_sector_zero(addr) and is_rkfw_image(file_path):
+                gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
+                return
             if not confirm_burn_operation(gui, file_path, addr):
                 return
             gui.run_command([RKTOOL, "wl", addr, file_path], "burning")
@@ -415,9 +428,156 @@ def onekey_burn(gui):
     if not firmware_path or not os.path.exists(firmware_path):
         gui.show_message("Warning", "select_firmware_file", "Warning")
         return
+    if is_rkfw_image(firmware_path):
+        _flash_rkfw_firmware(gui, firmware_path)
+        return
     if not confirm_burn_operation(gui, firmware_path, "0x0"):
         return
     gui.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning")
+
+
+def _show_rkfw_message(gui, title_key, text, icon="Critical"):
+    """Show a QMessageBox for RKFW flashing errors/status with dynamic text
+    that gui.show_message()'s static-key-only signature can't express."""
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr(title_key))
+    msg.setText(text)
+    msg.setMinimumWidth(550)
+    if icon == "Critical":
+        msg.setIcon(QMessageBox.Icon.Critical)
+    elif icon == "Warning":
+        msg.setIcon(QMessageBox.Icon.Warning)
+    else:
+        msg.setIcon(QMessageBox.Icon.Information)
+    msg.exec()
+
+
+def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
+    """Show the partition list and a strong warning before a full RKFW
+    (update.img) flash - this rewrites the GPT and every partition."""
+    version = rkaf_info.version
+    version_str = f"{(version >> 24) & 0xFF}.{(version >> 16) & 0xFF}.{version & 0xFFFF}"
+    file_size = format_file_size(os.path.getsize(firmware_path))
+
+    part_lines = "\n".join(
+        f"  - {p.name} ({format_file_size(p.size)})" for p in real_parts
+    )
+
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("rkfw_confirm_title"))
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setText(
+        f"{gui.tr('rkfw_confirm_intro')}\n\n"
+        f"{gui.tr('file_name')}: {os.path.basename(firmware_path)} ({file_size})\n"
+        f"Model: {rkaf_info.model}  Manufacturer: {rkaf_info.manufacturer}  "
+        f"Version: {version_str}\n\n"
+        f"Partitions ({len(real_parts)}):\n{part_lines}\n\n"
+        f"{gui.tr('rkfw_confirm_warning')}\n\n"
+        f"{gui.tr('rkfw_confirm_proceed')}"
+    )
+    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg.setDefaultButton(QMessageBox.StandardButton.No)
+    msg.setMinimumWidth(600)
+    return msg.exec() == QMessageBox.StandardButton.Yes
+
+
+def _flash_rkfw_firmware(gui, firmware_path):
+    """Unpack an RKFW-packed update.img and flash it in full:
+
+    1. Parse the outer RKFW header (Loader + embedded RKAF archive) and the
+       RKAF partition table, verifying the archive's own CRC.
+    2. Write the GPT from the archive's "parameter" entry (requires pure
+       Maskrom mode).
+    3. Download the extracted Loader (switches the device to Loader mode).
+    4. Flash every remaining partition image by name via `wlx`.
+
+    See rkfw.py for the on-disk format this relies on.
+    """
+    try:
+        rkfw_info = rkfw.parse_rkfw_header(firmware_path)
+        rkaf_info = rkfw.parse_rkaf_header(firmware_path, rkfw_info.fw_offset)
+    except rkfw.RKFWError as e:
+        gui.log_message(f"[ERROR] {e}")
+        _show_rkfw_message(gui, "rkfw_parse_failed_title", str(e))
+        return
+
+    gui.log_message(f"[INFO] {gui.tr('rkfw_verifying_crc')}")
+    if not rkfw.verify_rkaf_crc(firmware_path, rkfw_info.fw_offset, rkaf_info.length):
+        gui.log_message("[ERROR] RKAF CRC mismatch")
+        _show_rkfw_message(gui, "rkfw_crc_mismatch_title", gui.tr("rkfw_crc_mismatch_message"))
+        return
+    gui.log_message(f"[OK] {gui.tr('rkfw_crc_ok')}")
+
+    param_part = next((p for p in rkaf_info.parts if p.is_parameter), None)
+    if not param_part:
+        _show_rkfw_message(gui, "rkfw_no_parameter_title", gui.tr("rkfw_no_parameter_message"))
+        return
+
+    real_parts = [p for p in rkaf_info.parts if not p.is_parameter and not p.is_self]
+
+    if hasattr(gui, 'device_mode') and 'Maskrom' not in gui.device_mode:
+        gui.show_message("rkfw_requires_maskrom_title", "rkfw_requires_maskrom_message", "Warning")
+        return
+
+    if not _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
+    try:
+        loader_path = os.path.join(tmp_dir, "loader.bin")
+        rkfw.extract_loader(firmware_path, rkfw_info, loader_path)
+
+        param_path = os.path.join(tmp_dir, "parameter.txt")
+        rkfw.extract_part(firmware_path, rkfw_info.fw_offset, param_part, param_path)
+
+        # Order matters: `gpt` requires pure Maskrom mode, and `db` switches
+        # the device to Loader mode - so GPT must be written *before* the
+        # Loader is downloaded, and partition writes (which accept either
+        # mode) come last.
+        steps = [
+            ([RKTOOL, "gpt", param_path], "importing_gpt", gui.tr("rkfw_step_gpt")),
+            ([RKTOOL, "db", loader_path], "loading_loader", gui.tr("rkfw_step_loader")),
+        ]
+        for i, part in enumerate(real_parts):
+            part_path = os.path.join(tmp_dir, f"part_{i}.img")
+            rkfw.extract_part(firmware_path, rkfw_info.fw_offset, part, part_path)
+            steps.append(([RKTOOL, "wlx", part.name, part_path], "burning",
+                          gui.tr("rkfw_step_partition").format(part.name)))
+    except (rkfw.RKFWError, OSError) as e:
+        gui.log_message(f"[ERROR] {e}")
+        _show_rkfw_message(gui, "rkfw_extract_failed_title", str(e))
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
+
+    gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
+    _run_rkfw_steps(gui, steps, 0, tmp_dir)
+
+
+def _run_rkfw_steps(gui, steps, index, tmp_dir):
+    """Run the extracted RKFW flash steps one at a time, aborting on the
+    first failure. Each step is a single rkdeveloptool invocation."""
+    if index >= len(steps):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
+        _show_rkfw_message(gui, "rkfw_flash_complete_title",
+                            gui.tr("rkfw_flash_complete_message"), "Information")
+        return
+
+    cmd, description_key, label = steps[index]
+    gui.log_message(f"[{index + 1}/{len(steps)}] {label}")
+
+    def on_step_done(success, output):
+        if not success:
+            gui.log_message(f"[ERROR] {label}")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            _show_rkfw_message(gui, "rkfw_flash_failed_title",
+                                gui.tr("rkfw_flash_failed_message"))
+            return
+        _run_rkfw_steps(gui, steps, index + 1, tmp_dir)
+
+    gui.run_command(cmd, description_key, on_step_done)
 
 
 def load_loader(gui):
@@ -493,6 +653,10 @@ def burn_image(gui):
 
     if not address:
         gui.show_message("Warning", "select_image_address", "Warning")
+        return
+
+    if _is_sector_zero(address) and is_rkfw_image(image_path):
+        gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
         return
 
     if not confirm_burn_operation(gui, image_path, address):

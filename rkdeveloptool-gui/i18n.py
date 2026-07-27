@@ -138,6 +138,46 @@ TRANSLATIONS = {
         "no_device_connected": "未连接设备。",
         "please_connect_device": "请连接设备并进入 Maskrom 或 Loader 模式。",
         "select_firmware_file": "请先选择一个固件文件。",
+        "rkfw_detected_title": "检测到打包固件 (update.img)",
+        "rkfw_detected_message": "所选文件是 RKFW 打包固件（如官方 SDK 输出的 update.img），"
+                                  "内部包含 Loader 和使用 RKAF 归档格式打包的分区数据，"
+                                  "并不是可以直接写入指定扇区的裸分区镜像。\n\n"
+                                  "直接写入该文件会破坏分区表和引导数据，导致设备无法开机，"
+                                  "因此本次写入已被阻止。\n\n"
+                                  "请改用「一键完整烧录」功能：它会自动解析该文件，"
+                                  "写入分区表 (GPT)、下载 Loader，并逐个烧录内部的每个分区镜像。",
+        "rkfw_confirm_title": "确认完整烧录固件包",
+        "rkfw_confirm_intro": "检测到 RKFW 打包固件，将自动解包并执行完整烧录：",
+        "rkfw_confirm_warning": "此操作将重写设备的分区表 (GPT) 并烧录所有分区，过程不可中途取消。\n\n"
+                                 "请确保：\n"
+                                 "• 设备当前处于 Maskrom 模式（写入分区表要求纯 Maskrom 模式，"
+                                 "写入 Loader 后设备会自动切换到 Loader 模式）\n"
+                                 "• USB 连接稳定，过程中不要断开设备\n"
+                                 "• 这是一次完整的固件替换，设备上的现有数据将被清除",
+        "rkfw_confirm_proceed": "确认继续吗？",
+        "rkfw_requires_maskrom_title": "设备不在 Maskrom 模式",
+        "rkfw_requires_maskrom_message": "写入分区表 (GPT) 要求设备处于纯 Maskrom 模式，"
+                                          "但当前检测到的设备模式不是 Maskrom。\n\n"
+                                          "请断开设备，进入 Maskrom 模式（通常为按住相应按键或使用 "
+                                          "Maskrom 短接方式）后重新连接，再重试完整烧录。",
+        "rkfw_parse_failed_title": "固件解析失败",
+        "rkfw_crc_mismatch_title": "固件校验失败",
+        "rkfw_crc_mismatch_message": "该固件包内部 CRC 校验不匹配，文件可能已损坏或使用了不受支持的格式。"
+                                      "为避免烧录损坏的数据，本次烧录已终止。",
+        "rkfw_no_parameter_title": "未找到分区表",
+        "rkfw_no_parameter_message": "固件包内未找到 parameter 分区表条目，无法安全生成 GPT，本次烧录已终止。",
+        "rkfw_extract_failed_title": "固件解包失败",
+        "rkfw_flash_complete_title": "烧录完成",
+        "rkfw_flash_complete_message": "固件已完整烧录，建议重启设备使其生效。",
+        "rkfw_flash_failed_title": "烧录失败",
+        "rkfw_flash_failed_message": "烧录过程中失败，详情请查看日志。设备可能处于不完整状态，"
+                                      "请勿断开连接，可在确认 Loader/分区文件无误后重新从 Maskrom 模式开始整包烧录。",
+        "rkfw_step_gpt": "写入分区表 (GPT)...",
+        "rkfw_step_loader": "下载 Loader...",
+        "rkfw_step_partition": "烧录分区 '{}'...",
+        "rkfw_verifying_crc": "校验固件包完整性 (CRC)...",
+        "rkfw_crc_ok": "CRC 校验通过",
+        "rkfw_flash_starting": "开始整包烧录，共 {} 个步骤...",
         "burning": "烧录中...",
         "upgrade": "升级中...",
         "loading_loader": "加载 Loader 中...",
@@ -474,6 +514,62 @@ TRANSLATIONS = {
         "no_device_connected": "No device connected.",
         "please_connect_device": "Please connect a device in Maskrom or Loader mode.",
         "select_firmware_file": "Please select a firmware file first.",
+        "rkfw_detected_title": "Packed Firmware Detected (update.img)",
+        "rkfw_detected_message": "The selected file is an RKFW-packed firmware image (such as the "
+                                  "update.img produced by the official Rockchip SDK). It contains a "
+                                  "Loader plus partition data packed in the RKAF archive format - it is "
+                                  "NOT a raw partition image that can be written directly to an arbitrary "
+                                  "sector.\n\n"
+                                  "Writing this file directly would corrupt the partition table and boot "
+                                  "data, leaving the device unable to boot, so this write has been "
+                                  "blocked.\n\n"
+                                  "Please use the \"One-Click Full Burn\" feature instead: it will parse "
+                                  "this file automatically, write the GPT partition table, download the "
+                                  "Loader, and flash every embedded partition image individually.",
+        "rkfw_confirm_title": "Confirm Full Firmware Flash",
+        "rkfw_confirm_intro": "Detected an RKFW-packed firmware image. It will be unpacked and flashed "
+                               "in full:",
+        "rkfw_confirm_warning": "This will rewrite the device's GPT partition table and flash every "
+                                 "partition. The process cannot be cancelled once started.\n\n"
+                                 "Please make sure:\n"
+                                 "• The device is currently in Maskrom mode (writing the partition table "
+                                 "requires pure Maskrom mode; the device switches to Loader mode "
+                                 "automatically once the Loader is downloaded)\n"
+                                 "• The USB connection is stable and won't be unplugged during the "
+                                 "process\n"
+                                 "• This is a full firmware replacement - existing data on the device "
+                                 "will be erased",
+        "rkfw_confirm_proceed": "Do you want to continue?",
+        "rkfw_requires_maskrom_title": "Device Not in Maskrom Mode",
+        "rkfw_requires_maskrom_message": "Writing the GPT partition table requires the device to be in "
+                                          "pure Maskrom mode, but the currently detected device mode is "
+                                          "not Maskrom.\n\n"
+                                          "Please disconnect the device, put it into Maskrom mode (usually "
+                                          "by holding the Maskrom key or using a Maskrom short-circuit "
+                                          "jig), reconnect it, then retry the full flash.",
+        "rkfw_parse_failed_title": "Firmware Parsing Failed",
+        "rkfw_crc_mismatch_title": "Firmware Verification Failed",
+        "rkfw_crc_mismatch_message": "The firmware archive's internal CRC check failed. The file may be "
+                                      "corrupted or use an unsupported format. The flash has been aborted "
+                                      "to avoid writing corrupted data.",
+        "rkfw_no_parameter_title": "Partition Table Not Found",
+        "rkfw_no_parameter_message": "No 'parameter' partition table entry was found inside the firmware "
+                                      "archive, so a GPT table can't be safely generated. The flash has "
+                                      "been aborted.",
+        "rkfw_extract_failed_title": "Firmware Extraction Failed",
+        "rkfw_flash_complete_title": "Flash Complete",
+        "rkfw_flash_complete_message": "The firmware has been fully flashed. It's recommended to reset "
+                                        "the device for the changes to take effect.",
+        "rkfw_flash_failed_title": "Flash Failed",
+        "rkfw_flash_failed_message": "The flash process failed - see the log for details. The device may "
+                                      "be left in an incomplete state; do not disconnect it. You can retry "
+                                      "the full flash from Maskrom mode once the issue is resolved.",
+        "rkfw_step_gpt": "Writing partition table (GPT)...",
+        "rkfw_step_loader": "Downloading Loader...",
+        "rkfw_step_partition": "Flashing partition '{}'...",
+        "rkfw_verifying_crc": "Verifying firmware archive integrity (CRC)...",
+        "rkfw_crc_ok": "CRC check passed",
+        "rkfw_flash_starting": "Starting full firmware flash, {} steps total...",
         "burning": "Burning...",
         "upgrade": "Upgrading...",
         "loading_loader": "Loading Loader...",

@@ -1450,6 +1450,11 @@ def start_mass_production(gui):
         gui.show_message("Warning", "select_firmware_file", "Warning")
         return
 
+    from .utils import is_rkfw_image
+    if is_rkfw_image(firmware):
+        gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
+        return
+
     selected_items = gui.mass_device_list.selectedItems()
     if not selected_items:
         gui.show_message("Warning", "select_devices_for_mass", "Warning")
