@@ -8,9 +8,10 @@ import shutil
 import subprocess
 import tempfile
 import math
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QApplication, QLineEdit
+from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit
 
 from . import rkfw
+from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image
@@ -115,7 +116,7 @@ def get_flash_capacity_bytes(gui):
 
 def backup_firmware(gui):
     """Backup entire firmware with automatic capacity detection"""
-    save_path, _ = QFileDialog.getSaveFileName(
+    save_path = app_settings.get_save_file(
         gui, gui.tr("save_file_dialog"), "firmware_backup.bin", gui.tr("file_dialog_all")
     )
     if not save_path:
@@ -356,7 +357,7 @@ def populate_partition_table(gui):
 
 def backup_partition_by_name(gui, name):
     """Backup partition by name"""
-    save_path, _ = QFileDialog.getSaveFileName(gui, gui.tr('save_file_dialog'), f"{name}.bin")
+    save_path = app_settings.get_save_file(gui, gui.tr('save_file_dialog'), f"{name}.bin")
     if not save_path:
         return
 
@@ -392,7 +393,7 @@ def backup_partition_by_name(gui, name):
 
 def write_partition_by_name(gui, name):
     """Write partition by name"""
-    file_path, _ = QFileDialog.getOpenFileName(gui, gui.tr('browse_btn'), "", gui.tr('file_dialog_image'))
+    file_path = app_settings.get_open_file(gui, gui.tr('browse_btn'), gui.tr('file_dialog_image'))
     if not file_path or not os.path.exists(file_path):
         return
 
@@ -586,8 +587,8 @@ def load_loader(gui):
     
     # If loader path not set or file doesn't exist, ask user to select
     if not loader_path or not os.path.exists(loader_path):
-        loader_path, _ = QFileDialog.getOpenFileName(
-            gui, gui.tr("select_loader_file"), "", gui.tr("file_dialog_loader")
+        loader_path = app_settings.get_open_file(
+            gui, gui.tr("select_loader_file"), gui.tr("file_dialog_loader")
         )
         if not loader_path:
             return
@@ -1242,16 +1243,15 @@ def pack_firmware(gui):
     creates a packaged firmware file.
     """
     # Select input directory
-    input_dir = QFileDialog.getExistingDirectory(
-        gui, 
-        gui.tr("select_pack_input_dir") if hasattr(gui, 'tr') else "Select input directory",
-        ""
+    input_dir = app_settings.get_directory(
+        gui,
+        gui.tr("select_pack_input_dir") if hasattr(gui, 'tr') else "Select input directory"
     )
     if not input_dir:
         return
     
     # Select output file path
-    output_path, _ = QFileDialog.getSaveFileName(
+    output_path = app_settings.get_save_file(
         gui,
         gui.tr("save_packed_firmware") if hasattr(gui, 'tr') else "Save packed firmware",
         "firmware.img",
@@ -1279,20 +1279,18 @@ def unpack_firmware(gui):
     images to a selected output directory.
     """
     # Select input firmware package
-    input_file, _ = QFileDialog.getOpenFileName(
+    input_file = app_settings.get_open_file(
         gui,
         gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
-        "",
         "Image Files (*.img *.uimg);;All Files (*)"
     )
     if not input_file or not os.path.exists(input_file):
         return
     
     # Select output directory
-    output_dir = QFileDialog.getExistingDirectory(
+    output_dir = app_settings.get_directory(
         gui,
-        gui.tr("select_unpack_output_dir") if hasattr(gui, 'tr') else "Select output directory",
-        ""
+        gui.tr("select_unpack_output_dir") if hasattr(gui, 'tr') else "Select output directory"
     )
     if not output_dir:
         return
@@ -1329,7 +1327,7 @@ def export_gpt_table(gui):
     to a binary file for backup or analysis.
     """
     # Select output file path
-    output_path, _ = QFileDialog.getSaveFileName(
+    output_path = app_settings.get_save_file(
         gui,
         gui.tr("save_gpt_table") if hasattr(gui, 'tr') else "Save GPT table",
         "gpt.bin",
@@ -1357,10 +1355,9 @@ def import_gpt_table(gui):
     device. Requires multiple confirmations to prevent data loss.
     """
     # Select input GPT file
-    input_file, _ = QFileDialog.getOpenFileName(
+    input_file = app_settings.get_open_file(
         gui,
         gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
-        "",
         "Binary Files (*.bin);;All Files (*)"
     )
     if not input_file or not os.path.exists(input_file):
@@ -1451,10 +1448,9 @@ def download_boot(gui):
     
     Allows user to select a boot file and download it to the device.
     """
-    boot_file, _ = QFileDialog.getOpenFileName(
+    boot_file = app_settings.get_open_file(
         gui,
         gui.tr("select_boot_file") if hasattr(gui, 'tr') else "Select Boot File",
-        "",
         "Boot Files (*.bin);;All Files (*)"
     )
     
@@ -1487,7 +1483,7 @@ def upload_boot(gui):
     Reads the Boot area from device to local filesystem.
     Uses ReadLBA (rl) command to read from 0x8000 (Boot address)
     """
-    output_path, _ = QFileDialog.getSaveFileName(
+    output_path = app_settings.get_save_file(
         gui,
         gui.tr("save_boot_file") if hasattr(gui, 'tr') else "Save Boot File",
         "boot.bin",
@@ -1579,7 +1575,7 @@ def export_logs_detailed(gui):
     
     # Select output file
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    output_path, _ = QFileDialog.getSaveFileName(
+    output_path = app_settings.get_save_file(
         gui,
         gui.tr("export_logs") if hasattr(gui, 'tr') else "Export Logs",
         f"rkdevtool_logs_{timestamp}.zip",

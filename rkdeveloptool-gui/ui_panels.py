@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 from .utils import safe_slot
 from .widgets import AutoLoadCombo
 from . import operations
+from . import settings as app_settings
 
 
 def create_home_tab(gui):
@@ -1111,7 +1112,6 @@ def backup_partition(gui):
     """Backup partition"""
     import re
     import os
-    from PySide6.QtWidgets import QFileDialog
     from .utils import RKTOOL
 
     selected_partition_key = gui.partition_combo.currentData()
@@ -1122,7 +1122,7 @@ def backup_partition(gui):
         gui.show_message("Warning", "select_partition", "Warning")
         return
     if not save_path:
-        save_path, _ = QFileDialog.getSaveFileName(gui, gui.tr("save_file_dialog"))
+        save_path = app_settings.get_save_file(gui, gui.tr("save_file_dialog"))
         if not save_path:
             return
 
@@ -1222,7 +1222,6 @@ def tag_spl(gui):
     """Tag SPL"""
     import os
     from .utils import RKTOOL
-    from PySide6.QtWidgets import QFileDialog
 
     tag = gui.tagspl_tag.text()
     spl = gui.tagspl_spl_path.text()
@@ -1232,7 +1231,7 @@ def tag_spl(gui):
         return
     
     # Select output file
-    output_file, _ = QFileDialog.getSaveFileName(
+    output_file = app_settings.get_save_file(
         gui,
         gui.tr("save_tagged_spl") if hasattr(gui, 'tr') else "Save Tagged SPL File",
         f"spl_tagged_{tag}.bin",
@@ -1357,12 +1356,11 @@ def verify_flash(gui):
 def calculate_md5(gui):
     """Calculate MD5 of file"""
     import os
-    from PySide6.QtWidgets import QFileDialog
     from .utils import calculate_file_md5
 
     file_path = gui.verify_file_path.text()
     if not file_path or not os.path.exists(file_path):
-        file_path, _ = QFileDialog.getOpenFileName(gui, gui.tr("select_file_dialog"), "", gui.tr("file_dialog_all"))
+        file_path = app_settings.get_open_file(gui, gui.tr("select_file_dialog"), gui.tr("file_dialog_all"))
         if not file_path:
             return
 
@@ -1408,9 +1406,8 @@ def show_usb_info(gui):
 
 def save_log(gui):
     """Save log to file"""
-    from PySide6.QtWidgets import QFileDialog
 
-    file_path, _ = QFileDialog.getSaveFileName(
+    file_path = app_settings.get_save_file(
         gui, gui.tr("save_log_dialog"), "rkdevtool.log", "Log Files (*.log);;All Files (*)"
     )
     if file_path:

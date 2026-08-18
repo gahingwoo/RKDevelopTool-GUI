@@ -20,7 +20,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTabWidget, QListWidget, QTextEdit, QFileDialog, QLabel, QLineEdit,
+    QTabWidget, QListWidget, QTextEdit, QLabel, QLineEdit,
     QProgressBar, QMessageBox, QComboBox, QGroupBox, QGridLayout, QCheckBox,
     QSplitter, QTableWidget, QTableWidgetItem, QSpinBox, QTextBrowser,
     QScrollArea, QHeaderView, QSizePolicy, QInputDialog
@@ -37,6 +37,8 @@ from .i18n import TRANSLATIONS
 from .themes import ThemeManager, ThemeAutoManager
 from .operations import style_messagebox
 from .log_widget import RealtimeLogWidget
+from . import settings as app_settings
+from .settings import AppSettings
 
 
 class TranslationManager:
@@ -89,33 +91,49 @@ class TranslationManager:
         # Return Chinese as default if detection fails or language not supported
         return 'zh'
 
-    def __init__(self, lang=None):
-        if lang is None or lang == 'auto':
-            lang = self.detect_system_language()
-        
-        self.lang = lang
-        self.auto_mode = False
+    def __init__(self, lang=None, settings=None):
+        self.settings = settings
         self.translations = TRANSLATIONS
+
+        # No explicit language asked for -> fall back to the one the user
+        # picked last time, so the choice survives a restart.
+        if lang is None and settings is not None:
+            lang = settings.get_str(app_settings.KEY_LANGUAGE, "") or None
+
+        if lang is None or lang == 'auto' or lang not in TRANSLATIONS:
+            self.auto_mode = True
+            self.lang = self.detect_system_language()
+        else:
+            self.auto_mode = False
+            self.lang = lang
 
     def tr(self, key):
         """Returns the translated string for a given key."""
         return self.translations.get(self.lang, {}).get(key, key)
 
     def set_language(self, lang):
-        """Sets the active language."""
+        """Sets the active language and remembers it for the next launch."""
         if lang == 'auto':
             self.auto_mode = True
             self.lang = self.detect_system_language()
         elif lang in self.translations:
             self.auto_mode = False
             self.lang = lang
+        else:
+            return
+
+        if self.settings is not None:
+            self.settings.set(app_settings.KEY_LANGUAGE, lang)
 
 
 class RKDevToolGUI(QMainWindow):
-    def __init__(self, manager):
+    def __init__(self, manager, settings=None):
         super().__init__()
         self.manager = manager
         self.tr = self.manager.tr
+        # Shared with the translation manager when main() built one, so both
+        # read and write the same store.
+        self.settings = settings if settings is not None else AppSettings()
 
         # State
         self.partitions = {}
@@ -137,9 +155,18 @@ class RKDevToolGUI(QMainWindow):
         self.setMinimumSize(1300, 720)
         self.set_application_font()
 
-        # Initialize theme manager
+        # Initialize theme manager, restoring the theme/style picked last time.
+        # Both are validated against what this platform actually offers - a
+        # settings file carried over from another OS can name a style that
+        # doesn't exist here.
         self.theme_manager = ThemeManager(self)
-        self.theme_manager.apply_theme('auto')
+        saved_theme = self.settings.get_str(app_settings.KEY_THEME, 'auto')
+        if saved_theme not in self.theme_manager.get_available_themes():
+            saved_theme = 'auto'
+        saved_style = self.settings.get_str(app_settings.KEY_STYLE, '')
+        if saved_style not in self.theme_manager.get_available_styles():
+            saved_style = None
+        self.theme_manager.apply_theme(theme=saved_theme, style=saved_style)
 
         # Create main layout
         central_widget = QWidget()
@@ -173,14 +200,72 @@ class RKDevToolGUI(QMainWindow):
         # Status bar
         self.create_status_bar()
 
-        # Initialize automatic theme manager (after UI is created)
-        self.theme_auto_manager = ThemeAutoManager(self, enable_auto=True)
+        # Initialize automatic theme manager (after UI is created). Only follow
+        # the system theme when the user actually left the setting on 'auto' -
+        # otherwise it would immediately override their saved dark/light choice.
+        self.theme_auto_manager = ThemeAutoManager(
+            self, enable_auto=self.theme_manager.get_current_theme() == 'auto')
 
         # Update UI text
         self.update_ui_text()
 
+        # Restore remembered file paths and window geometry
+        self.restore_settings()
+
         # Start device detection
         self.start_device_detection()
+
+    def _persisted_path_fields(self):
+        """Map settings key -> the QLineEdit whose contents should survive a
+        restart. Built lazily because these widgets are created during UI
+        setup, and a missing one must not be fatal."""
+        fields = {
+            app_settings.KEY_LOADER_PATH: 'loader_path',
+            app_settings.KEY_FIRMWARE_PATH: 'firmware_path',
+            app_settings.KEY_IMAGE_PATH: 'image_path',
+        }
+        return {key: getattr(self, attr) for key, attr in fields.items()
+                if hasattr(self, attr)}
+
+    def restore_settings(self):
+        """Reapply the window geometry and file paths saved last session."""
+        try:
+            geometry = self.settings.get_bytes(app_settings.KEY_GEOMETRY)
+            if geometry:
+                self.restoreGeometry(geometry)
+
+            splitter_sizes = self.settings.get(app_settings.KEY_SPLITTER)
+            if splitter_sizes and hasattr(self, 'splitter'):
+                # QSettings' ini backend hands lists back as strings.
+                sizes = [int(s) for s in splitter_sizes]
+                if len(sizes) == self.splitter.count() and all(s >= 0 for s in sizes):
+                    self.splitter.setSizes(sizes)
+
+            for key, widget in self._persisted_path_fields().items():
+                saved = self.settings.get_str(key, "")
+                # Only restore paths that still exist - a stale entry pointing
+                # at a deleted or unplugged-drive file is worse than an empty
+                # field, since it silently fails at flash time.
+                if saved and os.path.exists(saved):
+                    widget.setText(saved)
+        except Exception as e:
+            print(f"Warning: could not restore settings: {e}")
+
+    def save_settings(self):
+        """Persist window geometry and file paths for the next launch."""
+        try:
+            self.settings.set(app_settings.KEY_GEOMETRY, self.saveGeometry())
+
+            if hasattr(self, 'splitter'):
+                self.settings.set(app_settings.KEY_SPLITTER,
+                                   [str(s) for s in self.splitter.sizes()])
+
+            for key, widget in self._persisted_path_fields().items():
+                self.settings.set(key, widget.text())
+
+            self.settings.sync()
+        except Exception as e:
+            print(f"Warning: could not save settings: {e}")
 
     def set_application_font(self):
         """Use the system default font at a consistent size.
@@ -535,11 +620,12 @@ class RKDevToolGUI(QMainWindow):
         selected_style = self.style_combo.currentData()
         if selected_style:
             self.theme_manager.set_style(selected_style)
+            self.settings.set(app_settings.KEY_STYLE, selected_style)
 
     def on_theme_changed(self):
         """Handle theme selection change"""
         selected_theme = self.theme_combo.currentData()
-        
+
         if selected_theme == 'auto':
             # Enable automatic theme detection
             if hasattr(self, 'theme_auto_manager'):
@@ -550,6 +636,9 @@ class RKDevToolGUI(QMainWindow):
             if hasattr(self, 'theme_auto_manager'):
                 self.theme_auto_manager.enable_auto = False
             self.theme_manager.apply_theme(theme=selected_theme)
+
+        if selected_theme:
+            self.settings.set(app_settings.KEY_THEME, selected_theme)
 
     def update_ui_text(self):
         """Update all UI text based on current language"""
@@ -710,16 +799,13 @@ class RKDevToolGUI(QMainWindow):
         """Helper to connect a browse button to a line_edit"""
 
         def _on_browse():
+            file_filter = self.tr(filter_key) if filter_key else ""
             if save:
-                file_path, _ = QFileDialog.getSaveFileName(
-                    self, self.tr("save_file_dialog"), "",
-                    self.tr(filter_key) if filter_key else ""
-                )
+                file_path = app_settings.get_save_file(
+                    self, self.tr("save_file_dialog"), filter_str=file_filter)
             else:
-                file_filter = self.tr(filter_key) if filter_key else ""
-                file_path, _ = QFileDialog.getOpenFileName(
-                    self, self.tr("browse_btn"), "", file_filter
-                )
+                file_path = app_settings.get_open_file(
+                    self, self.tr("browse_btn"), filter_str=file_filter)
             if file_path:
                 line_edit.setText(file_path)
 
@@ -956,6 +1042,8 @@ class RKDevToolGUI(QMainWindow):
                     event.ignore()
                     return
 
+            # Save before cleanup, while the widgets are still alive to read.
+            self.save_settings()
             self.cleanup()
             event.accept()
         except Exception as e:
@@ -984,9 +1072,15 @@ def main():
     """Main entry point"""
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # Names QSettings uses to locate its store; set before anything reads it.
+    app.setOrganizationName(app_settings.ORGANIZATION)
+    app.setApplicationName(app_settings.APPLICATION)
+
+    settings = AppSettings()
+
     # Check for rkdeveloptool
     if not ToolValidator.validate():
-        manager = TranslationManager()
+        manager = TranslationManager(settings=settings)
         QMessageBox.critical(
             None,
             manager.tr("tool_not_found_title"),
@@ -995,9 +1089,9 @@ def main():
         sys.exit(1)
 
     # Launch GUI
-    manager = TranslationManager()
-    main_window = RKDevToolGUI(manager)
-    
+    manager = TranslationManager(settings=settings)
+    main_window = RKDevToolGUI(manager, settings=settings)
+
     # Connect both closeEvent and aboutToQuit for proper cleanup
     app.aboutToQuit.connect(safe_slot(lambda: main_window.cleanup()))
     main_window.show()
