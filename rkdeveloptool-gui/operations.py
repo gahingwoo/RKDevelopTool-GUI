@@ -8,7 +8,8 @@ import shutil
 import subprocess
 import tempfile
 import math
-from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit, QCheckBox
 
 from . import rkfw
 from . import settings as app_settings
@@ -16,7 +17,9 @@ from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image
 )
-from .workers import PartitionPPTWorker, CommandWorker
+from .workers import (
+    PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker
+)
 from .ui_text_updates import populate_address_combo, populate_partition_combo
 
 
@@ -230,12 +233,23 @@ def _partition_length_arg(gui, info):
 
 
 def enter_maskrom_mode(gui):
-    """Enter Maskrom mode"""
-    loader = gui.loader_path.text() if hasattr(gui, 'loader_path') else ''
-    if loader and os.path.exists(loader):
-        gui.run_command([RKTOOL, "db", loader], "downloading_boot")
-    else:
-        gui.show_message("Warning", "select_loader_file", "Warning")
+    """Switch a device in Loader mode back into Maskrom mode.
+
+    rkdeveloptool's reset command takes a subcode (``rd [subcode]``);
+    subcode 3 asks the chip to reboot into the Maskrom stage. The old code
+    ran ``db <loader>``, which does the opposite - it downloads a boot file
+    and pulls a Maskrom chip *into* Loader mode - so this button never
+    actually entered Maskrom.
+    """
+    if not getattr(gui, 'current_device', None):
+        gui.show_message("Warning", "connect_device_first", "Warning")
+        return
+    mode = getattr(gui, 'device_mode', '') or ''
+    if 'Maskrom' in mode:
+        gui.show_message("already_maskrom_title", "already_maskrom_message", "Information")
+        return
+    gui.log_message(f"[INFO] {gui.tr('entering_maskrom')}")
+    gui.run_command([RKTOOL, "rd", "3"], "entering_maskrom")
 
 
 def enter_loader_mode(gui):
@@ -406,18 +420,16 @@ def write_partition_by_name(gui, name):
             if _is_sector_zero(addr) and is_rkfw_image(file_path):
                 gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
                 return
-            if not confirm_burn_operation(gui, file_path, addr):
-                return
-            gui.run_command([RKTOOL, "wl", addr, file_path], "burning")
+            _burn_with_confirm(gui, file_path, addr,
+                               lambda: gui.run_command([RKTOOL, "wl", addr, file_path], "burning"))
             return
     except (AttributeError, RuntimeError) as e:
         print(f"Warning: Failed to check manual address: {e}")
 
     if name:
         addr = gui.partitions.get(name, {}).get('address', name) if hasattr(gui, 'partitions') else name
-        if not confirm_burn_operation(gui, file_path, addr):
-            return
-        gui.run_command([RKTOOL, "wlx", name, file_path], "burning")
+        _burn_with_confirm(gui, file_path, addr,
+                           lambda: gui.run_command([RKTOOL, "wlx", name, file_path], "burning"))
         return
 
     gui.show_message("Warning", "select_partition", "Warning")
@@ -432,9 +444,8 @@ def onekey_burn(gui):
     if is_rkfw_image(firmware_path):
         _flash_rkfw_firmware(gui, firmware_path)
         return
-    if not confirm_burn_operation(gui, firmware_path, "0x0"):
-        return
-    gui.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning")
+    _burn_with_confirm(gui, firmware_path, "0x0",
+                       lambda: gui.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning"))
 
 
 def _show_rkfw_message(gui, title_key, text, icon="Critical"):
@@ -456,7 +467,10 @@ def _show_rkfw_message(gui, title_key, text, icon="Critical"):
 
 def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     """Show the partition list and a strong warning before a full RKFW
-    (update.img) flash - this rewrites the GPT and every partition."""
+    (update.img) flash - this rewrites the GPT and every partition.
+
+    Also asks whether to CRC-verify the firmware package before unpacking
+    (default on). Returns (accepted, verify_crc)."""
     version = rkaf_info.version
     version_str = f"{(version >> 24) & 0xFF}.{(version >> 16) & 0xFF}.{version & 0xFFFF}"
     file_size = format_file_size(os.path.getsize(firmware_path))
@@ -478,21 +492,25 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
         f"{gui.tr('rkfw_confirm_warning')}\n\n"
         f"{gui.tr('rkfw_confirm_proceed')}"
     )
+    verify_check = QCheckBox(gui.tr("rkfw_verify_crc_checkbox"))
+    verify_check.setChecked(True)
+    msg.setCheckBox(verify_check)
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     msg.setDefaultButton(QMessageBox.StandardButton.No)
     msg.setMinimumWidth(600)
-    return msg.exec() == QMessageBox.StandardButton.Yes
+    accepted = msg.exec() == QMessageBox.StandardButton.Yes
+    return accepted, verify_check.isChecked()
 
 
 def _flash_rkfw_firmware(gui, firmware_path):
-    """Unpack an RKFW-packed update.img and flash it in full:
+    """Unpack an RKFW-packed update.img and flash it in full.
 
-    1. Parse the outer RKFW header (Loader + embedded RKAF archive) and the
-       RKAF partition table, verifying the archive's own CRC.
-    2. Write the GPT from the archive's "parameter" entry (requires pure
-       Maskrom mode).
-    3. Download the extracted Loader (switches the device to Loader mode).
-    4. Flash every remaining partition image by name via `wlx`.
+    Header parsing and the confirmation dialog are fast and stay on the GUI
+    thread; the slow part - CRC-verifying the whole RKAF archive and
+    unpacking the Loader/parameter/every partition to a temp dir - runs on
+    RKFWPrepWorker, which reports real progress so the window no longer
+    freezes. The actual per-partition writes then run one by one via
+    _run_rkfw_steps, which already streams rkdeveloptool's live progress.
 
     See rkfw.py for the on-disk format this relies on.
     """
@@ -503,13 +521,6 @@ def _flash_rkfw_firmware(gui, firmware_path):
         gui.log_message(f"[ERROR] {e}")
         _show_rkfw_message(gui, "rkfw_parse_failed_title", str(e))
         return
-
-    gui.log_message(f"[INFO] {gui.tr('rkfw_verifying_crc')}")
-    if not rkfw.verify_rkaf_crc(firmware_path, rkfw_info.fw_offset, rkaf_info.length):
-        gui.log_message("[ERROR] RKAF CRC mismatch")
-        _show_rkfw_message(gui, "rkfw_crc_mismatch_title", gui.tr("rkfw_crc_mismatch_message"))
-        return
-    gui.log_message(f"[OK] {gui.tr('rkfw_crc_ok')}")
 
     param_part = next((p for p in rkaf_info.parts if p.is_parameter), None)
     if not param_part:
@@ -522,45 +533,111 @@ def _flash_rkfw_firmware(gui, firmware_path):
         gui.show_message("rkfw_requires_maskrom_title", "rkfw_requires_maskrom_message", "Warning")
         return
 
-    if not _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
+    confirmed, verify_crc = _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts)
+    if not confirmed:
+        return
+
+    # Don't let a second full flash start while one is in flight.
+    worker = getattr(gui, '_rkfw_worker', None)
+    if worker is not None and worker.isRunning():
+        gui.log_message(gui.tr('rkfw_flash_in_progress'))
         return
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
-    try:
-        loader_path = os.path.join(tmp_dir, "loader.bin")
-        rkfw.extract_loader(firmware_path, rkfw_info, loader_path)
+    _set_rkfw_busy(gui, True)
+    gui.progress_bar.setValue(0)
+    gui.progress_label.setText(gui.tr("preparing_firmware"))
 
-        param_path = os.path.join(tmp_dir, "parameter.txt")
-        rkfw.extract_part(firmware_path, rkfw_info.fw_offset, param_part, param_path)
+    worker = RKFWPrepWorker(firmware_path, rkfw_info, rkaf_info, tmp_dir,
+                            gui.manager, verify_crc=verify_crc)
+    gui._rkfw_worker = worker
+    gui._rkfw_tmp_dir = tmp_dir
+    worker.progress.connect(safe_slot(lambda v: _on_rkfw_prep_progress(gui, v)))
+    worker.log.connect(safe_slot(gui.log_message))
+    worker.finished.connect(safe_slot(lambda paths: _start_rkfw_steps(gui, paths, tmp_dir)))
+    worker.failed.connect(safe_slot(lambda kind, msg: _on_rkfw_prep_failed(gui, kind, msg, tmp_dir)))
+    worker.start()
 
-        # Order matters: `gpt` requires pure Maskrom mode, and `db` switches
-        # the device to Loader mode - so GPT must be written *before* the
-        # Loader is downloaded, and partition writes (which accept either
-        # mode) come last.
-        steps = [
-            ([RKTOOL, "gpt", param_path], "importing_gpt", gui.tr("rkfw_step_gpt")),
-            ([RKTOOL, "db", loader_path], "loading_loader", gui.tr("rkfw_step_loader")),
-        ]
-        for i, part in enumerate(real_parts):
-            part_path = os.path.join(tmp_dir, f"part_{i}.img")
-            rkfw.extract_part(firmware_path, rkfw_info.fw_offset, part, part_path)
-            steps.append(([RKTOOL, "wlx", part.name, part_path], "burning",
-                          gui.tr("rkfw_step_partition").format(part.name)))
-    except (rkfw.RKFWError, OSError) as e:
-        gui.log_message(f"[ERROR] {e}")
-        _show_rkfw_message(gui, "rkfw_extract_failed_title", str(e))
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return
+
+def _set_rkfw_busy(gui, busy):
+    """Disable re-triggering burn buttons while a full RKFW flash runs."""
+    for attr in ('onekey_burn_btn', 'burn_image_btn'):
+        widget = getattr(gui, attr, None)
+        if widget is not None:
+            widget.setEnabled(not busy)
+
+
+def _on_rkfw_prep_progress(gui, value):
+    gui.progress_bar.setValue(value)
+    gui.progress_label.setText(f"{gui.tr('preparing_firmware')} {value}%")
+
+
+def _finish_rkfw_flow(gui, tmp_dir):
+    """Clean up state shared by every exit path of an RKFW full flash."""
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+    gui._rkfw_worker = None
+    gui._rkfw_tmp_dir = None
+    _set_rkfw_busy(gui, False)
+    gui.progress_label.setText(gui.tr("ready"))
+
+
+def _on_rkfw_prep_failed(gui, kind, message, tmp_dir):
+    """Handle a failed verify/unpack pass before any flashing started."""
+    _finish_rkfw_flow(gui, tmp_dir)
+    if kind == 'crc':
+        gui.log_message("[ERROR] RKAF CRC mismatch")
+        _show_rkfw_message(gui, "rkfw_crc_mismatch_title", gui.tr("rkfw_crc_mismatch_message"))
+    else:
+        gui.log_message(f"[ERROR] {message}")
+        _show_rkfw_message(gui, "rkfw_extract_failed_title", message)
+
+
+def _start_rkfw_steps(gui, paths, tmp_dir):
+    """Begin flashing the unpacked images.
+
+    The order follows the RK3576 behaviour documented in
+    RK3576-手动刷固件指南.md: on a fresh Maskrom the chip refuses every
+    "read flash info" request until a loader has been downloaded into RAM,
+    so `gpt` must come *after* `db`. The loader is then persisted to the
+    idb area with `ul` (never `wlx bootloader`), and every remaining
+    archive partition is flashed by name - except `package-file`, which is
+    tool metadata and not a real partition.
+    """
+    # RKAF entries that must not be written as GPT partitions:
+    # - "package-file" is tool metadata consumed by Rockchip's own tools.
+    # - "bootloader" is the MiniLoader/idb image; it goes to the idb area
+    #   above (via `ul`), not to a GPT partition named "bootloader".
+    skip_names = {"package-file", "bootloader"}
+
+    steps = [
+        ([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")),
+        ([RKTOOL, "gpt", paths['parameter']], "importing_gpt", gui.tr("rkfw_step_gpt")),
+        ([RKTOOL, "ul", paths['loader']], "writing_idb", gui.tr("rkfw_step_idb")),
+    ]
+    for name, part_path in paths['parts']:
+        if name in skip_names:
+            gui.log_message(f"[INFO] {gui.tr('rkfw_skip_partition').format(name)}")
+            continue
+        steps.append(([RKTOOL, "wlx", name, part_path], "burning",
+                      gui.tr("rkfw_step_partition").format(name)))
 
     gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
     _run_rkfw_steps(gui, steps, 0, tmp_dir)
 
 
-def _run_rkfw_steps(gui, steps, index, tmp_dir):
+def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     """Run the extracted RKFW flash steps one at a time, aborting on the
-    first failure. Each step is a single rkdeveloptool invocation."""
+    first failure that persists after a few retries.
+
+    Transient device-state failures are common mid-flash: `db` makes the
+    board re-enumerate on USB and the next `gpt` can race it, so failed
+    steps are retried a couple of times with a short pause instead of
+    aborting the whole flash at the first hiccup.
+    """
+    max_attempts = 2  # extra attempts after the first failure
+
     if index >= len(steps):
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
                             gui.tr("rkfw_flash_complete_message"), "Information")
@@ -571,12 +648,33 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir):
 
     def on_step_done(success, output):
         if not success:
+            if attempts < max_attempts:
+                gui.log_message(f"[WARNING] {gui.tr('rkfw_step_retry').format(attempts + 1)}")
+                QTimer.singleShot(1000, safe_slot(
+                    lambda: _run_rkfw_steps(gui, steps, index, tmp_dir, attempts + 1)))
+                return
             gui.log_message(f"[ERROR] {label}")
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            _finish_rkfw_flow(gui, tmp_dir)
             _show_rkfw_message(gui, "rkfw_flash_failed_title",
                                 gui.tr("rkfw_flash_failed_message"))
             return
-        _run_rkfw_steps(gui, steps, index + 1, tmp_dir)
+
+        # `db` and `ul` both make the device re-enumerate on USB; give the
+        # freshly downloaded/written loader a generous moment to come back
+        # (5 s) before the next step.
+        if description_key in ('loading_loader', 'writing_idb'):
+            gui.log_message(f"[INFO] {gui.tr('rkfw_waiting_reenum')}")
+            QTimer.singleShot(5000, safe_slot(
+                lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir)))
+            return
+
+        # Schedule the next step on a fresh event-loop tick. Doing this from
+        # inside the just-finished worker's signal handler can race the
+        # worker thread's final teardown (its isRunning() is still True),
+        # which makes run_command bail out with "command already running"
+        # and silently stalls the whole flash chain.
+        QTimer.singleShot(0, safe_slot(
+            lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir)))
 
     gui.run_command(cmd, description_key, on_step_done)
 
@@ -660,31 +758,61 @@ def burn_image(gui):
         gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
         return
 
-    if not confirm_burn_operation(gui, image_path, address):
+    _burn_with_confirm(gui, image_path, address,
+                       lambda: gui.run_command([RKTOOL, "wl", address, image_path], "burning"))
+
+
+def _burn_with_confirm(gui, file_path, address, on_confirm):
+    """Confirm a burn operation without freezing on large images.
+
+    The MD5 shown in the dialog is computed on a FileHashWorker so the GUI
+    keeps painting while a multi-GB image is read; `on_confirm()` is then
+    invoked on the main thread if the user clicks Yes.
+    """
+    if getattr(gui, '_burn_confirm_active', False):
+        gui.log_message(gui.tr('command_already_running'))
         return
 
-    gui.run_command([RKTOOL, "wl", address, image_path], "burning")
-
-
-def confirm_burn_operation(gui, file_path, address):
-    """Show confirmation dialog before burning with storage information"""
     try:
         file_size = os.path.getsize(file_path)
         file_name = os.path.basename(file_path)
         size_str = format_file_size(file_size)
-        md5sum = calculate_file_md5(file_path)
-        
-        # Get current storage information
-        current_storage_code = gui.change_storage_combo.currentData()
-        current_storage_name = gui.change_storage_combo.currentText()
-        storage_info = get_storage_info(gui, current_storage_code) if current_storage_code else {}
+    except OSError as e:
+        gui.log_message(f"[ERROR] {e}")
+        return
 
-        msg = QMessageBox()
-        style_messagebox(msg)
-        msg.setWindowTitle(gui.tr("confirm_burn_title"))
-        msg.setIcon(QMessageBox.Icon.Question)
+    # Get current storage information
+    current_storage_code = gui.change_storage_combo.currentData()
+    current_storage_name = gui.change_storage_combo.currentText()
+    storage_info = get_storage_info(gui, current_storage_code) if current_storage_code else {}
 
-        detail_text = f"""
+    gui._burn_confirm_active = True
+    gui.progress_bar.setValue(0)
+    gui.progress_label.setText(gui.tr("calculating_md5"))
+
+    def on_md5_done(md5sum):
+        gui._burn_confirm_active = False
+        gui.progress_label.setText(gui.tr("ready"))
+        if _show_burn_confirm(gui, file_name, file_size, size_str,
+                              md5sum or gui.tr("md5_unavailable"), address,
+                              current_storage_name, storage_info):
+            on_confirm()
+
+    worker = FileHashWorker(file_path)
+    worker.progress.connect(safe_slot(lambda v: gui.progress_bar.setValue(v)))
+    worker.finished.connect(safe_slot(on_md5_done))
+    worker.start()
+
+
+def _show_burn_confirm(gui, file_name, file_size, size_str, md5sum, address,
+                       current_storage_name, storage_info):
+    """Show the modal burn confirmation dialog; True when the user accepts."""
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("confirm_burn_title"))
+    msg.setIcon(QMessageBox.Icon.Question)
+
+    detail_text = f"""
 {gui.tr("burn_confirmation_message")}
 
 {gui.tr("file_name")}: {file_name}
@@ -697,21 +825,40 @@ MD5: {md5sum}
 {gui.tr("confirm_proceed")}
         """
 
-        msg.setText(detail_text)
-        msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-        msg.setMinimumWidth(550)
-        # Clear focus to prevent button highlighting
-        msg.setFocus()
+    msg.setText(detail_text)
+    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    msg.setMinimumWidth(550)
+    # Clear focus to prevent button highlighting
+    msg.setFocus()
 
-        return msg.exec() == QMessageBox.StandardButton.Yes
+    return msg.exec() == QMessageBox.StandardButton.Yes
 
-    except Exception as e:
-        gui.log_message(f"[WARNING] Confirmation dialog error: {e}")
-        reply = QMessageBox.question(
-            gui, gui.tr("confirm_burn_title"), gui.tr("confirm_burn_simple"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        return reply == QMessageBox.StandardButton.Yes
+
+def confirm_burn_operation(gui, file_path, address):
+    """Legacy synchronous confirmation (computes the file MD5 inline).
+
+    Kept for compatibility with any external callers; GUI code should use
+    _burn_with_confirm() instead so big images don't freeze the interface.
+    """
+    try:
+        file_size = os.path.getsize(file_path)
+        file_name = os.path.basename(file_path)
+        size_str = format_file_size(file_size)
+    except OSError as e:
+        gui.log_message(f"[ERROR] {e}")
+        return False
+
+    current_storage_code = gui.change_storage_combo.currentData()
+    current_storage_name = gui.change_storage_combo.currentText()
+    storage_info = get_storage_info(gui, current_storage_code) if current_storage_code else {}
+
+    try:
+        md5sum = calculate_file_md5(file_path)
+    except Exception:
+        md5sum = gui.tr("md5_unavailable")
+
+    return _show_burn_confirm(gui, file_name, file_size, size_str, md5sum,
+                              address, current_storage_name, storage_info)
 
 
 def detect_supported_storage_types(gui):
