@@ -4,6 +4,7 @@ Cross-platform Rockchip flashing tool with modern interface
 """
 import sys
 import os
+import shutil
 import tempfile
 import math
 import locale
@@ -707,6 +708,7 @@ class RKDevToolGUI(QMainWindow):
     # Buttons / inputs that only make sense when a device is connected.
     # Used by _update_action_states to avoid the "click then get an error" trap.
     _DEVICE_DEPENDENT_WIDGETS = [
+        'enter_maskrom_btn', 'home_maskrom_card',
         'enter_loader_btn', 'reset_device_btn',
         'read_info_btn', 'read_partitions_btn', 'backup_firmware_btn', 'home_backup_card',
         'read_flash_id_btn', 'read_flash_info_btn',
@@ -1023,6 +1025,23 @@ class RKDevToolGUI(QMainWindow):
                 except Exception as e:
                     print(f"Failed to stop command worker: {e}")
 
+            # Stop the RKFW prep worker (background verify/unpack) if running.
+            prep_worker = getattr(self, '_rkfw_worker', None)
+            if prep_worker is not None:
+                try:
+                    if prep_worker.isRunning():
+                        prep_worker.wait(3000)
+                except Exception as e:
+                    print(f"Failed to stop rkfw prep worker: {e}")
+                self._rkfw_worker = None
+            try:
+                tmp_dir = getattr(self, '_rkfw_tmp_dir', None)
+                if tmp_dir:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    self._rkfw_tmp_dir = None
+            except Exception:
+                pass
+
             self._partition_refresh_lock = False
         except Exception as e:
             print(f"Cleanup error: {e}")
@@ -1031,7 +1050,9 @@ class RKDevToolGUI(QMainWindow):
         """Handle window close event"""
         try:
             busy = (self.command_worker is not None and self.command_worker.isRunning()) or \
-                   any(w.isRunning() for w in self.mass_workers)
+                   any(w.isRunning() for w in self.mass_workers) or \
+                   (getattr(self, '_rkfw_worker', None) is not None and
+                    self._rkfw_worker.isRunning())
             if busy:
                 reply = QMessageBox.question(
                     self, self.tr("warning_title"), self.tr("close_while_busy_warning"),

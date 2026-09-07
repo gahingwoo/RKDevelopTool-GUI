@@ -4,8 +4,10 @@ Background worker threads for RKDevelopTool GUI
 import subprocess
 import re
 import os
+import hashlib
 from PySide6.QtCore import QThread, Signal
 
+from . import rkfw
 from .utils import RKTOOL, parse_chip_info
 
 
@@ -300,3 +302,166 @@ class CommandWorker(QThread):
                 self._process.kill()
         except Exception:
             pass
+
+
+class RKFWPrepWorker(QThread):
+    """Unpack an RKFW update.img in the background before flashing.
+
+    CRC-verifies the embedded RKAF archive and extracts the Loader,
+    parameter table and every partition image to ``tmp_dir``, all off the
+    GUI thread. Progress (0-99 while working, 100 right before completion)
+    is reported as a byte-weighted percentage across both passes, and every
+    message is forwarded to the log so the UI stays responsive during the
+    slow part of a one-click full flash.
+
+    Emits:
+        progress(int)            overall percent (byte-weighted)
+        log(str)                 human-readable progress lines
+        finished(dict)           extracted paths:
+                                 {'loader': path, 'parameter': path|None,
+                                  'parts': [(partition_name, path), ...]}
+        failed(kind, message)    kind == 'crc'  -> archive CRC mismatch
+                                 kind == 'error'-> message holds the reason
+    """
+
+    progress = Signal(int)
+    log = Signal(str)
+    finished = Signal(object)
+    failed = Signal(str, str)
+
+    def __init__(self, firmware_path, rkfw_info, rkaf_info, tmp_dir, manager,
+                 verify_crc=True):
+        super().__init__()
+        self.firmware_path = firmware_path
+        self.rkfw_info = rkfw_info
+        self.rkaf_info = rkaf_info
+        self.tmp_dir = tmp_dir
+        self.manager = manager
+        self.verify_crc = verify_crc
+
+    def tr(self, key):
+        return self.manager.tr(key)
+
+    def run(self):
+        try:
+            self._run_inner()
+        except Exception as e:
+            # Never die silently in the worker thread: surface every failure
+            # (including programming errors) through the failed signal so the
+            # GUI can clean up the temp dir and report it.
+            try:
+                self.failed.emit('error', str(e))
+            except Exception:
+                pass
+
+    def _run_inner(self):
+        info = self.rkfw_info
+        rkaf = self.rkaf_info
+
+        param = next((p for p in rkaf.parts if p.is_parameter), None)
+        parts = [(p.name, p) for p in rkaf.parts if not p.is_parameter and not p.is_self]
+
+        # Build the extraction plan first so we know the total byte count and
+        # can report a single smooth percentage across verify + unpack.
+        specs = []
+        total = rkaf.length if self.verify_crc else 0
+
+        loader_path = os.path.join(self.tmp_dir, "loader.bin")
+        specs.append((self.tr("rkfw_extracting_loader"), info.boot_size,
+                      lambda cb: rkfw.extract_loader(
+                          self.firmware_path, info, loader_path, progress_cb=cb)))
+        total += info.boot_size
+
+        param_path = None
+        if param is not None:
+            param_path = os.path.join(self.tmp_dir, "parameter.txt")
+            param_size = max(param.size - 12, 0)
+            specs.append((self.tr("rkfw_extracting_parameter"), param_size,
+                          lambda cb: rkfw.extract_part(
+                              self.firmware_path, info.fw_offset, param,
+                              param_path, progress_cb=cb)))
+            total += param_size
+
+        part_items = []
+        for i, (name, part) in enumerate(parts):
+            part_path = os.path.join(self.tmp_dir, f"part_{i}.img")
+            part_items.append((name, part_path))
+            specs.append((name, part.size,
+                          lambda cb, part=part, part_path=part_path: rkfw.extract_part(
+                              self.firmware_path, info.fw_offset, part,
+                              part_path, progress_cb=cb)))
+            total += part.size
+
+        done = [0]
+        last_pct = [-1]
+
+        def progress_cb(delta):
+            done[0] += delta
+            pct = int(done[0] * 100 // total) if total > 0 else 0
+            pct = min(pct, 99)
+            if pct != last_pct[0]:
+                last_pct[0] = pct
+                self.progress.emit(pct)
+
+        try:
+            if self.verify_crc:
+                self.log.emit(f"[INFO] {self.tr('rkfw_verifying_crc')}")
+                if not rkfw.verify_rkaf_crc(self.firmware_path, info.fw_offset,
+                                            rkaf.length, progress_cb=progress_cb):
+                    self.failed.emit('crc', '')
+                    return
+                self.log.emit(f"[OK] {self.tr('rkfw_crc_ok')}")
+            else:
+                self.log.emit(f"[INFO] {self.tr('rkfw_crc_skipped')}")
+
+            self.log.emit(f"[INFO] {self.tr('rkfw_unpacking')}")
+            for label, size, extract in specs:
+                self.log.emit(f"[INFO] {label} ...")
+                extract(progress_cb)
+        except (rkfw.RKFWError, OSError) as e:
+            self.failed.emit('error', str(e))
+            return
+
+        self.progress.emit(100)
+        self.log.emit(f"[OK] {self.tr('rkfw_unpack_done')}")
+        self.finished.emit({
+            'loader': loader_path,
+            'parameter': param_path,
+            'parts': part_items,
+        })
+
+
+class FileHashWorker(QThread):
+    """Compute a file's MD5 hash in the background (big images would
+    otherwise freeze the GUI for the whole read)."""
+
+    progress = Signal(int)
+    finished = Signal(str)  # hex digest, or '' on error
+
+    def __init__(self, file_path):
+        super().__init__()
+        self.file_path = file_path
+
+    def run(self):
+        h = hashlib.md5()
+        last_pct = [-1]
+        try:
+            size = os.path.getsize(self.file_path)
+            with open(self.file_path, "rb") as f:
+                done = 0
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+                    done += len(chunk)
+                    pct = int(done * 100 // size) if size > 0 else 100
+                    pct = min(pct, 99)
+                    if pct != last_pct[0]:
+                        last_pct[0] = pct
+                        self.progress.emit(pct)
+        except OSError:
+            self.finished.emit('')
+            return
+        self.progress.emit(100)
+        self.finished.emit(h.hexdigest())

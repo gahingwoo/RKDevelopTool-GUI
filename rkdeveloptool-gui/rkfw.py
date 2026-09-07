@@ -191,11 +191,15 @@ def parse_rkaf_header(file_path: str, fw_offset: int) -> RKAFInfo:
                      version=version, length=length, parts=parts)
 
 
-def verify_rkaf_crc(file_path: str, fw_offset: int, length: int) -> bool:
+def verify_rkaf_crc(file_path: str, fw_offset: int, length: int,
+                    progress_cb=None) -> bool:
     """Validate the trailing RKCRC-32 afptool wrote after the part data.
 
     Mirrors afptool's own unpack_update() check: crc = RKCRC over the first
     `length` bytes of the RKAF blob, stored as the 4 bytes right after it.
+
+    `progress_cb`, if given, is invoked after every chunk with the number of
+    bytes just consumed so callers can drive a progress bar.
     """
     file_size = os.path.getsize(file_path)
     if fw_offset + length + 4 > file_size:
@@ -214,11 +218,14 @@ def verify_rkaf_crc(file_path: str, fw_offset: int, length: int) -> bool:
                 break
             crc = rkcrc32(chunk, crc)
             remaining -= len(chunk)
+            if progress_cb is not None:
+                progress_cb(len(chunk))
 
     return crc == stored_crc
 
 
-def _copy_range(src_path: str, offset: int, size: int, dest_path: str) -> None:
+def _copy_range(src_path: str, offset: int, size: int, dest_path: str,
+                progress_cb=None) -> None:
     with open(src_path, "rb") as src, open(dest_path, "wb") as dst:
         src.seek(offset)
         remaining = size
@@ -228,13 +235,18 @@ def _copy_range(src_path: str, offset: int, size: int, dest_path: str) -> None:
                 raise RKFWError(f"Unexpected EOF while extracting {dest_path}")
             dst.write(chunk)
             remaining -= len(chunk)
+            if progress_cb is not None:
+                progress_cb(len(chunk))
 
 
-def extract_loader(file_path: str, rkfw_info: RKFWInfo, dest_path: str) -> None:
-    _copy_range(file_path, rkfw_info.boot_offset, rkfw_info.boot_size, dest_path)
+def extract_loader(file_path: str, rkfw_info: RKFWInfo, dest_path: str,
+                   progress_cb=None) -> None:
+    _copy_range(file_path, rkfw_info.boot_offset, rkfw_info.boot_size, dest_path,
+                progress_cb=progress_cb)
 
 
-def extract_part(file_path: str, fw_offset: int, part: RKAFPart, dest_path: str) -> None:
+def extract_part(file_path: str, fw_offset: int, part: RKAFPart, dest_path: str,
+                 progress_cb=None) -> None:
     """Extract one RKAF partition's payload, matching afptool's unpack_update().
 
     The "parameter" entry is wrapped in an 8-byte "PARM" header and a
@@ -247,4 +259,4 @@ def extract_part(file_path: str, fw_offset: int, part: RKAFPart, dest_path: str)
         size -= 12
     if size <= 0:
         raise RKFWError(f"Partition '{part.name}' has an invalid size after adjustment")
-    _copy_range(file_path, fw_offset + pos, size, dest_path)
+    _copy_range(file_path, fw_offset + pos, size, dest_path, progress_cb=progress_cb)
