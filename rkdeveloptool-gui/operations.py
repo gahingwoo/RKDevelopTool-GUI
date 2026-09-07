@@ -514,6 +514,17 @@ def _flash_rkfw_firmware(gui, firmware_path):
 
     See rkfw.py for the on-disk format this relies on.
     """
+    # Refuse a second full flash up front, before any dialogs: the flag covers
+    # the whole run, while the worker check alone would only cover the
+    # verify/unpack phase and leave the much longer flashing phase open.
+    if getattr(gui, '_rkfw_flashing', False):
+        gui.log_message(gui.tr('rkfw_flash_in_progress'))
+        return
+    worker = getattr(gui, '_rkfw_worker', None)
+    if worker is not None and worker.isRunning():
+        gui.log_message(gui.tr('rkfw_flash_in_progress'))
+        return
+
     try:
         rkfw_info = rkfw.parse_rkfw_header(firmware_path)
         rkaf_info = rkfw.parse_rkaf_header(firmware_path, rkfw_info.fw_offset)
@@ -537,12 +548,6 @@ def _flash_rkfw_firmware(gui, firmware_path):
     if not confirmed:
         return
 
-    # Don't let a second full flash start while one is in flight.
-    worker = getattr(gui, '_rkfw_worker', None)
-    if worker is not None and worker.isRunning():
-        gui.log_message(gui.tr('rkfw_flash_in_progress'))
-        return
-
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
     _set_rkfw_busy(gui, True)
     gui.progress_bar.setValue(0)
@@ -560,11 +565,18 @@ def _flash_rkfw_firmware(gui, firmware_path):
 
 
 def _set_rkfw_busy(gui, busy):
-    """Disable re-triggering burn buttons while a full RKFW flash runs."""
-    for attr in ('onekey_burn_btn', 'burn_image_btn'):
-        widget = getattr(gui, attr, None)
-        if widget is not None:
-            widget.setEnabled(not busy)
+    """Disable device-touching actions while a full RKFW flash runs.
+
+    The flag is what actually holds: the device poller re-runs
+    _update_action_states() every couple of seconds (and the board
+    re-enumerates after db/ul), so simply calling setEnabled(False) here
+    would be undone almost immediately.
+    """
+    gui._rkfw_flashing = bool(busy)
+    try:
+        gui._update_action_states()
+    except Exception as e:
+        print(f"Warning: could not update action states: {e}")
 
 
 def _on_rkfw_prep_progress(gui, value):
@@ -676,7 +688,36 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
         QTimer.singleShot(0, safe_slot(
             lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir)))
 
-    gui.run_command(cmd, description_key, on_step_done)
+    _run_when_idle(gui, cmd, description_key, on_step_done)
+
+
+def _run_when_idle(gui, cmd, description_key, callback, waited_ms=0):
+    """Start a command once the previous one's worker has fully exited.
+
+    run_command() refuses to start while the last CommandWorker is still
+    running and returns *without* invoking the callback - which would leave
+    the flash chain stalled forever. Deferring by one tick narrows that race
+    but can't close it, since the worker emits its finished signal from
+    inside run(), before the thread actually exits. So poll briefly here
+    instead of firing and hoping.
+    """
+    max_wait_ms = 15000
+    worker = getattr(gui, 'command_worker', None)
+    if worker is not None and worker.isRunning():
+        if waited_ms >= max_wait_ms:
+            gui.log_message("[ERROR] Previous command did not finish in time")
+            tmp_dir = getattr(gui, '_rkfw_tmp_dir', None)
+            if tmp_dir:
+                _finish_rkfw_flow(gui, tmp_dir)
+            _show_rkfw_message(gui, "rkfw_flash_failed_title",
+                                gui.tr("rkfw_flash_failed_message"))
+            return
+        QTimer.singleShot(50, safe_slot(
+            lambda: _run_when_idle(gui, cmd, description_key, callback,
+                                    waited_ms + 50)))
+        return
+
+    gui.run_command(cmd, description_key, callback)
 
 
 def load_loader(gui):
@@ -792,6 +833,7 @@ def _burn_with_confirm(gui, file_path, address, on_confirm):
 
     def on_md5_done(md5sum):
         gui._burn_confirm_active = False
+        gui._md5_worker = None
         gui.progress_label.setText(gui.tr("ready"))
         if _show_burn_confirm(gui, file_name, file_size, size_str,
                               md5sum or gui.tr("md5_unavailable"), address,
@@ -799,6 +841,11 @@ def _burn_with_confirm(gui, file_path, address, on_confirm):
             on_confirm()
 
     worker = FileHashWorker(file_path)
+    # Keep a reference on the window: a QThread held only by a local goes out
+    # of scope when this function returns, and PySide6 then destroys the C++
+    # object mid-run ("QThread: Destroyed while thread is still running"),
+    # aborting the process.
+    gui._md5_worker = worker
     worker.progress.connect(safe_slot(lambda v: gui.progress_bar.setValue(v)))
     worker.finished.connect(safe_slot(on_md5_done))
     worker.start()

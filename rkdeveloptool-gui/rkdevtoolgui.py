@@ -722,6 +722,18 @@ class RKDevToolGUI(QMainWindow):
         'download_boot_btn', 'upload_boot_btn',
     ]
 
+    # Actions that must stay disabled for the whole duration of a one-click
+    # full flash, even as the device disappears and re-enumerates. Not all of
+    # these are device-dependent (the home cards aren't), so this set is
+    # applied on top of the list above rather than as a subset of it.
+    _FLASH_BUSY_WIDGETS = frozenset({
+        'onekey_burn_btn', 'burn_image_btn', 'home_flash_card',
+        'burn_partition_btn', 'erase_flash_btn', 'erase_all_btn',
+        'erase_partition_btn', 'load_loader_btn',
+        'enter_maskrom_btn', 'home_maskrom_card', 'enter_loader_btn',
+        'reset_device_btn',
+    })
+
     def _update_action_states(self):
         """Enable device-dependent controls only when a device is connected.
 
@@ -732,12 +744,31 @@ class RKDevToolGUI(QMainWindow):
         """
         connected = self.current_device is not None
         hint = "" if connected else self.tr("connect_device_first")
+        # A full RKFW flash owns the device for its whole run, but the poller
+        # re-runs this every 2 s (and the board re-enumerates after db/ul),
+        # which would otherwise re-enable these mid-flash and let the user
+        # start a second flash on top of the running one.
+        flashing = getattr(self, '_rkfw_flashing', False)
+
         for attr in self._DEVICE_DEPENDENT_WIDGETS:
+            if flashing and attr in self._FLASH_BUSY_WIDGETS:
+                continue
             widget = getattr(self, attr, None)
             if widget is None:
                 continue
             widget.setEnabled(connected)
             widget.setToolTip(hint)
+
+        for attr in self._FLASH_BUSY_WIDGETS:
+            widget = getattr(self, attr, None)
+            if widget is None:
+                continue
+            if flashing:
+                widget.setEnabled(False)
+            elif attr not in self._DEVICE_DEPENDENT_WIDGETS:
+                # Not device-gated, so restore it unconditionally once the
+                # flash is over.
+                widget.setEnabled(True)
 
     def update_device_status(self):
         """Update device status display"""
