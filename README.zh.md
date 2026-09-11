@@ -34,6 +34,7 @@ RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在�
 | 平台 | 文件 |
 | --- | --- |
 | macOS（Apple 芯片） | `RKDevelopTool-GUI-arm64.dmg` |
+| macOS（Intel） | `RKDevelopTool-GUI-x86_64.dmg` |
 | Linux（便携，x86_64 / arm64） | `RKDevelopTool-GUI-*-x86_64.AppImage` / `*-aarch64.AppImage` |
 | Debian/Ubuntu（amd64 / arm64） | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE（x86_64 / aarch64） | `rkdeveloptool-gui-*.rpm` |

@@ -44,6 +44,15 @@ if [ "$OS" = "Darwin" ]; then
   export LIBS="-framework IOKit -framework CoreFoundation -framework Security -lobjc"
 fi
 ./configure
+
+if [ "$OS" = "Darwin" ]; then
+  # Upstream rkdeveloptool compiles with -Werror; the newest Apple Clang
+  # (Xcode 16) turns its C++ variable-length arrays into fatal diagnostics
+  # ([-Werror,-Wvla-cxx-extension]) and may flag other new warnings the same
+  # way. Downgrade -Werror to -Wno-error so the build does not depend on the
+  # exact compiler version.
+  find . -name Makefile -exec sed -i '' -e 's/-Werror/-Wno-error/g' {} \;
+fi
 make -j"$JOBS"
 
 mkdir -p "$(dirname "$OUT")"
