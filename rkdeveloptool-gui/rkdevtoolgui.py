@@ -4,7 +4,9 @@ Cross-platform Rockchip flashing tool with modern interface
 """
 import sys
 import os
+import re
 import shutil
+import subprocess
 import tempfile
 import math
 import locale
@@ -61,10 +63,16 @@ class TranslationManager:
                     system_lang = value.split(":")[0]
                     break
 
-            # Fallback to the configured locale (non-deprecated call)
-            if not system_lang:
+            # macOS: an app started from Finder gets no LANG at all, so read the
+            # user's preferred languages directly (e.g. "zh-Hans-CN").
+            if not system_lang and sys.platform == "darwin":
                 try:
-                    system_lang = locale.getlocale()[0]
+                    out = subprocess.run(
+                        ["defaults", "read", "-g", "AppleLanguages"],
+                        capture_output=True, text=True, timeout=2).stdout
+                    # Output looks like: ( "zh-Hans-CN", "en-US" )
+                    first = re.search(r'[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*', out)
+                    system_lang = first.group(0) if first else None
                 except Exception:
                     system_lang = None
 
@@ -77,20 +85,24 @@ class TranslationManager:
                 except Exception:
                     system_lang = None
 
+            # Fallback to the configured locale (non-deprecated call)
+            if not system_lang:
+                try:
+                    system_lang = locale.getlocale()[0]
+                except Exception:
+                    system_lang = None
+
             if system_lang:
-                # get the language code (e.g., 'en' from 'en_US.UTF-8')
-                lang_code = system_lang.split('.')[0].split('_')[0].lower()
-
-                # only support Chinese and English, default to Chinese if not supported
-                supported_langs = {'zh', 'en'}
-
-                if lang_code in supported_langs:
+                # Language code from 'en_US.UTF-8', 'zh-Hans-CN', ...
+                lang_code = re.split(r'[._-]', system_lang)[0].lower()
+                if lang_code in ('zh', 'en'):
                     return lang_code
         except Exception as e:
             print(f"Failed to detect system language: {e}")
 
-        # Return Chinese as default if detection fails or language not supported
-        return 'zh'
+        # Unknown, unsupported or unset (the C locale) -> English. Chinese is
+        # only picked when the system actually asks for it.
+        return 'en'
 
     def __init__(self, lang=None, settings=None):
         self.settings = settings
