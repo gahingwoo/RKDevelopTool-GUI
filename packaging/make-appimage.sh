@@ -7,8 +7,14 @@
 #
 set -euo pipefail
 
-VERSION="${VERSION:-${GITHUB_REF_NAME#v}}"
-[ -n "${VERSION:-}" ] || VERSION="0.0.0"
+VERSION="${VERSION:-${GITHUB_REF_NAME:-}}"
+VERSION="${VERSION#v}"
+# GITHUB_REF_NAME is the version on a tag push but a branch name on a
+# workflow_dispatch run, so only trust it when it looks like a version.
+case "$VERSION" in
+  [0-9]*) ;;
+  *) VERSION="0.0.0" ;;
+esac
 
 # AppImage arch string (x86_64 or aarch64); must match the host architecture.
 APPIMAGE_ARCH="${APPIMAGE_ARCH:-x86_64}"

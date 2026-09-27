@@ -125,8 +125,15 @@ jobs:
         env:
           PKG_ARCH: ${{ matrix.pkg_arch }}
         run: |
-          export VERSION="${GITHUB_REF_NAME#v}"
-          [ -n "$VERSION" ] || VERSION="0.0.0"
+          # On a tag push the ref name *is* the version. On a workflow_dispatch
+          # it is a branch name, which nfpm rejects as a version, so only take
+          # it when it looks like one.
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            [0-9]*) ;;
+            *) VERSION="0.0.0" ;;
+          esac
+          export VERSION
           nfpm package -f packaging/nfpm.yaml -p deb -t dist/
           nfpm package -f packaging/nfpm.yaml -p rpm -t dist/
 
