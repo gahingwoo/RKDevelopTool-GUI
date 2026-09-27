@@ -87,6 +87,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential autoconf automake libtool \
             pkg-config curl file imagemagick desktop-file-utils libfuse2
+          # Runtime dependencies of Qt's xcb platform plugin. They are not
+          # needed to build, but make-appimage.sh copies them into the AppImage
+          # so it also runs on systems that don't have them (the AppImage
+          # catalog's test container is one), so they must be present here.
+          sudo apt-get install -y libxkbcommon-x11-0 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-util1 \
+            libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1
 
       - name: Build bundled rkdeveloptool
         run: bash packaging/build-rkdeveloptool.sh "$PWD/dist/rkdeveloptool"
@@ -126,6 +134,45 @@ jobs:
         env:
           APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
         run: bash packaging/make-appimage.sh
+
+      # This runner has Qt's X11 dependencies installed, so starting the app
+      # here proves nothing about other machines. Run it in a container holding
+      # only what AppImage's excludelist lets us assume the host provides -
+      # the same situation as the AppImage catalog's test, which is how a
+      # missing libxkbcommon-x11.so.0 shipped unnoticed for several releases.
+      - name: Smoke-test the AppImage on a bare system
+        if: matrix.arch == 'x86_64'
+        run: |
+          docker run --rm -v "$PWD/dist:/dist:ro" debian:bookworm-slim \
+            bash -euo pipefail -c '
+              apt-get update -qq
+              DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                --no-install-recommends xvfb libx11-6 libxcb1 libxcb-dri2-0 \
+                libxcb-dri3-0 libx11-xcb1 libglib2.0-0 libfontconfig1 \
+                libfreetype6 libdbus-1-3 libgl1 libegl1 libexpat1 libz1 \
+                > /dev/null 2>&1 || true
+              cp /dist/*.AppImage /tmp/app.AppImage
+              chmod +x /tmp/app.AppImage
+              export APPIMAGE_EXTRACT_AND_RUN=1 DISPLAY=:99
+              Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+              sleep 3
+              set +e
+              timeout 40 /tmp/app.AppImage > /tmp/app.log 2>&1
+              rc=$?
+              set -e
+              echo "===== app output ====="; cat /tmp/app.log; echo "====================="
+              if grep -qiE "cannot open shared object file|could not (load|find) the Qt platform plugin" /tmp/app.log; then
+                echo "FAIL: the AppImage is missing a bundled runtime library"
+                exit 1
+              fi
+              # A healthy GUI app runs until timeout kills it (124). Any other
+              # code means it exited on its own, i.e. it never opened a window.
+              if [ "$rc" != "124" ]; then
+                echo "FAIL: app exited on its own (exit code $rc) instead of staying up"
+                exit 1
+              fi
+              echo "OK: app stayed running, Qt platform plugin loaded"
+            '
 
       - uses: actions/upload-artifact@v4
         with:
