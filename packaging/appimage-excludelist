@@ -59,3 +59,12 @@ libxcb-dri2.so.0
 libxcb-dri3.so.0
 libxcb.so.1
 libz.so.1
+
+# --- Local additions (not in AppImage's upstream list) ---------------------
+# These talk to host daemons over interfaces whose version must match the
+# running system, so a bundled copy can fail where the host's works. Nothing
+# in this app uses them directly: rkdeveloptool links libusb statically, and
+# the bare-system smoke test in the release workflow confirms the GUI starts
+# without them bundled.
+libsystemd.so.0
+libudev.so.1
