@@ -2,7 +2,9 @@
 <!-- AppStream metadata: what software centres and the AppImage catalog show
      for the app. appimagetool validates it against the .desktop file and
      looks it up by the .desktop file's name, and AppStream wants that name to
-     match the reverse-DNS <id> below, so all three must stay in sync. -->
+     match the reverse-DNS <id> below, so all three must stay in sync.
+     CI validates it with Ubuntu 22.04's appstreamcli (0.15), which rejects
+     newer URL types such as vcs-browser. -->
 <component type="desktop-application">
   <id>io.github.gahingwoo.rkdeveloptool_gui</id>
   <metadata_license>CC0-1.0</metadata_license>
@@ -39,7 +41,6 @@
 
   <url type="homepage">https://github.com/gahingwoo/RKDevelopTool-GUI</url>
   <url type="bugtracker">https://github.com/gahingwoo/RKDevelopTool-GUI/issues</url>
-  <url type="vcs-browser">https://github.com/gahingwoo/RKDevelopTool-GUI</url>
 
   <screenshots>
     <screenshot type="default">
