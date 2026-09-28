@@ -13,7 +13,7 @@ description: |
   Flash firmware, manage partitions and debug Rockchip devices without the
   command line. Bundles rkdeveloptool, so nothing else needs to be installed.
 homepage: https://github.com/gahingwoo/RKDevelopTool-GUI
-license: GPL-2.0
+license: GPL-3.0-only
 section: utils
 priority: optional
 
