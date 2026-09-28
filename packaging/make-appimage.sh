@@ -124,14 +124,37 @@ exec "$HERE/usr/bin/rkdevtoolgui" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
+# appimagetool from AppImage/appimagetool rather than the retired AppImageKit
+# one: it embeds the current static type2 runtime, so the AppImage no longer
+# needs the host's libfuse2 (or its C library) just to start.
 curl -fsSL -o /tmp/appimagetool \
-  "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-${APPIMAGE_ARCH}.AppImage"
+  "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-${APPIMAGE_ARCH}.AppImage"
 chmod +x /tmp/appimagetool
+
+OUT="dist/RKDevelopTool-GUI-${VERSION}-${APPIMAGE_ARCH}.AppImage"
+
+# Update information lets AppImageUpdate (and tools built on it) fetch only the
+# changed blocks of the newest release. appimagetool writes a matching .zsync
+# next to the AppImage when zsyncmake is installed; publish it alongside.
+UPDATE_INFO="gh-releases-zsync|gahingwoo|RKDevelopTool-GUI|latest|RKDevelopTool-GUI-*-${APPIMAGE_ARCH}.AppImage.zsync"
 
 mkdir -p dist
 # Extract-and-run avoids needing FUSE on CI runners.
 export APPIMAGE_EXTRACT_AND_RUN=1
-ARCH="$APPIMAGE_ARCH" /tmp/appimagetool "$APPDIR" \
-  "dist/RKDevelopTool-GUI-${VERSION}-${APPIMAGE_ARCH}.AppImage"
+ARCH="$APPIMAGE_ARCH" /tmp/appimagetool -u "$UPDATE_INFO" "$APPDIR" "$OUT"
 
-echo "==> Built dist/RKDevelopTool-GUI-${VERSION}-${APPIMAGE_ARCH}.AppImage"
+# appimagetool writes the .zsync into the current directory rather than next
+# to the AppImage; move it beside it so the release upload picks it up.
+ZSYNC_NAME="$(basename "$OUT").zsync"
+if [ -f "$ZSYNC_NAME" ] && [ ! -f "$OUT.zsync" ]; then
+  mv "$ZSYNC_NAME" "$OUT.zsync"
+fi
+
+# appimagetool only warns when zsyncmake is missing; an AppImage advertising
+# updates without the .zsync it points to would break updating for users.
+if [ ! -f "$OUT.zsync" ]; then
+  echo "ERROR: $OUT.zsync was not generated (is zsync installed?)" >&2
+  exit 1
+fi
+
+echo "==> Built $OUT (+ .zsync)"

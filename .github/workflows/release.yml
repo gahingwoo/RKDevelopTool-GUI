@@ -86,7 +86,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential autoconf automake libtool \
-            pkg-config curl file imagemagick desktop-file-utils libfuse2
+            pkg-config curl file imagemagick desktop-file-utils libfuse2 zsync
           # Runtime dependencies of Qt's xcb platform plugin. They are not
           # needed to build, but make-appimage.sh copies them into the AppImage
           # so it also runs on systems that don't have them (the AppImage
@@ -191,6 +191,7 @@ jobs:
             dist/*.deb
             dist/*.rpm
             dist/*.AppImage
+            dist/*.AppImage.zsync
 
   release:
     name: Publish Release
