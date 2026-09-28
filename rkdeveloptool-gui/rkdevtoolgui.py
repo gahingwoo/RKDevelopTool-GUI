@@ -20,7 +20,7 @@ if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QLabel, QLineEdit,
@@ -618,22 +618,24 @@ class RKDevToolGUI(QMainWindow):
 
         # Language selector
         self.lang_combo = QComboBox()
-        self.lang_combo.addItem("自动(Auto)", "auto")
+        # "Auto" follows the UI language; the languages themselves are always
+        # named in their own script, so someone stuck in a language they can't
+        # read can still find theirs.
+        self.lang_combo.addItem(self.tr("lang_auto"), "auto")
         self.lang_combo.addItem("中文(Chinese)", "zh")
         self.lang_combo.addItem("English", "en")
         self.lang_combo.setMinimumWidth(140)
-        
+
         # Set current language based on manager's state
         if self.manager.auto_mode:
             self.lang_combo.setCurrentIndex(0)  # Auto
         else:
             idx = self.lang_combo.findData(self.manager.lang)
-            if idx >= 0:
-                self.lang_combo.setCurrentIndex(idx)
-            else:
-                self.lang_combo.setCurrentIndex(1)  # Default to Chinese
-        
-        self.lang_combo.currentTextChanged.connect(safe_slot(self.on_language_changed))
+            self.lang_combo.setCurrentIndex(idx if idx >= 0 else 2)  # English
+
+        # Index, not text: the "Auto" label is retranslated on a language
+        # switch, and a text-change signal would re-enter the switch.
+        self.lang_combo.currentIndexChanged.connect(safe_slot(self.on_language_changed))
         self.statusBar().addPermanentWidget(self.lang_combo)
 
         # Connection status
@@ -1144,6 +1146,22 @@ class RKDevToolGUI(QMainWindow):
             pass
 
 
+def load_app_icon():
+    """Window/taskbar icon, built from the bundled PNG sizes.
+
+    Rendered from packaging/icon/rkdeveloptool-gui.svg by
+    packaging/icon/render.py. Returns an empty icon if the assets are missing
+    (e.g. a stripped-down source checkout) rather than failing to start.
+    """
+    icon = QIcon()
+    icon_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "icons")
+    for size in (16, 32, 48, 64, 128, 256):
+        path = os.path.join(icon_dir, f"rkdeveloptool-gui-{size}.png")
+        if os.path.exists(path):
+            icon.addFile(path)
+    return icon
+
+
 def main():
     """Main entry point"""
     app = QApplication(sys.argv)
@@ -1151,6 +1169,10 @@ def main():
     # Names QSettings uses to locate its store; set before anything reads it.
     app.setOrganizationName(app_settings.ORGANIZATION)
     app.setApplicationName(app_settings.APPLICATION)
+    # Lets Wayland compositors and Linux docks match the window to the
+    # installed io.github.gahingwoo.rkdeveloptool_gui.desktop entry (and so to its icon).
+    app.setDesktopFileName("io.github.gahingwoo.rkdeveloptool_gui")
+    app.setWindowIcon(load_app_icon())
 
     settings = AppSettings()
 

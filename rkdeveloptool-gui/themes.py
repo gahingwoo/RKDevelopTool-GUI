@@ -206,13 +206,11 @@ class ThemeManager:
         return ['auto', 'dark', 'light']
     
     def get_theme_display_name(self, theme_key):
-        """Get display name for a theme"""
-        names = {
-            'auto': '自动(Auto)',
-            'dark': '深色(Dark)',
-            'light': '浅色(Light)',
-        }
-        return names.get(theme_key, theme_key)
+        """Get the display name for a theme in the current UI language."""
+        tr = getattr(self.window, 'tr', None)
+        if callable(tr) and theme_key in ('auto', 'dark', 'light'):
+            return tr(f"theme_{theme_key}")
+        return theme_key
     
     def get_current_theme(self):
         """Get the current active theme"""

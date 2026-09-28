@@ -4,5 +4,6 @@ Name=RKDevelopTool GUI
 Comment=Flash and manage Rockchip devices
 Exec=rkdeveloptool-gui
 Icon=rkdeveloptool-gui
-Categories=Utility;Development;
+Categories=Development;
+Keywords=Rockchip;rkdeveloptool;firmware;flash;maskrom;partition;
 Terminal=false

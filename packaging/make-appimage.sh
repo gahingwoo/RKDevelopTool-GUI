@@ -103,13 +103,20 @@ bundle_qt_libs() {
 }
 bundle_qt_libs
 
-cp packaging/rkdeveloptool-gui.desktop "$APPDIR/rkdeveloptool-gui.desktop"
-if [ -f packaging/rkdeveloptool-gui.png ]; then
-  cp packaging/rkdeveloptool-gui.png "$APPDIR/rkdeveloptool-gui.png"
-else
-  # appimagetool requires an icon; generate a plain placeholder if none exists.
-  convert -size 256x256 xc:'#2b6cb0' "$APPDIR/rkdeveloptool-gui.png"
-fi
+# Desktop integration. The .desktop and AppStream files are named after the
+# app's reverse-DNS id; appimagetool finds the metadata by the .desktop name.
+APP_ID="io.github.gahingwoo.rkdeveloptool_gui"
+mkdir -p "$APPDIR/usr/share/applications" "$APPDIR/usr/share/metainfo" \
+         "$APPDIR/usr/share/icons"
+cp "packaging/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
+cp "packaging/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
+cp "packaging/$APP_ID.appdata.xml" "$APPDIR/usr/share/metainfo/$APP_ID.appdata.xml"
+
+# Icons, rendered from packaging/icon/rkdeveloptool-gui.svg by
+# packaging/icon/render.py: the full hicolor set for desktops that integrate
+# the AppImage, plus the top-level icon appimagetool requires.
+cp -R packaging/icon/hicolor "$APPDIR/usr/share/icons/"
+cp packaging/rkdeveloptool-gui.png "$APPDIR/rkdeveloptool-gui.png"
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh

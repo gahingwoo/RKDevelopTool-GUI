@@ -249,6 +249,26 @@ def update_statusbar_texts(gui):
         f"{gui.tr('ready_status')}{gui.tr('status_line_delimiter')}{gui.tr('not_connected_status')}"
     )
     gui.connection_status.setText(f"{gui.tr('not_connected')}")
+
+    # Relabel the theme and language pickers in place. Signals are blocked so
+    # renaming the selected entry isn't mistaken for the user picking it.
+    for combo, label in (
+        (getattr(gui, 'theme_combo', None),
+         lambda key: gui.theme_manager.get_theme_display_name(key)),
+        (getattr(gui, 'lang_combo', None),
+         lambda key: gui.tr('lang_auto') if key == 'auto' else None),
+    ):
+        if combo is None:
+            continue
+        combo.blockSignals(True)
+        try:
+            for i in range(combo.count()):
+                text = label(combo.itemData(i))
+                if text:
+                    combo.setItemText(i, text)
+        finally:
+            combo.blockSignals(False)
+
     gui.update_device_status()
 
 

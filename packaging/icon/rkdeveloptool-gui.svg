@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- RKDevelopTool GUI icon: a chip being flashed. Master file; the PNG,
+       .icns and window-icon sizes are generated from it by
+       packaging/icon/render.py. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2F6FEB"/>
+      <stop offset="1" stop-color="#1B3FA6"/>
+    </linearGradient>
+    <linearGradient id="die" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A2F3A"/>
+      <stop offset="1" stop-color="#171A21"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE27A"/>
+      <stop offset="1" stop-color="#FFB020"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square tile, inset so the icon has the usual margin. -->
+  <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#bg)"/>
+
+  <!-- Pins: five per side. -->
+  <g fill="#C9D6F5">
+    <rect x="160" y="96" width="20" height="44" rx="6"/>
+    <rect x="203" y="96" width="20" height="44" rx="6"/>
+    <rect x="246" y="96" width="20" height="44" rx="6"/>
+    <rect x="289" y="96" width="20" height="44" rx="6"/>
+    <rect x="332" y="96" width="20" height="44" rx="6"/>
+
+    <rect x="160" y="372" width="20" height="44" rx="6"/>
+    <rect x="203" y="372" width="20" height="44" rx="6"/>
+    <rect x="246" y="372" width="20" height="44" rx="6"/>
+    <rect x="289" y="372" width="20" height="44" rx="6"/>
+    <rect x="332" y="372" width="20" height="44" rx="6"/>
+
+    <rect x="96" y="160" width="44" height="20" rx="6"/>
+    <rect x="96" y="203" width="44" height="20" rx="6"/>
+    <rect x="96" y="246" width="44" height="20" rx="6"/>
+    <rect x="96" y="289" width="44" height="20" rx="6"/>
+    <rect x="96" y="332" width="44" height="20" rx="6"/>
+
+    <rect x="372" y="160" width="44" height="20" rx="6"/>
+    <rect x="372" y="203" width="44" height="20" rx="6"/>
+    <rect x="372" y="246" width="44" height="20" rx="6"/>
+    <rect x="372" y="289" width="44" height="20" rx="6"/>
+    <rect x="372" y="332" width="44" height="20" rx="6"/>
+  </g>
+
+  <!-- Chip body. -->
+  <rect x="128" y="128" width="256" height="256" rx="28" fill="url(#die)"
+        stroke="#0E1117" stroke-width="4"/>
+  <!-- Pin-1 marker. -->
+  <circle cx="162" cy="162" r="10" fill="#3A4252"/>
+
+  <!-- Downward bolt: the firmware being written into the chip. -->
+  <path d="M276 150 L196 268 L248 268 L226 362 L318 232 L264 232 L292 150 Z"
+        fill="url(#bolt)" stroke="#9A5A00" stroke-width="6" stroke-linejoin="round"/>
+</svg>

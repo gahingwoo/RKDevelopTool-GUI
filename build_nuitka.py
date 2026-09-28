@@ -144,7 +144,9 @@ def build_with_nuitka():
                 "--standalone",
                 "--macos-create-app-bundle",
                 "--macos-app-name=RKDevelopTool-GUI",
-                "--macos-app-icon=none",
+                # Generated from packaging/icon/rkdeveloptool-gui.svg by
+                # packaging/icon/render.py.
+                "--macos-app-icon=packaging/icon/rkdeveloptool-gui.icns",
             ])
         elif system == "linux":  # Linux - single file
             cmd.extend([

@@ -34,8 +34,15 @@ contents:
     file_info:
       mode: 0755
   # Desktop integration.
-  - src: ./packaging/rkdeveloptool-gui.desktop
-    dst: /usr/share/applications/rkdeveloptool-gui.desktop
+  - src: ./packaging/io.github.gahingwoo.rkdeveloptool_gui.desktop
+    dst: /usr/share/applications/io.github.gahingwoo.rkdeveloptool_gui.desktop
+  - src: ./packaging/io.github.gahingwoo.rkdeveloptool_gui.appdata.xml
+    dst: /usr/share/metainfo/io.github.gahingwoo.rkdeveloptool_gui.metainfo.xml
+  # Icon set the .desktop file's Icon=rkdeveloptool-gui resolves to (rendered
+  # from packaging/icon/rkdeveloptool-gui.svg by packaging/icon/render.py).
+  - src: ./packaging/icon/hicolor/
+    dst: /usr/share/icons/hicolor/
+    type: tree
   # License / third-party notices.
   - src: ./LICENSE
     dst: /usr/share/doc/rkdeveloptool-gui/LICENSE
