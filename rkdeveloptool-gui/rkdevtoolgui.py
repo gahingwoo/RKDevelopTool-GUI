@@ -165,7 +165,19 @@ class RKDevToolGUI(QMainWindow):
         self.debug_enabled = False  # Track debug logging state
 
         # UI Setup
-        self.setMinimumSize(1300, 720)
+        # Both panels scroll, so the layout itself needs very little room; the
+        # minimum only keeps the status bar readable. Open at the preferred
+        # size but never larger than the screen, so small laptop screens (and
+        # the AppImage catalog's 800x600 test screen) show the whole window.
+        # A saved geometry (restore_settings) still takes precedence.
+        self.setMinimumSize(800, 560)
+        preferred_w, preferred_h = 1300, 720
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            preferred_w = min(preferred_w, avail.width())
+            preferred_h = min(preferred_h, avail.height())
+        self.resize(max(preferred_w, 800), max(preferred_h, 560))
         self.set_application_font()
 
         # Initialize theme manager, restoring the theme/style picked last time.
