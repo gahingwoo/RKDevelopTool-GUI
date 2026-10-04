@@ -1,0 +1,75 @@
+name: CI
+
+# Cheap checks for every pull request and push to main. The full Nuitka /
+# AppImage / DMG builds only run in release.yml on a tag, so this is what
+# catches a broken start-up or broken packaging metadata before it merges.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Smoke test (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest Python this tests, on the same image the release builds use.
+          - os: ubuntu-22.04
+            python: "3.9"
+          - os: ubuntu-latest
+            python: "3.13"
+          - os: macos-15
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Even the offscreen platform plugin links against EGL/GL and xkbcommon.
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1
+
+      # A real (non-editable) install, so missing package data shows up.
+      - name: Install the package
+        run: pip install .
+
+      - name: Byte-compile every module
+        run: python -m compileall -q rkdeveloptool-gui rkdevtoolgui.py build_nuitka.py
+
+      - name: Start the app headless
+        run: python tests/smoke.py
+
+  metadata:
+    name: Desktop / AppStream metadata
+    # Same validator version as the release build, which is what rejected the
+    # vcs-browser URL.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      - name: Validate
+        run: |
+          appstreamcli validate --no-net packaging/io.github.gahingwoo.rkdeveloptool_gui.appdata.xml
+          desktop-file-validate packaging/io.github.gahingwoo.rkdeveloptool_gui.desktop
