@@ -15,10 +15,12 @@ from . import rkfw
 from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
-    calculate_file_md5, format_file_size, safe_slot, is_rkfw_image
+    calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
+    detect_compression, decompressed_name, DECOMPRESSIBLE
 )
 from .workers import (
-    PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker
+    PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
+    DecompressWorker
 )
 from .ui_text_updates import populate_address_combo, populate_partition_combo
 
@@ -420,16 +422,14 @@ def write_partition_by_name(gui, name):
             if _is_sector_zero(addr) and is_rkfw_image(file_path):
                 gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
                 return
-            _burn_with_confirm(gui, file_path, addr,
-                               lambda: gui.run_command([RKTOOL, "wl", addr, file_path], "burning"))
+            _burn_file(gui, file_path, addr, lambda path: [RKTOOL, "wl", addr, path])
             return
     except (AttributeError, RuntimeError) as e:
         print(f"Warning: Failed to check manual address: {e}")
 
     if name:
         addr = gui.partitions.get(name, {}).get('address', name) if hasattr(gui, 'partitions') else name
-        _burn_with_confirm(gui, file_path, addr,
-                           lambda: gui.run_command([RKTOOL, "wlx", name, file_path], "burning"))
+        _burn_file(gui, file_path, addr, lambda path: [RKTOOL, "wlx", name, path])
         return
 
     gui.show_message("Warning", "select_partition", "Warning")
@@ -444,8 +444,7 @@ def onekey_burn(gui):
     if is_rkfw_image(firmware_path):
         _flash_rkfw_firmware(gui, firmware_path)
         return
-    _burn_with_confirm(gui, firmware_path, "0x0",
-                       lambda: gui.run_command([RKTOOL, "wl", "0x0", firmware_path], "burning"))
+    _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
 def _show_rkfw_message(gui, title_key, text, icon="Critical"):
@@ -733,6 +732,13 @@ def load_loader(gui):
             return
         gui.loader_path.setText(loader_path)
     
+    # In Maskrom the loader can only go to RAM (db); ul needs a loader that is
+    # already running and fails here, so don't make the user pick.
+    if 'Maskrom' in getattr(gui, 'device_mode', ''):
+        gui.log_message(f"[INFO] {gui.tr('loader_auto_db')}")
+        _start_loader(gui, "db", loader_path)
+        return
+
     # Ask user to choose between ul (upload) or db (download)
     msg = QMessageBox()
     style_messagebox(msg)
@@ -754,8 +760,13 @@ def load_loader(gui):
     else:
         cmd_type = "db"
     
+    _start_loader(gui, cmd_type, loader_path)
+
+
+def _start_loader(gui, cmd_type, loader_path):
+    """Run db/ul with the loader and record whether it actually loaded."""
     gui.run_command([RKTOOL, cmd_type, loader_path], "loading_loader")
-    
+
     # Mark that we're attempting to load loader and wrap the finished signal
     if gui.command_worker:
         def on_loader_finished(success, error_msg):
@@ -799,19 +810,21 @@ def burn_image(gui):
         gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
         return
 
-    _burn_with_confirm(gui, image_path, address,
-                       lambda: gui.run_command([RKTOOL, "wl", address, image_path], "burning"))
+    _burn_file(gui, image_path, address, lambda path: [RKTOOL, "wl", address, path])
 
 
-def _burn_with_confirm(gui, file_path, address, on_confirm):
+def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None):
     """Confirm a burn operation without freezing on large images.
 
     The MD5 shown in the dialog is computed on a FileHashWorker so the GUI
     keeps painting while a multi-GB image is read; `on_confirm()` is then
-    invoked on the main thread if the user clicks Yes.
+    invoked on the main thread if the user clicks Yes, and `on_cancel()`
+    (if given) on every other way out.
     """
+    on_cancel = on_cancel or (lambda: None)
     if getattr(gui, '_burn_confirm_active', False):
         gui.log_message(gui.tr('command_already_running'))
+        on_cancel()
         return
 
     try:
@@ -820,6 +833,7 @@ def _burn_with_confirm(gui, file_path, address, on_confirm):
         size_str = format_file_size(file_size)
     except OSError as e:
         gui.log_message(f"[ERROR] {e}")
+        on_cancel()
         return
 
     # Get current storage information
@@ -839,6 +853,8 @@ def _burn_with_confirm(gui, file_path, address, on_confirm):
                               md5sum or gui.tr("md5_unavailable"), address,
                               current_storage_name, storage_info):
             on_confirm()
+        else:
+            on_cancel()
 
     worker = FileHashWorker(file_path)
     # Keep a reference on the window: a QThread held only by a local goes out
@@ -849,6 +865,107 @@ def _burn_with_confirm(gui, file_path, address, on_confirm):
     worker.progress.connect(safe_slot(lambda v: gui.progress_bar.setValue(v)))
     worker.finished.connect(safe_slot(on_md5_done))
     worker.start()
+
+
+def _burn_file(gui, file_path, address, make_cmd):
+    """Confirm and write an image, decompressing it first when it is an
+    .img.xz / .img.gz / .img.bz2. make_cmd(path) builds the rkdeveloptool
+    command for the file that will actually be written."""
+    def burn(path, cleanup):
+        _burn_with_confirm(
+            gui, path, address,
+            lambda: gui.run_command(make_cmd(path), "burning", lambda *_: cleanup()),
+            on_cancel=cleanup)
+
+    _with_plain_image(gui, file_path, burn)
+
+
+def _with_plain_image(gui, file_path, on_ready):
+    """Call on_ready(path, cleanup) with an uncompressed copy of file_path.
+
+    A raw image is passed straight through. A compressed one is unpacked on
+    a DecompressWorker first, next to the original when that directory is
+    writable (/tmp is often a small tmpfs, too small for a multi-GB image),
+    and cleanup() deletes the copy once the caller is done with it. Formats
+    the standard library can't unpack are refused rather than written raw,
+    which would leave the board unbootable while reporting success.
+    """
+    kind = detect_compression(file_path)
+    if kind is None:
+        on_ready(file_path, lambda: None)
+        return
+    if kind not in DECOMPRESSIBLE:
+        _show_rkfw_message(gui, "compressed_image_title",
+                           gui.tr("compressed_unsupported_message").format(kind))
+        return
+    worker = getattr(gui, '_decompress_worker', None)
+    if worker is not None and worker.isRunning():
+        gui.log_message(gui.tr('command_already_running'))
+        return
+
+    parent = os.path.dirname(os.path.abspath(file_path))
+    try:
+        tmp_dir = tempfile.mkdtemp(prefix=".rkdevtool_unpack_", dir=parent)
+    except OSError:
+        tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_unpack_")
+    dest = os.path.join(tmp_dir, decompressed_name(file_path))
+
+    def cleanup():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if getattr(gui, '_decompress_tmp_dir', None) == tmp_dir:
+            gui._decompress_tmp_dir = None
+
+    def done(path):
+        gui._decompress_worker = None
+        _set_image_prep_busy(gui, False)
+        gui.progress_label.setText(gui.tr("ready"))
+        gui.log_message(f"[OK] {gui.tr('decompress_done').format(path)}")
+        if is_rkfw_image(path):
+            cleanup()
+            _show_rkfw_message(gui, "compressed_image_title",
+                               gui.tr("compressed_rkfw_message"))
+            return
+        on_ready(path, cleanup)
+
+    def failed(reason, message):
+        gui._decompress_worker = None
+        _set_image_prep_busy(gui, False)
+        gui.progress_label.setText(gui.tr("ready"))
+        cleanup()
+        if reason == 'cancelled':
+            return
+        gui.log_message(f"[ERROR] {gui.tr('decompress_failed_title')}: {message}")
+        if reason == 'nospace':
+            text = gui.tr("decompress_nospace_message").format(tmp_dir)
+        elif reason == 'corrupt':
+            text = gui.tr("decompress_corrupt_message").format(message)
+        else:
+            text = message
+        _show_rkfw_message(gui, "decompress_failed_title", text)
+
+    def progress(value):
+        gui.progress_bar.setValue(value)
+        gui.progress_label.setText(f"{gui.tr('decompressing_image')} {value}%")
+
+    gui.log_message(f"[INFO] {gui.tr('decompressing_image')}: {os.path.basename(file_path)} ({kind})")
+    worker = DecompressWorker(file_path, kind, dest)
+    gui._decompress_worker = worker
+    gui._decompress_tmp_dir = tmp_dir
+    _set_image_prep_busy(gui, True)
+    gui.progress_bar.setValue(0)
+    worker.progress.connect(safe_slot(progress))
+    worker.finished.connect(safe_slot(done))
+    worker.failed.connect(safe_slot(failed))
+    worker.start()
+
+
+def _set_image_prep_busy(gui, busy):
+    """Disable flashing actions while an image is being decompressed."""
+    gui._image_prep_busy = bool(busy)
+    try:
+        gui._update_action_states()
+    except Exception as e:
+        print(f"Warning: could not update action states: {e}")
 
 
 def _show_burn_confirm(gui, file_name, file_size, size_str, md5sum, address,

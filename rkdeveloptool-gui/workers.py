@@ -4,7 +4,11 @@ Background worker threads for RKDevelopTool GUI
 import subprocess
 import re
 import os
+import errno
 import hashlib
+import lzma
+import gzip
+import bz2
 from PySide6.QtCore import QThread, Signal
 
 from . import rkfw
@@ -429,6 +433,83 @@ class RKFWPrepWorker(QThread):
             'parameter': param_path,
             'parts': part_items,
         })
+
+
+class DecompressWorker(QThread):
+    """Decompress an .img.xz / .img.gz / .img.bz2 to a plain image file.
+
+    rkdeveloptool can only write a file as-is, so a compressed distro image
+    has to be unpacked to disk first. Progress is measured on the compressed
+    input, since the decompressed size isn't known up front.
+
+    Emits:
+        progress(int)            percent of the compressed input consumed
+        finished(str)            path of the decompressed image
+        failed(kind, message)    kind is 'nospace', 'corrupt', 'cancelled'
+                                 or 'error'; the partial output is removed
+    """
+
+    progress = Signal(int)
+    finished = Signal(str)
+    failed = Signal(str, str)
+
+    _OPENERS = {"xz": lzma.open, "gzip": gzip.open, "bzip2": bz2.open}
+
+    def __init__(self, src_path, kind, dest_path):
+        super().__init__()
+        self.src_path = src_path
+        self.kind = kind
+        self.dest_path = dest_path
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        try:
+            kind, message = self._run_inner()
+        except Exception as e:
+            kind, message = 'error', str(e)
+        if kind is None:
+            self.progress.emit(100)
+            self.finished.emit(self.dest_path)
+            return
+        try:
+            os.remove(self.dest_path)
+        except OSError:
+            pass
+        self.failed.emit(kind, message)
+
+    def _run_inner(self):
+        opener = self._OPENERS[self.kind]
+        total = os.path.getsize(self.src_path)
+        last_pct = -1
+        try:
+            with open(self.src_path, "rb") as raw, \
+                    opener(raw, "rb") as src, \
+                    open(self.dest_path, "wb") as out:
+                while True:
+                    if self._stop:
+                        return 'cancelled', ''
+                    chunk = src.read(4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    pct = min(int(raw.tell() * 100 // total), 99) if total else 0
+                    if pct != last_pct:
+                        last_pct = pct
+                        self.progress.emit(pct)
+        except (lzma.LZMAError, EOFError) as e:
+            return 'corrupt', str(e)
+        except OSError as e:
+            if e.errno == errno.ENOSPC:
+                return 'nospace', str(e)
+            # gzip.BadGzipFile and bz2's "Invalid data stream" are OSErrors
+            # without an errno: the input, not the disk, is at fault.
+            if e.errno is None:
+                return 'corrupt', str(e)
+            return 'error', str(e)
+        return None, ''
 
 
 class FileHashWorker(QThread):
