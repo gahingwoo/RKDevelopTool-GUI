@@ -56,6 +56,10 @@ jobs:
       - name: Start the app headless
         run: python tests/smoke.py
 
+      # Synthetic update.img files, including sparse >4 GiB ones.
+      - name: RKFW parser layouts
+        run: python tests/rkfw_layouts.py
+
   metadata:
     name: Desktop / AppStream metadata
     # Same validator version as the release build, which is what rejected the
