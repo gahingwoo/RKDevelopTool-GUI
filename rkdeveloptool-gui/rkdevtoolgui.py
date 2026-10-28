@@ -1010,7 +1010,9 @@ class RKDevToolGUI(QMainWindow):
                 self.tr("update_available").format(self._update_release["version"]))
             self.update_button.setStyleSheet("font-weight: bold;")
         else:
-            self.update_button.setText(f"v{__version__}")
+            # Say what clicking does: a bare "v5.5.0" reads as a label.
+            self.update_button.setText(
+                f"v{__version__} · {self.tr('check_updates_label')}")
             self.update_button.setStyleSheet("")
         self.update_button.setToolTip(self.tr("check_updates_tooltip"))
 

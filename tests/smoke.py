@@ -125,7 +125,7 @@ def check_updates(app):
         window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                               settings=AppSettings())
         try:
-            if window.update_button.text() != f"v{__version__}":
+            if not window.update_button.text().startswith(f"v{__version__} · "):
                 errors.append(f"status bar shows {window.update_button.text()!r}")
             window._on_update_available(
                 {"version": "9.0.0", "page": "https://x/page", "download": None,
