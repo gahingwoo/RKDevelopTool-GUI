@@ -33,6 +33,8 @@ RKAF_HEADER_SIZE = 2048
 RKAF_MAX_PARTS = 16
 RKAF_PART_SIZE = 112
 COPY_CHUNK = 1024 * 1024
+U32_RANGE = 1 << 32
+RKAF_SECTOR_SIZE = 2048
 
 # RKCRC table, transcribed programmatically from the authoritative rkcrc.h
 # (linux-rockchip afptool sources) - NOT the standard CRC-32/zlib table.
@@ -126,6 +128,31 @@ class RKAFInfo:
     parts: list = field(default_factory=list)
 
 
+def _archive_end(file_path: str) -> int:
+    """Exclude RKImageMaker's optional trailing 32-character ASCII MD5."""
+    file_size = os.path.getsize(file_path)
+    with open(file_path, "rb") as f:
+        magic = f.read(4)
+        if magic == RKFW_MAGIC and file_size >= RKFW_HEADER_SIZE + 32:
+            f.seek(-32, os.SEEK_END)
+            tail = f.read(32)
+            if all(c in b"0123456789abcdefABCDEF" for c in tail):
+                return file_size - 32
+    return file_size
+
+
+def _recover_size(stored: int, actual: int, label: str) -> int:
+    """32-bit byte counts wrap in >4 GiB vendor images; require exact layout.
+
+    The container boundary and RKAF's 2048-byte allocation counts retain
+    the full length. See afptool-rs/src/unpack.rs (recover_partition_layout).
+    Never silently extract only the low 32 bits of a large payload.
+    """
+    if actual <= 0 or actual % U32_RANGE != stored:
+        raise RKFWError(f"{label} size does not match the container layout")
+    return actual
+
+
 def parse_rkfw_header(file_path: str) -> RKFWInfo:
     """Parse the outer RKFW container header. Raises RKFWError on any
     malformed/truncated input rather than guessing."""
@@ -141,6 +168,7 @@ def parse_rkfw_header(file_path: str) -> RKFWInfo:
 
     boot_offset, boot_size = struct.unpack_from("<II", header, 25)
     fw_offset, fw_size = struct.unpack_from("<II", header, 33)
+    fw_size = _recover_size(fw_size, _archive_end(file_path) - fw_offset, "RKFW")
 
     if boot_offset <= 0 or boot_size <= 0 or boot_offset + boot_size > file_size:
         raise RKFWError("RKFW header has an invalid Loader offset/size")
@@ -164,7 +192,8 @@ def parse_rkaf_header(file_path: str, fw_offset: int) -> RKAFInfo:
     if header[0:4] != RKAF_MAGIC:
         raise RKFWError("Not an RKAF partition archive (missing 'RKAF' magic)")
 
-    length = struct.unpack_from("<I", header, 4)[0]
+    length = _recover_size(struct.unpack_from("<I", header, 4)[0],
+                           _archive_end(file_path) - fw_offset - 4, "RKAF")
     model = _cstr(header[8:42])
     machine_id = _cstr(header[42:72])
     manufacturer = _cstr(header[72:128])
@@ -177,12 +206,35 @@ def parse_rkaf_header(file_path: str, fw_offset: int) -> RKAFInfo:
         raise RKFWError("RKAF header 'length' field is out of range")
 
     parts = []
+    previous_end = RKAF_HEADER_SIZE
+    known_layouts = {}
     for i in range(num_parts):
         base = 140 + i * RKAF_PART_SIZE
         name = _cstr(header[base:base + 32])
         filename = _cstr(header[base + 32:base + 92])
         nand_size, pos, nand_addr, padded_size, size = struct.unpack_from(
             "<IIIII", header, base + 92)
+        if filename != "SELF":
+            allocation = padded_size * RKAF_SECTOR_SIZE
+            # Only the byte count wraps; the sector count still covers the
+            # entire file (including its final partial sector).
+            if allocation < size:
+                raise RKFWError(f"Partition '{name}' allocation is smaller than its size")
+            size += ((allocation - size) // U32_RANGE) * U32_RANGE
+            if size <= 0 or not 0 <= allocation - size < RKAF_SECTOR_SIZE:
+                raise RKFWError(f"Partition '{name}' has an inconsistent allocation")
+            key = (pos, size, padded_size)
+            if key in known_layouts:
+                pos = known_layouts[key]
+            else:
+                # Physical archive entries are ordered; their 32-bit offsets
+                # can wrap after an earlier large partition.
+                if pos < previous_end:
+                    pos += ((previous_end - pos + U32_RANGE - 1) // U32_RANGE) * U32_RANGE
+                if pos % RKAF_SECTOR_SIZE or pos + allocation > length:
+                    raise RKFWError(f"Partition '{name}' lies outside the RKAF archive")
+                known_layouts[key] = pos
+                previous_end = pos + allocation
         parts.append(RKAFPart(name=name, filename=filename, pos=pos, size=size,
                                nand_addr=nand_addr, nand_size=nand_size,
                                padded_size=padded_size))
