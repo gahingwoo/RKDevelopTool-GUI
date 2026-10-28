@@ -9,7 +9,8 @@ seconds so the device worker and timers get to fire, and closes it again.
 Fails on: an import error, an exception raised anywhere (including inside a
 slot or a worker thread), a translation key present in one language but not
 another, missing icon assets, or a compressed image that is misdetected
-or does not decompress byte-for-byte.
+or does not decompress byte-for-byte, or an update check that gives the
+wrong answer.
 
     pip install . && python tests/smoke.py
 """
@@ -34,6 +35,9 @@ os.environ["RKDEVELOPTOOL_BIN"] = _stub
 # Keep the run from reading or writing the developer's real QSettings.
 os.environ["XDG_CONFIG_HOME"] = _tmp
 os.environ["HOME"] = _tmp
+# No network in CI: the startup update check reads this (missing) file and
+# fails quietly; check_updates() points it at real JSON.
+os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + os.path.join(_tmp, "none.json")
 
 errors = []
 
@@ -67,6 +71,73 @@ def check_translations():
             errors.append(f"language {lang!r} is missing keys: {missing}")
 
 
+def check_updates(app):
+    """Version comparison, per-platform asset choice, and the status-bar
+    button, against a canned GitHub release JSON."""
+    import json
+    from importlib.metadata import version as dist_version
+
+    from rkdeveloptool_gui import __version__, updater
+
+    if dist_version("rkdeveloptool-gui") != __version__:
+        errors.append(f"package metadata says {dist_version('rkdeveloptool-gui')}, "
+                      f"__version__ says {__version__}")
+    for newer, older in (("5.10.0", "5.9.9"), ("v6", "5.99"), ("5.4.1", "5.4")):
+        if not updater.is_newer(newer, older) or updater.is_newer(older, newer):
+            errors.append(f"version compare wrong for {newer} vs {older}")
+    if updater.is_newer("5.4.0", "5.4") or updater.is_newer("junk", "1.0"):
+        errors.append("equal or unparsable versions treated as newer")
+
+    names = ["rkdeveloptool-gui-9.0.0-1.aarch64.rpm", "rkdeveloptool-gui-9.0.0-1.x86_64.rpm",
+             "RKDevelopTool-GUI-9.0.0-aarch64.AppImage", "RKDevelopTool-GUI-9.0.0-aarch64.AppImage.zsync",
+             "RKDevelopTool-GUI-9.0.0-x86_64.AppImage", "RKDevelopTool-GUI-arm64.dmg",
+             "RKDevelopTool-GUI-x86_64.dmg", "rkdeveloptool-gui_9.0.0_amd64.deb",
+             "rkdeveloptool-gui_9.0.0_arm64.deb"]
+    assets = [{"name": n, "browser_download_url": "https://x/" + n} for n in names]
+    for kind, machine, want in (("dmg", "arm64", "RKDevelopTool-GUI-arm64.dmg"),
+                                ("dmg", "x86_64", "RKDevelopTool-GUI-x86_64.dmg"),
+                                ("appimage", "aarch64", "RKDevelopTool-GUI-9.0.0-aarch64.AppImage"),
+                                ("appimage", "x86_64", "RKDevelopTool-GUI-9.0.0-x86_64.AppImage"),
+                                ("deb", "x86_64", "rkdeveloptool-gui_9.0.0_amd64.deb"),
+                                ("rpm", "aarch64", "rkdeveloptool-gui-9.0.0-1.aarch64.rpm"),
+                                ("pip", "x86_64", None)):
+        got = updater.pick_asset(assets, kind, machine)
+        if got != (want and "https://x/" + want):
+            errors.append(f"pick_asset({kind}, {machine}) = {got}, want {want}")
+
+    feed = os.path.join(_tmp, "release.json")
+    old_env = os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"]
+    os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + feed
+    try:
+        for tag, expect in (("9.0.0", "available"), (__version__, "up_to_date")):
+            with open(feed, "w") as f:
+                json.dump({"tag_name": tag, "html_url": "https://x/page",
+                           "body": "notes", "assets": assets}, f)
+            got = {}
+            worker = updater.UpdateCheckWorker()
+            worker.available.connect(lambda r: got.update(available=r))
+            worker.up_to_date.connect(lambda v: got.update(up_to_date=v))
+            worker.failed.connect(lambda e: got.update(failed=e))
+            worker.run()
+            if list(got) != [expect]:
+                errors.append(f"update check for release {tag}: {got}, want {expect}")
+
+        window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                              settings=AppSettings())
+        try:
+            if window.update_button.text() != f"v{__version__}":
+                errors.append(f"status bar shows {window.update_button.text()!r}")
+            window._on_update_available(
+                {"version": "9.0.0", "page": "https://x/page", "download": None,
+                 "notes": ""}, manual=False)
+            if "9.0.0" not in window.update_button.text():
+                errors.append(f"update not shown in status bar: {window.update_button.text()!r}")
+        finally:
+            window.cleanup()
+            window.deleteLater()
+            app.processEvents()
+    finally:
+        os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = old_env
 def check_decompression():
     """Compressed images are recognised and unpack byte-for-byte; a truncated
     one fails cleanly instead of leaving a partial image to be flashed."""
@@ -226,6 +297,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_updates(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:

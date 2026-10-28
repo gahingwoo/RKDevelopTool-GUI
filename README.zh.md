@@ -39,6 +39,8 @@ RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在�
 | Debian/Ubuntu（amd64 / arm64） | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE（x86_64 / aarch64） | `rkdeveloptool-gui-*.rpm` |
 
+应用右下角显示当前版本，点击即可检查新版本。应用也会自动检查，每天最多一次（只向 GitHub Releases API 发一个请求，不发送任何其他信息）；在更新对话框里取消勾选即可关闭。
+
 > **macOS 提示：** 应用尚未做公证，首次打开 macOS 可能提示「无法打开」。
 > 右键应用 → **打开** → **打开**，或执行
 > `xattr -cr /Applications/RKDevelopTool-GUI.app`。

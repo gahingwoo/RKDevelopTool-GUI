@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import math
 import locale
+import time
 import warnings
 
 # Nuitka-compiled builds on Python 3.14 can crash inside CPython's warnings
@@ -19,8 +20,8 @@ import warnings
 if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFontDatabase, QIcon
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QFontDatabase, QIcon, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QLabel, QLineEdit,
@@ -41,6 +42,8 @@ from .themes import ThemeManager, ThemeAutoManager
 from .operations import style_messagebox
 from .log_widget import RealtimeLogWidget
 from . import settings as app_settings
+from . import updater
+from . import __version__
 from .settings import AppSettings
 
 
@@ -239,6 +242,9 @@ class RKDevToolGUI(QMainWindow):
 
         # Start device detection
         self.start_device_detection()
+
+        # Look for a newer release once the window is up (at most daily).
+        QTimer.singleShot(3000, safe_slot(self._auto_check_for_updates))
 
     def _persisted_path_fields(self):
         """Map settings key -> the QLineEdit whose contents should survive a
@@ -642,6 +648,17 @@ class RKDevToolGUI(QMainWindow):
         self.connection_status = QLabel()
         self.statusBar().addPermanentWidget(self.connection_status)
 
+        # Version; click to check for updates. Turns into "update available"
+        # when a newer release is found.
+        self._update_release = None
+        self._update_worker = None
+        self.update_button = QPushButton()
+        self.update_button.setFlat(True)
+        self.update_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_button.clicked.connect(safe_slot(self.check_for_updates))
+        self.statusBar().addPermanentWidget(self.update_button)
+        self._refresh_update_button()
+
     def on_style_changed(self):
         """Handle style selection change"""
         selected_style = self.style_combo.currentData()
@@ -986,6 +1003,105 @@ class RKDevToolGUI(QMainWindow):
         else:
             print(f"语言切换为: {selected_lang}")
 
+    # Update check
+    def _refresh_update_button(self):
+        if self._update_release:
+            self.update_button.setText(
+                self.tr("update_available").format(self._update_release["version"]))
+            self.update_button.setStyleSheet("font-weight: bold;")
+        else:
+            self.update_button.setText(f"v{__version__}")
+            self.update_button.setStyleSheet("")
+        self.update_button.setToolTip(self.tr("check_updates_tooltip"))
+
+    def _auto_check_for_updates(self):
+        if self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") != "1":
+            return
+        try:
+            last = float(self.settings.get_str(app_settings.KEY_UPDATE_LAST_CHECK, "0"))
+        except ValueError:
+            last = 0.0
+        if 0 <= time.time() - last < updater.AUTO_CHECK_INTERVAL_S:
+            return
+        self._start_update_check(manual=False)
+
+    def check_for_updates(self):
+        """Status-bar click: show a known update, or check now."""
+        if self._update_release:
+            self._show_update_dialog(self._update_release)
+            return
+        self._start_update_check(manual=True)
+
+    def _start_update_check(self, manual):
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        worker = updater.UpdateCheckWorker()
+        self._update_worker = worker
+        if manual:
+            self.update_button.setText(self.tr("checking_updates"))
+        worker.available.connect(safe_slot(lambda r: self._on_update_available(r, manual)))
+        worker.up_to_date.connect(safe_slot(lambda v: self._on_update_none(v, manual)))
+        worker.failed.connect(safe_slot(lambda e: self._on_update_failed(e, manual)))
+        worker.start()
+
+    def _on_update_available(self, release, manual):
+        self.settings.set(app_settings.KEY_UPDATE_LAST_CHECK, str(time.time()))
+        self._update_release = release
+        self._refresh_update_button()
+        self.log_message(f"[INFO] {self.tr('update_available').format(release['version'])}")
+        if manual:
+            self._show_update_dialog(release)
+
+    def _on_update_none(self, latest, manual):
+        self.settings.set(app_settings.KEY_UPDATE_LAST_CHECK, str(time.time()))
+        self._refresh_update_button()
+        if manual:
+            self._update_message(self.tr("update_none_message").format(__version__),
+                                 QMessageBox.Icon.Information)
+
+    def _on_update_failed(self, error, manual):
+        self._refresh_update_button()
+        if manual:
+            self.log_message(f"[WARNING] {self.tr('update_failed_title')}: {error}")
+            self._update_message(self.tr("update_failed_message").format(error),
+                                 QMessageBox.Icon.Warning, page=updater.RELEASES_PAGE)
+
+    def _show_update_dialog(self, release):
+        text = self.tr("update_found_message").format(release["version"], __version__)
+        if not release.get("download"):
+            text += "\n\n" + self.tr("update_no_package_hint")
+        self._update_message(text, QMessageBox.Icon.Information,
+                             download=release.get("download") or release["page"],
+                             page=release["page"], notes=release.get("notes"))
+
+    def _update_message(self, text, icon, download=None, page=None, notes=None):
+        """Update result dialog with an 'automatically check' checkbox."""
+        msg = QMessageBox(self)
+        style_messagebox(msg)
+        msg.setWindowTitle(self.tr("update_title"))
+        msg.setIcon(icon)
+        msg.setText(text)
+        if notes:
+            msg.setDetailedText(notes)
+        auto = QCheckBox(self.tr("update_auto_check"))
+        auto.setChecked(self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") == "1")
+        msg.setCheckBox(auto)
+        download_btn = page_btn = None
+        if download:
+            download_btn = msg.addButton(self.tr("update_download"),
+                                         QMessageBox.ButtonRole.AcceptRole)
+        if page and page != download:
+            page_btn = msg.addButton(self.tr("update_release_page"),
+                                     QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(self.tr("update_close"), QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if auto.isChecked() else "0")
+        clicked = msg.clickedButton()
+        if download_btn is not None and clicked is download_btn:
+            QDesktopServices.openUrl(QUrl(download))
+        elif page_btn is not None and clicked is page_btn:
+            QDesktopServices.openUrl(QUrl(page))
+
     def _show_loader_hint(self, is_failure=False):
         """Show hint dialog to load Loader when in Maskrom mode"""
         from . import operations
@@ -1093,6 +1209,12 @@ class RKDevToolGUI(QMainWindow):
                     self._rkfw_tmp_dir = None
             except Exception:
                 pass
+
+            # An update check can't be interrupted, but its request times out;
+            # wait for it rather than destroying a running QThread (which aborts).
+            update_worker = getattr(self, '_update_worker', None)
+            if update_worker is not None and update_worker.isRunning():
+                update_worker.wait((updater.TIMEOUT_S + 2) * 1000)
 
             # Stop a running image decompression and drop its (multi-GB) copy.
             unpack_worker = getattr(self, '_decompress_worker', None)

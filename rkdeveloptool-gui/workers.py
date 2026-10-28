@@ -22,14 +22,17 @@ class DeviceWorker(QThread):
 
     def __init__(self, manager):
         super().__init__()
-        self.running = False
+        # Set here, not in run(): a stop() that lands before the thread has
+        # actually started would otherwise be overwritten and the loop would
+        # never end (closing the window right after it opened left a running
+        # QThread behind, which aborts the process on exit).
+        self.running = True
         self.manager = manager
 
     def tr(self, key):
         return self.manager.tr(key)
 
     def run(self):
-        self.running = True
         while self.running:
             try:
                 # Disable color output
@@ -58,7 +61,11 @@ class DeviceWorker(QThread):
             except Exception:
                 self.device_lost.emit()
 
-            QThread.msleep(2000)
+            # Poll every 2 s, but notice stop() within 0.1 s.
+            for _ in range(20):
+                if not self.running:
+                    break
+                QThread.msleep(100)
 
     def get_chip_info(self):
         try:
