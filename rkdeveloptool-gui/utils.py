@@ -229,6 +229,49 @@ def is_rkfw_image(file_path):
         return False
 
 
+# Leading bytes of the archive formats distro images ship in (Armbian, Ubuntu,
+# Debian and vendor images are usually .img.xz or .img.gz). Written raw with
+# `wl`, any of them leaves the board unbootable while the flash "succeeds".
+_COMPRESSION_MAGIC = (
+    (b"\xfd7zXZ\x00", "xz"),
+    (b"\x1f\x8b\x08", "gzip"),
+    (b"\x28\xb5\x2f\xfd", "zstd"),
+    (b"PK\x03\x04", "zip"),
+    (b"7z\xbc\xaf\x27\x1c", "7z"),
+)
+
+# Formats DecompressWorker can unpack with the standard library alone.
+DECOMPRESSIBLE = ("xz", "gzip", "bzip2")
+
+_COMPRESSED_SUFFIXES = (".xz", ".gz", ".bz2", ".zst", ".zip", ".7z")
+
+
+def detect_compression(file_path):
+    """Return the archive format of a file ('xz', 'gzip', 'bzip2', 'zstd',
+    'zip' or '7z'), or None for anything else (raw disk images included)."""
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(8)
+    except OSError:
+        return None
+    for magic, kind in _COMPRESSION_MAGIC:
+        if head.startswith(magic):
+            return kind
+    # "BZh" plus the block-size digit '1'..'9'.
+    if len(head) >= 4 and head[:3] == b"BZh" and 0x31 <= head[3] <= 0x39:
+        return "bzip2"
+    return None
+
+
+def decompressed_name(file_path):
+    """File name for the decompressed copy: 'Armbian.img.xz' -> 'Armbian.img'."""
+    name = os.path.basename(file_path)
+    root, ext = os.path.splitext(name)
+    if ext.lower() in _COMPRESSED_SUFFIXES and root:
+        return root
+    return name + ".img"
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:
