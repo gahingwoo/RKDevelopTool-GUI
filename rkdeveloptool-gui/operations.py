@@ -527,7 +527,8 @@ def _flash_rkfw_firmware(gui, firmware_path):
 
     try:
         rkfw_info = rkfw.parse_rkfw_header(firmware_path)
-        rkaf_info = rkfw.parse_rkaf_header(firmware_path, rkfw_info.fw_offset)
+        rkaf_info = rkfw.parse_rkaf_header(firmware_path, rkfw_info.fw_offset,
+                                            rkfw_info.fw_size)
     except rkfw.RKFWError as e:
         gui.log_message(f"[ERROR] {e}")
         _show_rkfw_message(gui, "rkfw_parse_failed_title", str(e))
