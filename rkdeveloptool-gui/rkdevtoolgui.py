@@ -791,7 +791,8 @@ class RKDevToolGUI(QMainWindow):
         # re-runs this every 2 s (and the board re-enumerates after db/ul),
         # which would otherwise re-enable these mid-flash and let the user
         # start a second flash on top of the running one.
-        flashing = getattr(self, '_rkfw_flashing', False)
+        flashing = (getattr(self, '_rkfw_flashing', False)
+                    or getattr(self, '_image_prep_busy', False))
 
         for attr in self._DEVICE_DEPENDENT_WIDGETS:
             if flashing and attr in self._FLASH_BUSY_WIDGETS:
@@ -1114,8 +1115,7 @@ class RKDevToolGUI(QMainWindow):
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setText(
                 self.tr("command_execution_failed") + "\n\n"
-                + self.tr("loader_hint_message") + "\n\n"
-                "是否现在加载 Loader?"
+                + self.tr("loader_hint_message")
             )
             msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
             msg.setMinimumWidth(500)
@@ -1129,8 +1129,7 @@ class RKDevToolGUI(QMainWindow):
             msg.setWindowTitle(self.tr("tip"))
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setText(
-                self.tr("loader_hint_message") + "\n\n"
-                "是否现在加载 Loader?"
+                self.tr("loader_hint_message")
             )
             msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
             msg.setMinimumWidth(500)
@@ -1141,14 +1140,10 @@ class RKDevToolGUI(QMainWindow):
     def _auto_load_loader(self):
         """Automatically load Loader"""
         from . import operations
-        
-        loader_path = self.loader_path.text()
-        if not loader_path or not os.path.exists(loader_path):
-            self.show_message("Warning", "select_loader_file", "Warning")
-            return
-        
+
+        # load_loader() asks for the file when none is set, and marks the
+        # loader as loaded only once db/ul has actually succeeded.
         operations.load_loader(self)
-        self.loader_loaded = True
 
     def cleanup(self):
         """Cleanup before exit"""
@@ -1221,6 +1216,20 @@ class RKDevToolGUI(QMainWindow):
             if update_worker is not None and update_worker.isRunning():
                 update_worker.wait((updater.TIMEOUT_S + 2) * 1000)
 
+            # Stop a running image decompression and drop its (multi-GB) copy.
+            unpack_worker = getattr(self, '_decompress_worker', None)
+            if unpack_worker is not None:
+                try:
+                    unpack_worker.stop()
+                    unpack_worker.wait(5000)
+                except Exception as e:
+                    print(f"Failed to stop decompress worker: {e}")
+                self._decompress_worker = None
+            unpack_dir = getattr(self, '_decompress_tmp_dir', None)
+            if unpack_dir:
+                shutil.rmtree(unpack_dir, ignore_errors=True)
+                self._decompress_tmp_dir = None
+
             self._partition_refresh_lock = False
         except Exception as e:
             print(f"Cleanup error: {e}")
@@ -1231,7 +1240,9 @@ class RKDevToolGUI(QMainWindow):
             busy = (self.command_worker is not None and self.command_worker.isRunning()) or \
                    any(w.isRunning() for w in self.mass_workers) or \
                    (getattr(self, '_rkfw_worker', None) is not None and
-                    self._rkfw_worker.isRunning())
+                    self._rkfw_worker.isRunning()) or \
+                   (getattr(self, '_decompress_worker', None) is not None and
+                    self._decompress_worker.isRunning())
             if busy:
                 reply = QMessageBox.question(
                     self, self.tr("warning_title"), self.tr("close_while_busy_warning"),
