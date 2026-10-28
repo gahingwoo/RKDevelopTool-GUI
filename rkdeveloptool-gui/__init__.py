@@ -3,4 +3,4 @@
 # The single source of the version: pyproject.toml reads it from here, the
 # update check compares against it, and the release workflow checks that the
 # pushed tag matches it.
-__version__ = "5.4.0"
+__version__ = "5.5.0"
