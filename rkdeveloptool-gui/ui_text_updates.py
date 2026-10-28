@@ -249,6 +249,8 @@ def update_statusbar_texts(gui):
         f"{gui.tr('ready_status')}{gui.tr('status_line_delimiter')}{gui.tr('not_connected_status')}"
     )
     gui.connection_status.setText(f"{gui.tr('not_connected')}")
+    if hasattr(gui, 'update_button'):
+        gui._refresh_update_button()
 
     # Relabel the theme and language pickers in place. Signals are blocked so
     # renaming the selected entry isn't mistaken for the user picking it.

@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rkdeveloptool-gui"
-version = "5.4.0"
+dynamic = ["version"]
 description = "Cross-platform graphical front-end for Rockchip's rkdeveloptool"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -65,6 +65,9 @@ packages = ["rkdeveloptool_gui"]
 
 [tool.setuptools.package-dir]
 "rkdeveloptool_gui" = "rkdeveloptool-gui"
+
+[tool.setuptools.dynamic]
+version = { attr = "rkdeveloptool_gui.__version__" }
 
 [tool.setuptools.package-data]
 "rkdeveloptool_gui" = ["assets/**/*"]

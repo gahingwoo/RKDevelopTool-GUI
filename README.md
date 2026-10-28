@@ -40,6 +40,11 @@ They **bundle `rkdeveloptool`**, so there is nothing else to install.
 | Debian/Ubuntu (amd64 / arm64) | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE (x86_64 / aarch64) | `rkdeveloptool-gui-*.rpm` |
 
+The app shows its version in the bottom-right corner; click it to check for
+a newer release. It also checks by itself at most once a day (a single request
+to the GitHub Releases API, nothing else is sent); untick the box in the
+update dialog to turn that off.
+
 > **macOS note:** the app is not notarized yet, so on first launch macOS may say
 > it "cannot be opened". Right-click the app → **Open** → **Open**, or run
 > `xattr -cr /Applications/RKDevelopTool-GUI.app`.

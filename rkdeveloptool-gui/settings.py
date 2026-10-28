@@ -25,6 +25,8 @@ KEY_LAST_DIR = "paths/last_dir"
 KEY_LOADER_PATH = "paths/loader"
 KEY_FIRMWARE_PATH = "paths/firmware"
 KEY_IMAGE_PATH = "paths/image"
+KEY_UPDATE_AUTO = "updates/auto_check"
+KEY_UPDATE_LAST_CHECK = "updates/last_check"
 
 
 class AppSettings:

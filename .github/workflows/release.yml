@@ -82,6 +82,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The in-app update check compares the latest tag with __version__, so a
+      # release whose tag disagrees with it would offer itself as an update
+      # forever (or never offer the next one).
+      - name: Check the tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          python3 - "${GITHUB_REF_NAME#v}" <<'PY'
+          import re, sys
+          src = open("rkdeveloptool-gui/__init__.py", encoding="utf-8").read()
+          version = re.search(r'__version__ = "([^"]+)"', src).group(1)
+          if version != sys.argv[1]:
+              sys.exit(f"tag {sys.argv[1]} does not match __version__ {version}")
+          PY
+
       - name: Install build tools
         run: |
           sudo apt-get update
