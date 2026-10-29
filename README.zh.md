@@ -2,28 +2,34 @@
 
 [English](README.md) | 中文
 
-RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在为用户提供一个直观易用的界面，简化固件烧录、分区管理和设备调试的操作流程。
+RKDevelopTool GUI 是 Rockchip rkdeveloptool 的图形界面，适用于 Linux 和 macOS。不用敲命令，就能给 Rockchip 开发板烧录固件、管理分区，以及从 Maskrom 模式救砖。预编译安装包已经自带 rkdeveloptool。
 
 **GitHub:** https://github.com/gahingwoo/RKDevelopTool-GUI
 
-![项目界面截图](docs/images/home_zh.png)  
-*RKDevelopTool GUI 主界面*
+![写入镜像：总进度、速度和剩余时间](docs/images/home_zh.png)
 
 ## 功能特性
 
-**设备监控** - 自动检测已连接的 Rockchip 设备，并显示当前工作模式（Maskrom 或 Loader）。
+**烧录**
+- 一键烧录 `update.img`（RKFW 格式，支持 4 GiB 以上）、原始磁盘镜像，或者 `.img.xz`、`.img.gz`、`.img.bz2` 压缩镜像（会先自动解压）。
+- 每次写入前先检查：设备是否连接、Loader 是否已加载、镜像类型是否适合写到这个地址、存储放不放得下。有一项不通过就不会开始写入。
+- 显示整个烧录的总进度、速度和剩余时间，可以随时取消，写完还可以选择读回校验。
+- `update.img` 自带 Loader；烧录其他镜像时，在 Maskrom 模式下应用会提示加载你的 Loader，并自动选用正确的加载方式。
 
-**一键烧录** - 简化了固件烧录流程。只需选择 update.img 文件，点击开始即可。
+**出问题时**
+- 失败时会说明可能的原因和建议的操作，而不只是一个退出码。
+- 写入过程中设备断开，应用会停下来，并告诉你怎么恢复。
 
-**分区管理** - 读取设备分区表，对特定分区进行单独操作：烧录、备份或擦除。
+**其他**
+- 把固件、Loader 等文件直接拖到窗口上，会自动放进对应的输入框。
+- 分区表：读取后可以单独烧录、备份或擦除某个分区。
+- 命令行：可以执行任意 rkdeveloptool 命令，支持历史记录。
+- 设置页：样式、主题、语言、字号、使用哪个 rkdeveloptool、默认 Loader、压缩镜像解压到哪里。
+- 检查 GitHub 上的新版本；支持中文和英文界面。
 
-**模式切换** - 快速进入 Maskrom 或 Loader 模式，以及设备重启。
-
-**实时日志** - 查看命令执行日志和烧录进度。
-
-**多语言支持** - 同时支持中文和英文界面。
-
-**主题支持** - 支持自动检测或手动切换深色和浅色模式。提供 Fusion、Windows、macOS 等多种样式。
+| 烧录前检查 | 设置页 |
+| --- | --- |
+| ![带烧录前检查的确认框](docs/images/preflight_zh.png) | ![设置页](docs/images/settings_zh.png) |
 
 ---
 
@@ -39,11 +45,22 @@ RKDevelopTool GUI 是 Rockchip 官方 rkdeveloptool 的图形化前端，旨在�
 | Debian/Ubuntu（amd64 / arm64） | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE（x86_64 / aarch64） | `rkdeveloptool-gui-*.rpm` |
 
-应用右下角显示当前版本，点击即可检查新版本。应用也会自动检查，每天最多一次（只向 GitHub Releases API 发一个请求，不发送任何其他信息）；在更新对话框里取消勾选即可关闭。
+点击右下角的「检查更新」即可检查新版本。应用也会自动检查，每天最多一次：只向 GitHub Releases API 发一个请求，不发送任何其他信息。可以在「设置」里关闭。
 
 > **macOS 提示：** 应用尚未做公证，首次打开 macOS 可能提示「无法打开」。
 > 右键应用 → **打开** → **打开**，或执行
 > `xattr -cr /Applications/RKDevelopTool-GUI.app`。
+
+### Linux：USB 访问权限
+
+没有 udev 规则时，只有 root 能访问 Rockchip 设备，板子会显示不出来。`.deb` 和 `.rpm` 安装包会自动装好规则，当前登录的用户直接就能用。用 AppImage 或 pip 时，如果检测到板子已连接但打不开，应用会给出一条安装规则的命令。也可以自己安装：
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2207", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-rkdeveloptool-gui.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+然后重新插拔开发板。
 
 ---
 
@@ -114,33 +131,30 @@ sudo pacman -S rkdeveloptool-gui
 
 ## 使用方法
 
-### 基本工作流程
+### 烧录开发板
 
-1. 用 USB 线连接 Rockchip 设备
-2. 应用会自动检测设备并显示其状态
-3. 选择你需要的操作：固件烧录、备份或分区管理
-4. 检查设置并确认执行
+1. 让板子进入 Maskrom 模式：按住板子上的 Maskrom（或 Recovery）键，再插上 USB 或上电。状态栏会显示「已连接 (Maskrom)」。
+2. 把固件拖到窗口上，或者在「固件下载」页点「浏览」选择。`update.img`、原始 `.img` 和压缩的 `.img.xz` 都可以。
+3. 如果烧录的不是 `update.img`（它自带 Loader），请选择和芯片对应的 Loader，例如 `rk3588_spl_loader_*.bin`，在应用提示时加载，或者点「加载 Loader」。
+4. 点「开始一键烧录」，看一下检查结果后确认。烧录原始镜像或压缩镜像时，还可以勾选「烧录后读回校验」。
+5. 等待完成。进度条显示的是整个烧录的总进度；点「取消」可以中止，但被中止的写入需要重新烧录，板子才能正常启动。
 
-### 固件烧录
+### 分区
 
-1. 进入"Firmware Download"标签页
-2. 点击"Browse"选择你的 update.img 文件
-3. 点击"Start One-Click Burn"开始烧录
-4. 等待完成（进度条显示当前进度）
+1. 先加载 Loader，再点「读取分区表」。
+2. 在「分区管理」页选择分区，进行烧录、备份或擦除。
 
-### 分区管理
+### 命令行
 
-1. 进入"Partition Management"标签页
-2. 点击"Read Partition Table"从设备读取分区
-3. 选择分区并选择操作：烧录、备份或擦除
-4. 确认并等待完成
+日志上方的「命令」栏会显示每个按钮背后实际执行的 rkdeveloptool 命令。你也可以在这里输入或修改命令，按回车执行，例如 `ld`、`rci`、`ppt`。会写入或擦除设备的命令，执行前会先确认。
 
-### 主题和样式选择
+### 设置
 
-状态栏底部提供快速访问：
-- 样式选择器：在 Fusion、Windows、macOS 等可用样式之间切换
-- 主题选择器：在自动、深色和浅色主题之间切换
-- 语言选择器：在中文和英文之间选择
+「设置」页（Ctrl+, 或 ⌘,）里有样式、主题、语言和字号，使用哪个 rkdeveloptool，默认 Loader，压缩镜像解压到哪里，调试日志和检查更新。样式、主题和语言在状态栏里也能直接切换。
+
+### 出错时
+
+对于最常见的 rkdeveloptool 错误（找不到设备、设备打不开、Loader 不对、写入失败等），应用会说明可能的原因和建议的操作，rkdeveloptool 的原始输出在「显示详细信息」里。反馈问题时，可以在「设置」里点「导出诊断信息…」，把导出的文件附到 issue 上。
 
 ---
 
@@ -150,7 +164,7 @@ sudo pacman -S rkdeveloptool-gui
 
 使用本工具前，请：
 - 确保已备份重要数据
-- 验证设备电量充足
+- 使用可靠的 USB 线，并保证开发板供电稳定
 - 了解每项操作的含义
 - 必要时查阅设备相关文档
 

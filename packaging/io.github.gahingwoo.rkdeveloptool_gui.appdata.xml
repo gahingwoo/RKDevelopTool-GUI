@@ -44,8 +44,16 @@
 
   <screenshots>
     <screenshot type="default">
-      <caption>Home screen</caption>
+      <caption>Writing an image, with overall progress, speed and time left</caption>
       <image>https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/docs/images/home_en.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The check before writing</caption>
+      <image>https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/docs/images/preflight_en.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Settings</caption>
+      <image>https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/docs/images/settings_en.png</image>
     </screenshot>
   </screenshots>
 
