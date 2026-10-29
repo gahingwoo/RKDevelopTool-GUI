@@ -17,7 +17,8 @@ from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
     detect_compression, decompressed_name, DECOMPRESSIBLE,
-    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info
+    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info, flash_capacity_bytes,
+    chip_from_device
 )
 from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
@@ -94,6 +95,13 @@ def get_flash_capacity_bytes(gui):
             result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True,
                                     timeout=6, env=env)
         out = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        bytes_size = flash_capacity_bytes(out)
+        if bytes_size:
+            flash_info = parse_flash_info(out)
+            if flash_info:
+                gui._cached_flash_info = flash_info
+            return bytes_size, "detected"
 
         # Try to parse capacity
         m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
@@ -819,11 +827,15 @@ def load_loader(gui):
 
 
 def loader_chip(gui):
-    """The connected chip's name when rkbin may have a Loader for it."""
-    if not gui.current_device or not gui.chip_info or gui.chip_info == "unknown_chip":
+    """The connected chip's name when rkbin may have a Loader for it. In
+    Maskrom, rci can't answer before a Loader runs; the USB ID tells then."""
+    if not gui.current_device:
         return None
-    chip = parse_chip_info(gui.chip_info)
-    return chip if loader_fetch.ini_candidates(chip) else None
+    if gui.chip_info and gui.chip_info != "unknown_chip":
+        chip = parse_chip_info(gui.chip_info)
+        if loader_fetch.ini_candidates(chip):
+            return chip
+    return chip_from_device(gui.current_device)
 
 
 def loader_cache_dir():

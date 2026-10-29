@@ -804,42 +804,46 @@ def create_advanced_tab(gui):
 
     debug_group.setLayout(debug_layout)
 
-    # Mass production group
+    # Production line: the same image onto board after board, one at a time
+    # (rkdeveloptool refuses to run with more than one board connected).
     mass_group = QGroupBox()
     mass_layout = QGridLayout()
-
-    mass_list = QListWidget()
-    mass_list.setMaximumHeight(100)
-    mass_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-
-    mass_scan = QPushButton()
-    mass_scan.clicked.connect(safe_slot(lambda: scan_mass_devices(gui)))
 
     mass_firmware_label = QLabel()
     mass_firmware = QLineEdit()
     mass_browse = QPushButton()
     gui.register_browse(mass_browse, mass_firmware, "file_dialog_firmware")
 
+    line_loader_note = QLabel()
+    line_loader_note.setWordWrap(True)
+    line_verify = QCheckBox()
+
     mass_start = QPushButton()
     mass_start.setProperty("class", "success")
-    mass_start.clicked.connect(safe_slot(lambda: start_mass_production(gui)))
+    mass_start.clicked.connect(safe_slot(lambda: start_production_line(gui)))
 
     mass_stop = QPushButton()
     mass_stop.setProperty("class", "danger")
-    mass_stop.clicked.connect(safe_slot(lambda: stop_mass_production(gui)))
+    mass_stop.clicked.connect(safe_slot(lambda: gui.production.stop()))
     mass_stop.setEnabled(False)
 
-    mass_progress = QLabel()
+    line_status = QLabel()
+    line_status.setWordWrap(True)
+    line_status.setStyleSheet("QLabel { font-weight: bold; }")
+    line_counts = QLabel()
+    line_results = QListWidget()
+    line_results.setMaximumHeight(140)
 
-    mass_layout.addWidget(QLabel(), 0, 0, 1, 3)  # Will be updated with text
-    mass_layout.addWidget(mass_list, 1, 0, 1, 3)
-    mass_layout.addWidget(mass_scan, 2, 0, 1, 3)
-    mass_layout.addWidget(mass_firmware_label, 3, 0)
-    mass_layout.addWidget(mass_firmware, 3, 1)
-    mass_layout.addWidget(mass_browse, 3, 2)
-    mass_layout.addWidget(mass_start, 4, 0)
-    mass_layout.addWidget(mass_stop, 4, 1)
-    mass_layout.addWidget(mass_progress, 5, 0, 1, 3)
+    mass_layout.addWidget(mass_firmware_label, 0, 0)
+    mass_layout.addWidget(mass_firmware, 0, 1)
+    mass_layout.addWidget(mass_browse, 0, 2)
+    mass_layout.addWidget(line_loader_note, 1, 0, 1, 3)
+    mass_layout.addWidget(line_verify, 2, 0, 1, 3)
+    mass_layout.addWidget(mass_start, 3, 0)
+    mass_layout.addWidget(mass_stop, 3, 1)
+    mass_layout.addWidget(line_status, 4, 0, 1, 3)
+    mass_layout.addWidget(line_counts, 5, 0, 1, 3)
+    mass_layout.addWidget(line_results, 6, 0, 1, 3)
 
     mass_group.setLayout(mass_layout)
 
@@ -874,13 +878,15 @@ def create_advanced_tab(gui):
         'export_log': export_log,
         'usb_info': usb_info,
         'mass_group': mass_group,
-        'mass_list': mass_list,
-        'mass_scan': mass_scan,
         'mass_firmware': mass_firmware,
         'mass_browse': mass_browse,
         'mass_start': mass_start,
         'mass_stop': mass_stop,
-        'mass_progress': mass_progress,
+        'line_loader_note': line_loader_note,
+        'line_verify': line_verify,
+        'line_status': line_status,
+        'line_counts': line_counts,
+        'line_results': line_results,
         'read_address_label': read_address_label,
         'read_length_label': read_length_label,
         'read_save_label': read_save_label,
@@ -1424,120 +1430,31 @@ def save_log(gui):
             f.write(gui.log_output.toPlainText())
 
 
-def scan_mass_devices(gui):
-    """Scan for mass production devices"""
-    import subprocess
-    from .utils import RKTOOL
-
-    try:
-        result = subprocess.run([RKTOOL, "ld"], capture_output=True, text=True, timeout=3)
-        lines = result.stdout.strip().splitlines()
-        devices = [l.strip() for l in lines if l.strip() and
-                  "Did not find" not in l and "not found" not in l]
-
-        gui.mass_device_list.clear()
-        for device in devices:
-            gui.mass_device_list.addItem(device)
-
-        gui.log_message(f"{gui.tr('found_devices')}: {len(devices)}")
-    except Exception as e:
-        gui.log_message(f"[WARNING] {gui.tr('scan_failed')}: {e}")
-
-
-def start_mass_production(gui):
-    """Start mass production"""
+def start_production_line(gui):
+    """Confirm and start flashing boards one after another."""
     import os
     from PySide6.QtWidgets import QMessageBox
-    from .utils import RKTOOL
-    from .workers import CommandWorker
+    from .utils import is_rkfw_image
 
-    firmware = gui.mass_firmware_path.text()
-    if not firmware or not os.path.exists(firmware):
+    firmware = gui.mass_firmware_path.text().strip()
+    if not firmware or not os.path.isfile(firmware):
         gui.show_message("Warning", "select_firmware_file", "Warning")
         return
-
-    from .utils import is_rkfw_image
     if is_rkfw_image(firmware):
-        gui.show_message("rkfw_detected_title", "rkfw_detected_message", "Critical")
+        gui.show_message("rkfw_detected_title", "line_rkfw_message", "Critical")
+        return
+    if gui._device_busy():
+        gui.show_message("Warning", "command_already_running", "Warning")
         return
 
-    selected_items = gui.mass_device_list.selectedItems()
-    if not selected_items:
-        gui.show_message("Warning", "select_devices_for_mass", "Warning")
-        return
-
-    # Confirm
-    msg = QMessageBox()
-    from PySide6.QtWidgets import QApplication
-    # Use application palette for automatic theme following
-    msg.setPalette(QApplication.palette())
-    msg.setWindowTitle(gui.tr("confirm_mass_production"))
-    msg.setText(gui.tr("mass_production_warning").format(len(selected_items)))
+    msg = QMessageBox(gui)
+    operations.style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("line_confirm_title"))
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setText(gui.tr("line_confirm_message").format(os.path.basename(firmware)))
     msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    msg.setIcon(QMessageBox.Icon.Question)
-    msg.setMinimumWidth(500)
-    
+    msg.setDefaultButton(QMessageBox.StandardButton.No)
     if msg.exec() != QMessageBox.StandardButton.Yes:
         return
-
-    gui.mass_production_active = True
-    gui.mass_start_btn.setEnabled(False)
-    gui.mass_stop_btn.setEnabled(True)
-
-    # Create workers
-    for item in selected_items:
-        device = item.text()
-        worker = CommandWorker([RKTOOL, "wl", "0x0", firmware], "burning", gui.manager)
-        worker.log.connect(safe_slot(lambda msg, d=device: gui.log_message(f"[{d}] {msg}")))
-        worker.finished_signal.connect(safe_slot(lambda s, e, d=device, w=worker: on_mass_device_finished(gui, d, s, e, w)))
-        gui.mass_workers.append(worker)
-        worker.start()
-
-    gui.mass_progress_label.setText(gui.tr("mass_production_running").format(len(selected_items)))
-
-
-def stop_mass_production(gui):
-    """Stop mass production"""
-    gui.mass_production_active = False
-
-    for worker in gui.mass_workers:
-        try:
-            if hasattr(worker, 'terminate_process'):
-                worker.terminate_process()
-            worker.wait(1000)
-        except:
-            pass
-
-    gui.mass_workers.clear()
-    gui.mass_start_btn.setEnabled(True)
-    gui.mass_stop_btn.setEnabled(False)
-    gui.mass_progress_label.setText(gui.tr("mass_production_stopped"))
-    gui.log_message("[INFO] " + gui.tr("mass_production_stopped"))
-
-
-def on_mass_device_finished(gui, device, success, error, worker=None):
-    """Handle mass device completion"""
-    if worker is not None:
-        worker._success = success
-
-    if success:
-        gui.log_message(f"[OK] [{device}] {gui.tr('success')}")
-    else:
-        gui.log_message(f"[ERROR] [{device}] {gui.tr('failure')}: {error}")
-
-    # Check if all done
-    all_done = all(not w.isRunning() for w in gui.mass_workers)
-    if all_done and gui.mass_production_active:
-        gui.mass_start_btn.setEnabled(True)
-        gui.mass_stop_btn.setEnabled(False)
-        gui.mass_production_active = False
-
-        success_count = sum(1 for w in gui.mass_workers if hasattr(w, '_success') and w._success)
-        total = len(gui.mass_workers)
-
-        gui.mass_progress_label.setText(
-            gui.tr("mass_production_complete").format(success_count, total)
-        )
-        gui.show_message("Information", f"mass_production_result:{success_count}/{total}")
-
-        gui.mass_workers.clear()
+    gui.line_results.clear()
+    gui.production.start(firmware, gui.line_verify.isChecked())

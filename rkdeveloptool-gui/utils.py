@@ -214,6 +214,46 @@ def parse_chip_info(chip_text):
     return chip_text
 
 
+# The chip behind a Rockchip USB product ID in Maskrom, where rci can't
+# answer until a Loader runs. From rkdeveloptool's 99-rk-rockusb.rules, plus
+# 0x350b (RK3588, Radxa's and MNT's Maskrom docs) and 0x350e (an RK3576
+# seen here). 0x350a is listed as RK3566; the RK3568 shares it and its Loader.
+MASKROM_PID_CHIP = {
+    0x301A: "RK3036",
+    0x310C: "RK3128",
+    0x320B: "RK3229",
+    0x320A: "RK3288",
+    0x320C: "RK3328",
+    0x330A: "RK3368",
+    0x330C: "RK3399",
+    0x350A: "RK3568",
+    0x350B: "RK3588",
+    0x350E: "RK3576",
+}
+
+
+def chip_from_device(device_line):
+    """The chip for an `rkdeveloptool ld` line ("... Pid=0x350e ..."), or None."""
+    match = re.search(r'Pid=0x([0-9A-Fa-f]{4})', device_line or "")
+    return MASKROM_PID_CHIP.get(int(match.group(1), 16)) if match else None
+
+
+def flash_capacity_bytes(rfi_text):
+    """Storage size in bytes from `rkdeveloptool rfi` output, or None.
+
+    rfi prints the size twice, "Flash Size: 29824 MB" and "Flash Size:
+    61079552 Sectors"; the sector count is exact, the MB figure rounded.
+    """
+    text = rfi_text or ""
+    match = re.search(r'Flash\s+Size\s*:\s*(\d+)\s*Sectors', text, re.I)
+    if match:
+        return int(match.group(1)) * 512
+    match = re.search(r'Flash\s+Size\s*:\s*([0-9.]+)\s*(MB|GB)', text, re.I)
+    if match:
+        return int(float(match.group(1)) * 1024 ** (3 if match.group(2).upper() == 'GB' else 2))
+    return None
+
+
 def parse_flash_info(flash_text):
     """Parse flash info from rkdeveloptool rfi output"""
     if not flash_text:
