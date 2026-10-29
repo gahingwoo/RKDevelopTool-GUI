@@ -12,6 +12,7 @@ import bz2
 from PySide6.QtCore import QThread, Signal
 
 from . import rkfw
+from . import utils
 from .utils import RKTOOL, parse_chip_info
 
 
@@ -54,7 +55,13 @@ class DeviceWorker(QThread):
 
                 if self.light:
                     self.presence.emit(bool(devices))
+                elif devices and not utils.DEVICE_LOCK.acquire(blocking=False):
+                    # Something else is reading the device right now (e.g.
+                    # the partition table); don't open it alongside, and
+                    # don't touch the device state this round.
+                    self.presence.emit(True)
                 elif devices:
+                    utils.DEVICE_LOCK.release()
                     mode = "unknown_mode"
                     if "MASKROM" in result.stdout.upper():
                         mode = "Maskrom"
@@ -85,7 +92,9 @@ class DeviceWorker(QThread):
             env['CLICOLOR'] = '0'
             env['CLICOLOR_FORCE'] = '0'
             
-            result = subprocess.run([RKTOOL, "rci"], capture_output=True, text=True, timeout=3, env=env)
+            with utils.DEVICE_LOCK:
+                result = subprocess.run([RKTOOL, "rci"], capture_output=True, text=True,
+                                        timeout=3, env=env)
             if result.returncode == 0:
                 raw_info = result.stdout.strip()
                 return parse_chip_info(raw_info)
@@ -112,8 +121,12 @@ class PartitionPPTWorker(QThread):
             env['CLICOLOR'] = '0'
             env['CLICOLOR_FORCE'] = '0'
             
-            result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=10, env=env)
-            out = result.stdout or ""
+            # Waits for a poll's rci to finish (at most ~3 s) rather than
+            # opening the device alongside it.
+            with utils.DEVICE_LOCK:
+                result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True,
+                                        timeout=10, env=env)
+            out = (result.stdout or "") + (result.stderr or "")
             # Clean ANSI codes from output
             out = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', out)  # Binary ESC sequences
             out = re.sub(r'\[[0-9;]*m', '', out)  # Text-form color codes

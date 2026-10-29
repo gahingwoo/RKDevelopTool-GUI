@@ -89,7 +89,10 @@ def get_flash_capacity_bytes(gui):
         env['NO_COLOR'] = '1'
         env['CLICOLOR'] = '0'
         env['CLICOLOR_FORCE'] = '0'
-        result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6, env=env)
+        from . import utils
+        with utils.DEVICE_LOCK:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True,
+                                    timeout=6, env=env)
         out = (result.stdout or "") + "\n" + (result.stderr or "")
 
         # Try to parse capacity
@@ -294,7 +297,10 @@ def read_partition_table(gui):
             env['NO_COLOR'] = '1'
             env['CLICOLOR'] = '0'
             env['CLICOLOR_FORCE'] = '0'
-            result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True, timeout=5, env=env)
+            from . import utils
+            with utils.DEVICE_LOCK:
+                result = subprocess.run([RKTOOL, "ppt"], capture_output=True, text=True,
+                                        timeout=5, env=env)
             if result.returncode == 0:
                 gui.partitions = parse_partition_info(result.stdout)
                 populate_partition_table(gui)
@@ -319,8 +325,16 @@ def on_partition_ppt_finished(gui, out, code):
             gui.log_message(gui.tr('partition_read_ok'))
             gui.statusBar().showMessage(gui.tr('partition_read_ok'))
         else:
-            gui.log_message(out or gui.tr('reading_partitions'))
-            gui.statusBar().showMessage(gui.tr('reading_partitions'))
+            # Say why (blank storage, no loader, device busy, ...) instead of
+            # leaving the table silently empty.
+            gui.log_message(out.strip() or f"[ERROR] {gui.tr('partition_read_failed')}")
+            gui.statusBar().showMessage(gui.tr('partition_read_failed'), 6000)
+            guidance = gui.explain_failure(out) if hasattr(gui, 'explain_failure') else None
+            if guidance:
+                gui.log_message(f"[ERROR] {guidance[0]}\n{guidance[1]}")
+                gui._show_failure_guidance("reading_partitions", guidance[0], guidance[1], out)
+            else:
+                gui.show_message("Warning", "partition_read_failed", "Warning")
     except Exception as e:
         gui.log_message(f"[WARNING] parse ppt failed: {e}")
     finally:
