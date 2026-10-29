@@ -1653,6 +1653,54 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_tooltips_colors_shortcuts(app):
+    """Buttons keep their own tooltip once a device connects; status colours
+    follow a light or dark palette; Ctrl+N, Ctrl+L and Esc are there."""
+    from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
+
+    from rkdeveloptool_gui.themes import status_color
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    real_palette = app.palette()
+    try:
+        window.current_device = None
+        window._update_action_states()
+        if window.erase_flash_btn.toolTip() != window.tr("connect_device_first"):
+            errors.append(f"disconnected tooltip: {window.erase_flash_btn.toolTip()!r}")
+        window.current_device = "dev"
+        window._update_action_states()
+        if window.erase_flash_btn.toolTip() != window.tr("tip_erase_all"):
+            errors.append(f"connected tooltip: {window.erase_flash_btn.toolTip()!r}")
+
+        light, dark = QPalette(), QPalette()
+        light.setColor(QPalette.ColorRole.Window, QColor("#f0f0f0"))
+        dark.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        app.setPalette(light)
+        on_light = status_color("ok")
+        app.setPalette(dark)
+        on_dark = status_color("ok")
+        for _ in range(5):
+            app.processEvents()
+        if on_light == on_dark or on_dark not in window.device_status_label.styleSheet():
+            errors.append(f"status colour {on_light} / {on_dark}: {window.device_status_label.styleSheet()!r}")
+
+        keys = {sc.key().toString(): sc for sc in window.findChildren(QShortcut)}
+        for want in ("Ctrl+1", "Ctrl+2", "Ctrl+L", "Esc"):
+            if QKeySequence(want).toString() not in keys:
+                errors.append(f"no {want} shortcut (have {sorted(keys)})")
+        if QKeySequence("Ctrl+2").toString() in keys:
+            keys[QKeySequence("Ctrl+2").toString()].activated.emit()
+            if window.tab_widget.currentIndex() != 1:
+                errors.append("Ctrl+2 didn't switch to the second tab")
+    finally:
+        app.setPalette(real_palette)
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1727,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_tooltips_colors_shortcuts(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)

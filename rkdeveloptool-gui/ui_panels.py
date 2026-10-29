@@ -443,7 +443,6 @@ def create_partition_tab(gui):
     danger_layout = QVBoxLayout()
     danger_label = QLabel()
     danger_label.setText(gui.tr("danger_zone_label"))
-    danger_label.setStyleSheet("QLabel { color: #ff6b6b; font-weight: bold; padding: 5px; }")
     danger_layout.addWidget(danger_label)
     danger_layout.addWidget(erase_all_btn)
     danger_group.setLayout(danger_layout)

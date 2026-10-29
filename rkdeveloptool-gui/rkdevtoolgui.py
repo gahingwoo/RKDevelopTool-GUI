@@ -42,7 +42,7 @@ from .utils import (
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from .widgets import AutoLoadCombo, CurrentPageTabWidget
 from .i18n import TRANSLATIONS
-from .themes import ThemeManager, ThemeAutoManager
+from .themes import ThemeManager, ThemeAutoManager, status_color
 from .operations import style_messagebox
 from . import operations
 from .log_widget import RealtimeLogWidget
@@ -257,6 +257,7 @@ class RKDevToolGUI(QMainWindow):
         self.restore_settings()
         self.apply_fonts()
         self._disable_text_drops()
+        self._install_shortcuts()
 
         # Start device detection
         self.start_device_detection()
@@ -1021,7 +1022,8 @@ class RKDevToolGUI(QMainWindow):
             if widget is None:
                 continue
             widget.setEnabled(connected)
-            widget.setToolTip(hint)
+            # Disconnected: say why it's disabled; connected: its own tip.
+            widget.setToolTip(hint or widget.property("baseTip") or "")
 
         for attr in self._FLASH_BUSY_WIDGETS:
             widget = getattr(self, attr, None)
@@ -1043,7 +1045,8 @@ class RKDevToolGUI(QMainWindow):
             # Parse chip info to show readable chip name
             chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
             self.device_status_label.setText(mode_text)
-            self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
+            self.device_status_label.setStyleSheet(
+                f"QLabel {{ color: {status_color('ok')}; padding: 5px; font-weight: bold; }}")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
             self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{mode_text}")
             self.connection_status.setText(f"{self.tr('connected')}")
@@ -1057,12 +1060,40 @@ class RKDevToolGUI(QMainWindow):
             self.connection_status.setText(f"{self.tr('not_connected')}")
             self._update_home_banner(False, f"{self.tr('home_banner_disconnected')}")
 
+    def _install_shortcuts(self):
+        """Ctrl+1..9 (Cmd on macOS) switch tabs, Ctrl+L goes to the command
+        bar, Esc cancels what is running."""
+        for i in range(min(9, self.tab_widget.count())):
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self,
+                      activated=safe_slot(lambda i=i: self.tab_widget.setCurrentIndex(i)))
+
+        def focus_command():
+            self.equiv_command_field.setFocus()
+            self.equiv_command_field.selectAll()
+
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=safe_slot(focus_command))
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=safe_slot(self.cancel_current))
+
+    def apply_status_colors(self):
+        """Re-colour the status texts for the current light or dark palette."""
+        if getattr(self, 'danger_label', None) is not None:
+            self.danger_label.setStyleSheet(
+                f"QLabel {{ color: {status_color('danger')}; font-weight: bold; padding: 5px; }}")
+        if hasattr(self, 'device_status_label'):
+            self.update_device_status()
+
+    def changeEvent(self, event):
+        # A theme switch (by the app or the system) changes the palette.
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            QTimer.singleShot(0, safe_slot(self.apply_status_colors))
+        super().changeEvent(event)
+
     def _update_home_banner(self, connected, text):
         """Update the home tab connection banner (plain text, native look)."""
         banner = getattr(self, 'home_status_banner', None)
         if banner is None:
             return
-        color = "#28a745" if connected else "#888888"
+        color = status_color("ok" if connected else "muted")
         banner.setStyleSheet(f"QLabel {{ padding: 4px 2px; font-weight: bold; color: {color}; }}")
         banner.setText(text)
 
