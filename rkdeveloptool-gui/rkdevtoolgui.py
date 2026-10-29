@@ -323,24 +323,34 @@ class RKDevToolGUI(QMainWindow):
             app_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
             app_font.setPointSize(self._font_size(app_settings.KEY_UI_FONT_SIZE,
                                                   app_settings.DEFAULT_UI_FONT_SIZE))
-            QApplication.setFont(app_font)
+            # Setting it re-lays out every widget, even when it's unchanged.
+            if QApplication.font() != app_font:
+                QApplication.setFont(app_font)
         except Exception:
             pass
 
-    def apply_fonts(self):
-        """Apply the UI and log font sizes from Settings to the open window.
+    def apply_fonts(self, ui=True, log=True):
+        """Apply the UI and/or log font sizes from Settings to the window.
 
         QApplication.setFont reaches every widget that hasn't set its own
         font; the few that have (the fixed-width log and command line, the
-        partition table) are updated here.
+        partition table, widgets with a style sheet) are updated here. Only
+        the part that changed is touched: resetting the application font
+        re-lays out the whole window, which flickered when just the log
+        size moved.
         """
+        if log:
+            log_size = self._font_size(app_settings.KEY_LOG_FONT_SIZE,
+                                       app_settings.DEFAULT_LOG_FONT_SIZE)
+            if self.log_widget.mono_font.pointSize() != log_size:
+                self.log_widget.set_font_size(log_size)
+            mono = QFont(self.equiv_command_field.font())
+            if mono.pointSize() != log_size:
+                mono.setPointSize(log_size)
+                self.equiv_command_field.setFont(mono)
+        if not ui:
+            return
         self.set_application_font()
-        log_size = self._font_size(app_settings.KEY_LOG_FONT_SIZE,
-                                   app_settings.DEFAULT_LOG_FONT_SIZE)
-        self.log_widget.set_font_size(log_size)
-        mono = QFont(self.equiv_command_field.font())
-        mono.setPointSize(log_size)
-        self.equiv_command_field.setFont(mono)
         table = getattr(self, 'partition_table', None)
         if table is not None:
             table.setFont(QApplication.font())
@@ -621,10 +631,10 @@ class RKDevToolGUI(QMainWindow):
                 continue
             vpol = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
             page.setSizePolicy(QSizePolicy.Policy.Preferred, vpol)
-        current = self.tab_widget.widget(index)
-        if current is not None:
-            current.adjustSize()
-        # Its sizeHint follows the current page; let the layout re-ask.
+        # CurrentPageTabWidget sizes itself from the current page; let the
+        # layout re-ask. (No adjustSize() on the page: that shrank it to its
+        # size hint for a frame before the layout stretched it back, which
+        # flickered on every tab switch and font change.)
         self.tab_widget.updateGeometry()
 
     def create_status_bar(self):

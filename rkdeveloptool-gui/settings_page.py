@@ -148,7 +148,8 @@ class SettingsPage(QWidget):
         if self.settings.get_str(key, "") == str(value):
             return
         self.settings.set(key, str(value))
-        self.gui.apply_fonts()
+        ui = key == app_settings.KEY_UI_FONT_SIZE
+        self.gui.apply_fonts(ui=ui, log=not ui)
 
     def _reset_fonts(self):
         self.ui_font.setValue(app_settings.DEFAULT_UI_FONT_SIZE)
