@@ -227,20 +227,49 @@ jobs:
             dist/*.AppImage
             dist/*.AppImage.zsync
 
+  wheel:
+    name: Python wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the wheel
+        run: |
+          pip install build
+          python -m build --wheel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
   release:
     name: Publish Release
-    needs: [macos-arm64, linux]
+    needs: [macos-arm64, linux, wheel]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - uses: actions/checkout@v4
+
+      # The notes are the tag's section of CHANGELOG.md; the script fails
+      # when there isn't one, so a release never goes out with blank notes.
+      - name: Release notes from CHANGELOG.md
+        run: sh packaging/release-notes.sh "${GITHUB_REF_NAME#v}" > release-notes.md
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      # This job alone creates the release. (The Intel job used to as well,
+      # and whichever got there first decided the notes.)
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          generate_release_notes: true
+          body_path: release-notes.md
 
   macos-x86_64:
     name: macOS (Intel x86_64)
@@ -293,9 +322,16 @@ jobs:
           name: macos-x86_64
           path: dist/*.dmg
 
-      # Append the Intel DMG to the (already published) release for this tag.
+      # Append the Intel DMG once the Publish Release job has created the
+      # release, rather than creating it here and racing that job for it.
       - name: Attach Intel DMG to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/RKDevelopTool-GUI-x86_64.dmg
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 60); do
+            gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break
+            sleep 30
+          done
+          gh release upload "$GITHUB_REF_NAME" dist/RKDevelopTool-GUI-x86_64.dmg \
+            --repo "$GITHUB_REPOSITORY" --clobber

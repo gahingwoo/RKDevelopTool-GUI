@@ -92,6 +92,14 @@ jobs:
           rpm -qp --scripts /tmp/*.rpm | grep -q udevadm
           echo "udev rule and reload scripts are in both packages"
 
+      # A release reads its notes from CHANGELOG.md; make sure the current
+      # version has a section before anyone tags it.
+      - name: Release notes for this version
+        run: |
+          VERSION=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' rkdeveloptool-gui/__init__.py)
+          sh packaging/release-notes.sh "$VERSION" > /dev/null
+          echo "CHANGELOG.md has notes for $VERSION"
+
       - name: Validate
         run: |
           appstreamcli validate --no-net packaging/io.github.gahingwoo.rkdeveloptool_gui.appdata.xml

@@ -91,7 +91,7 @@ pip install dist/rkdeveloptool_gui-*.whl
 
 若选择从源码运行（而非预编译包），需要：
 
-- Python 3.8+、PySide6 (Qt 6 Python 绑定)
+- Python 3.9+、PySide6 (Qt 6 Python 绑定)
 - 已安装并配置到 PATH 的 `rkdeveloptool` —— 用 `rkdeveloptool --version` 验证
   （[安装说明](https://docs.radxa.com/zero/zero3/low-level-dev/rkdeveloptool)）
 
