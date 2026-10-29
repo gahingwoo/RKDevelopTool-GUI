@@ -79,6 +79,13 @@ class RealtimeLogWidget(QWidget):
         
         self.setLayout(layout)
     
+    def sizeHint(self):
+        # The log takes whatever height is left (stretch 1 in the window), so
+        # it has no "preferred" height of its own. Reporting a larger one made
+        # the right-hand scroll area taller than the window and scrolled the
+        # progress row out of view.
+        return self.minimumSizeHint()
+
     def add_log(self, message):
         """Add a log message with color coding and timestamp"""
         # Extract log level

@@ -39,7 +39,7 @@ from .utils import (
     format_file_size, parse_partition_info, safe_slot, parse_chip_info
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
-from .widgets import AutoLoadCombo
+from .widgets import AutoLoadCombo, CurrentPageTabWidget
 from .i18n import TRANSLATIONS
 from .themes import ThemeManager, ThemeAutoManager
 from .operations import style_messagebox
@@ -365,7 +365,7 @@ class RKDevToolGUI(QMainWindow):
         layout = QVBoxLayout(panel)
 
         # Tab widget
-        self.tab_widget = QTabWidget()
+        self.tab_widget = CurrentPageTabWidget()
 
         # Home tab (task-oriented landing page)
         self.home_tab, home_widgets = create_home_tab(self)
@@ -565,8 +565,9 @@ class RKDevToolGUI(QMainWindow):
         )
 
         # Log fills the space left below the (now current-tab-sized) tab area,
-        # so it's always visible and short tabs don't leave a gray void.
-        self.log_widget.setMinimumHeight(180)
+        # so it's always visible and short tabs don't leave a gray void. No
+        # fixed minimum height: one smaller than what its buttons, text box
+        # and progress row need squeezed the progress row onto the text box.
         layout.addWidget(self.log_widget, 1)
 
         # Apply the initial current-tab sizing once widgets exist.
@@ -591,6 +592,8 @@ class RKDevToolGUI(QMainWindow):
         current = self.tab_widget.widget(index)
         if current is not None:
             current.adjustSize()
+        # Its sizeHint follows the current page; let the layout re-ask.
+        self.tab_widget.updateGeometry()
 
     def create_status_bar(self):
         """Create status bar with style, theme and language selectors"""
