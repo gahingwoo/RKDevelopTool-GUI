@@ -467,6 +467,41 @@ def parse_partition_info(text):
     return partitions
 
 
+def build_parameter_text(partitions):
+    """A Rockchip parameter file (what `rkdeveloptool gpt` reads) for a
+    partition table as parse_partition_info() returns it.
+
+    `ppt` gives only where each partition starts, so a partition's size is
+    the distance to the next one, and the last is written as "-" (grow to the
+    end of the storage), which rkdeveloptool and the SDK both accept.
+    """
+    parts = sorted(((int(info['address'], 16), name) for name, info in partitions.items()),
+                   key=lambda p: p[0])
+    entries = []
+    for i, (start, name) in enumerate(parts):
+        if i + 1 < len(parts):
+            entries.append(f"0x{parts[i + 1][0] - start:08x}@0x{start:08x}({name})")
+        else:
+            label = name if name.endswith(":grow") else f"{name}:grow"
+            entries.append(f"-@0x{start:08x}({label})")
+    return ("# Partition table read from the device with `rkdeveloptool ppt`.\n"
+            "# Each size is the distance to the next partition; the last one grows\n"
+            "# to the end of the storage. Partition UUIDs are not included.\n"
+            "FIRMWARE_VER: 1.0\n"
+            "TYPE: GPT\n"
+            "CMDLINE: mtdparts=rk29xxnand:" + ",".join(entries) + "\n")
+
+
+def parameter_has_mtdparts(path):
+    """Whether a file looks like a parameter file rkdeveloptool can use."""
+    try:
+        with open(path, "r", errors="replace") as f:
+            return any("mtdparts" in line and not line.lstrip().startswith("#")
+                       for line in f.read(1 << 20).splitlines())
+    except OSError:
+        return False
+
+
 def safe_slot(fn):
     """Return a safer wrapper for signal slots.
 
