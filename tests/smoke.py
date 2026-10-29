@@ -1384,6 +1384,10 @@ def check_chip_and_device_lock(app):
 
     for text, want in (("Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3576"),  # a real RK3576
                        ("Chip Info: 38 38 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3588"),
+                       # "330A" and "330C" are RK3368's and RK3399's numbers.
+                       ("Chip Info: 41 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3368"),
+                       ("Chip Info: 43 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3399"),
+                       ("0x330A", "RK3368"),
                        ("36 37 35 33 0 0", "RK3576"),
                        ("RK3399", "RK3399"),
                        ("", "Unknown Chip")):
