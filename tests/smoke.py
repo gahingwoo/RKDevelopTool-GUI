@@ -1644,7 +1644,10 @@ def check_fetch_loader(app):
             errors.append(f"chip shown as {window.chip_info_label.text()!r} for Pid 0x350e")
         window.loader_path.setText("")
         window.fetch_loader_btn.click()
-        worker = window._loader_fetch_worker
+        worker = getattr(window, '_loader_fetch_worker', None)
+        if worker is None:
+            errors.append("Get Loader didn't start")
+            return
         worker.wait(10000)
         for _ in range(20):
             app.processEvents()
