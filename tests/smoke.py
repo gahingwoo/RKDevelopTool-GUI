@@ -520,6 +520,93 @@ def check_layout(app):
         app.processEvents()
 
 
+def check_drag_and_drop(app):
+    """Files dropped on the window go where they belong."""
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    from rkdeveloptool_gui import utils
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    loader = os.path.join(work, "rk3588_spl_loader_v1.16.bin")
+    firmware = os.path.join(work, "update.img")
+    raw = os.path.join(work, "board.img")
+    for path, head in ((loader, b"BOOT"), (firmware, b"RKFW"), (raw, b"\0" * 4)):
+        with open(path, "wb") as f:
+            f.write(head + b"\0" * 60)
+    if not utils.is_loader_file(loader) or utils.is_loader_file(firmware):
+        errors.append("is_loader_file misclassifies BOOT / RKFW files")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.resize(1300, 800)
+    window.show()
+
+    def at(widget):
+        """Window coordinates of a widget's centre, with its tab showing."""
+        page = widget
+        while page is not None and window.tab_widget.indexOf(page) < 0:
+            page = page.parentWidget()
+        if page is not None:
+            window.tab_widget.setCurrentWidget(page)
+        for _ in range(5):
+            app.processEvents()
+        return QPointF(widget.mapTo(window, widget.rect().center()))
+
+    def mime(*paths):
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        return data
+
+    def drop(pos, *paths):
+        """Drag enter, then drop if the window accepted the drag - the order
+        Qt delivers a real drag in (a Drop sent on its own is discarded)."""
+        # Keep the QMimeData referenced: the events only hold a pointer to it.
+        data = mime(*paths)
+        enter = QDragEnterEvent(pos.toPoint(), Qt.DropAction.CopyAction, data,
+                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        window.dragEnterEvent(enter)
+        if not enter.isAccepted():
+            return
+        event = QDropEvent(pos, Qt.DropAction.CopyAction, data,
+                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        window.dropEvent(event)
+        app.processEvents()
+
+    try:
+        blank = at(window.home_cards_label)
+        drop(blank, loader)
+        if window.loader_path.text() != loader:
+            errors.append("a loader dropped on the window didn't fill the Loader field")
+        blank = at(window.home_cards_label)
+        drop(blank, firmware)
+        if window.firmware_path.text() != firmware or \
+                window.tab_widget.currentWidget() is not window.download_tab:
+            errors.append("firmware dropped on the window didn't fill one-click burn and show its tab")
+        drop(at(window.image_path), loader)
+        if window.image_path.text() != loader:
+            errors.append("a file dropped on the image field didn't go into that field")
+        window.firmware_path.clear()
+        drop(at(window.home_cards_label), firmware, raw)
+        if window.firmware_path.text():
+            errors.append("dropping two files at once should do nothing")
+        if any(f.acceptDrops() for f in window._drop_fields) or \
+                window.settings_page.loader_path.acceptDrops():
+            errors.append("a path field still takes drops itself (would insert file:// text)")
+        other = os.path.join(work, "rkdeveloptool")
+        with open(other, "w") as f:
+            f.write('#!/bin/sh\necho "rkdeveloptool ver 2.0"\n')
+        os.chmod(other, 0o755)
+        drop(at(window.settings_page.tool_path), other)
+        if utils.RKTOOL != other:
+            errors.append("rkdeveloptool dropped on its Settings field wasn't applied")
+        window.settings_page._reset_tool()
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -550,6 +637,7 @@ def main():
     check_settings_and_command_line(app)
     check_native_macos_style(app)
     check_layout(app)
+    check_drag_and_drop(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:

@@ -322,6 +322,16 @@ def decompressed_name(file_path):
     return name + ".img"
 
 
+def is_loader_file(file_path):
+    """Whether a file is a Rockchip loader (MiniLoaderAll.bin, *_spl_loader_*.bin):
+    rkdeveloptool accepts only the "BOOT" and "LDR " tags (RKBoot.cpp)."""
+    try:
+        with open(file_path, 'rb') as f:
+            return f.read(4) in (b"BOOT", b"LDR ")
+    except OSError:
+        return False
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:

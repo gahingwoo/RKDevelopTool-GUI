@@ -36,7 +36,8 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    is_loader_file
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from .widgets import AutoLoadCombo, CurrentPageTabWidget
@@ -177,6 +178,7 @@ class RKDevToolGUI(QMainWindow):
         # the AppImage catalog's 800x600 test screen) show the whole window.
         # A saved geometry (restore_settings) still takes precedence.
         self.setMinimumSize(800, 560)
+        self.setAcceptDrops(True)
         preferred_w, preferred_h = 1300, 720
         screen = QApplication.primaryScreen()
         if screen is not None:
@@ -955,7 +957,15 @@ class RKDevToolGUI(QMainWindow):
         msg.exec()
 
     def register_browse(self, button, line_edit, filter_key=None, save=False):
-        """Helper to connect a browse button to a line_edit"""
+        """Helper to connect a browse button to a line_edit.
+
+        Fields for picking an existing file also take a file dropped on them
+        (see dropEvent). Their own drop handling is turned off, since a line
+        edit would otherwise insert the dropped file's "file://" URL as text.
+        """
+        if not save:
+            line_edit.setAcceptDrops(False)
+            self._drop_fields = getattr(self, '_drop_fields', []) + [line_edit]
 
         def _on_browse():
             file_filter = self.tr(filter_key) if filter_key else ""
@@ -1143,6 +1153,69 @@ class RKDevToolGUI(QMainWindow):
             self._command_history.append(text)
         self._history_pos = len(self._command_history)
         self.run_command([RKTOOL, *args], "manual_command")
+
+    # Drag and drop
+    def _dropped_file(self, event):
+        """The single local file being dragged, or None."""
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = urls[0].toLocalFile()
+        return path if os.path.isfile(path) else None
+
+    def dragEnterEvent(self, event):
+        if self._dropped_file(event):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if self._dropped_file(event):
+            event.acceptProposedAction()
+
+    def _is_under(self, pos, target):
+        widget = self.childAt(pos)
+        while widget is not None and widget is not self:
+            if widget is target:
+                return True
+            widget = widget.parentWidget()
+        return False
+
+    def _drop_field_at(self, pos):
+        """The path field under a drop position, if any."""
+        widget = self.childAt(pos)
+        settings_loader = getattr(getattr(self, 'settings_page', None), 'loader_path', None)
+        while widget is not None and widget is not self:
+            if widget is settings_loader:
+                return self.loader_path
+            if widget in getattr(self, '_drop_fields', []):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    def dropEvent(self, event):
+        """A file dropped on a path field fills that field. Dropped anywhere
+        else, a loader fills the Loader field and anything else the one-click
+        firmware field, switching to its tab."""
+        path = self._dropped_file(event)
+        if not path:
+            return
+        event.acceptProposedAction()
+        pos = event.position().toPoint()
+        page = getattr(self, 'settings_page', None)
+        if page is not None and self._is_under(pos, page.tool_path):
+            page.tool_path.setText(path)
+            page._apply_tool_path()
+            return
+        field = self._drop_field_at(pos)
+        if field is None:
+            if is_loader_file(path):
+                field = self.loader_path
+            else:
+                field = self.firmware_path
+                self.tab_widget.setCurrentWidget(self.download_tab)
+        field.setText(path)
+        kind = self.tr("drop_loader") if field is self.loader_path else self.tr("drop_file")
+        self.log_message(f"[INFO] {kind}: {path}")
+        self.statusBar().showMessage(f"{kind}: {os.path.basename(path)}", 4000)
 
     def _copy_equiv_command(self):
         """Copy the equivalent rkdeveloptool command to the clipboard."""

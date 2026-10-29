@@ -160,6 +160,7 @@ class SettingsPage(QWidget):
         box = QGroupBox("rkdeveloptool")
         v = QVBoxLayout(box)
         self.tool_path = QLineEdit(utils.saved_rkdeveloptool())
+        self.tool_path.setAcceptDrops(False)  # the window handles file drops
         self.tool_path.setPlaceholderText(
             self.tr("settings_tool_auto").format(utils.auto_detected_rkdeveloptool()))
         self.tool_path.editingFinished.connect(safe_slot(self._apply_tool_path))
@@ -216,6 +217,7 @@ class SettingsPage(QWidget):
         box = QGroupBox(self.tr("settings_loader"))
         v = QVBoxLayout(box)
         self.loader_path = QLineEdit(self.gui.loader_path.text())
+        self.loader_path.setAcceptDrops(False)  # the window handles file drops
         self.gui.loader_path.textChanged.connect(self._loader_changed_elsewhere)
         self.loader_path.setPlaceholderText(self.tr("settings_loader_none"))
         self.loader_path.editingFinished.connect(safe_slot(self._apply_loader))
