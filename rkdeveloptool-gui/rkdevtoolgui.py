@@ -1010,7 +1010,9 @@ class RKDevToolGUI(QMainWindow):
                 self.tr("update_available").format(self._update_release["version"]))
             self.update_button.setStyleSheet("font-weight: bold;")
         else:
-            self.update_button.setText(f"v{__version__}")
+            # Say what clicking does: a bare "v5.5.0" reads as a label.
+            self.update_button.setText(
+                f"v{__version__} · {self.tr('check_updates_label')}")
             self.update_button.setStyleSheet("")
         self.update_button.setToolTip(self.tr("check_updates_tooltip"))
 
@@ -1041,7 +1043,7 @@ class RKDevToolGUI(QMainWindow):
             self.update_button.setText(self.tr("checking_updates"))
         worker.available.connect(safe_slot(lambda r: self._on_update_available(r, manual)))
         worker.up_to_date.connect(safe_slot(lambda v: self._on_update_none(v, manual)))
-        worker.failed.connect(safe_slot(lambda e: self._on_update_failed(e, manual)))
+        worker.failed.connect(safe_slot(lambda kind, e: self._on_update_failed(kind, e, manual)))
         worker.start()
 
     def _on_update_available(self, release, manual):
@@ -1059,12 +1061,14 @@ class RKDevToolGUI(QMainWindow):
             self._update_message(self.tr("update_none_message").format(__version__),
                                  QMessageBox.Icon.Information)
 
-    def _on_update_failed(self, error, manual):
+    def _on_update_failed(self, kind, error, manual):
         self._refresh_update_button()
         if manual:
             self.log_message(f"[WARNING] {self.tr('update_failed_title')}: {error}")
-            self._update_message(self.tr("update_failed_message").format(error),
-                                 QMessageBox.Icon.Warning, page=updater.RELEASES_PAGE)
+            reason = self.tr(f"update_error_{kind}")
+            self._update_message(self.tr("update_failed_message").format(reason),
+                                 QMessageBox.Icon.Warning, page=updater.RELEASES_PAGE,
+                                 details=error)
 
     def _show_update_dialog(self, release):
         text = self.tr("update_found_message").format(release["version"], __version__)
@@ -1074,15 +1078,16 @@ class RKDevToolGUI(QMainWindow):
                              download=release.get("download") or release["page"],
                              page=release["page"], notes=release.get("notes"))
 
-    def _update_message(self, text, icon, download=None, page=None, notes=None):
+    def _update_message(self, text, icon, download=None, page=None, notes=None,
+                        details=None):
         """Update result dialog with an 'automatically check' checkbox."""
         msg = QMessageBox(self)
         style_messagebox(msg)
         msg.setWindowTitle(self.tr("update_title"))
         msg.setIcon(icon)
         msg.setText(text)
-        if notes:
-            msg.setDetailedText(notes)
+        if notes or details:
+            msg.setDetailedText(notes or details)
         auto = QCheckBox(self.tr("update_auto_check"))
         auto.setChecked(self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") == "1")
         msg.setCheckBox(auto)
