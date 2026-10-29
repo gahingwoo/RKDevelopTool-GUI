@@ -322,14 +322,34 @@ def decompressed_name(file_path):
     return name + ".img"
 
 
-def is_loader_file(file_path):
-    """Whether a file is a Rockchip loader (MiniLoaderAll.bin, *_spl_loader_*.bin):
-    rkdeveloptool accepts only the "BOOT" and "LDR " tags (RKBoot.cpp)."""
+# What classify_image_file() may return, by what it means for flashing.
+WHOLE_IMAGE_KINDS = ("rkfw", "compressed", "disk")
+
+
+def classify_image_file(file_path):
+    """Rough type of a file someone wants to flash, from its contents:
+
+    'loader'      Rockchip loader (BOOT / LDR tag)
+    'rkfw'        RKFW update.img
+    'compressed'  xz / gzip / bzip2 / zstd / zip / 7z archive
+    'disk'        whole-disk image: MBR boot signature or a GPT header
+    'other'       anything else (a single partition image, a text file...)
+    None          unreadable
+    """
     try:
         with open(file_path, 'rb') as f:
-            return f.read(4) in (b"BOOT", b"LDR ")
+            head = f.read(520)
     except OSError:
-        return False
+        return None
+    if head[:4] in (b"BOOT", b"LDR "):
+        return 'loader'
+    if head[:4] == b"RKFW":
+        return 'rkfw'
+    if detect_compression(file_path):
+        return 'compressed'
+    if len(head) >= 520 and (head[510:512] == b"\x55\xaa" or head[512:520] == b"EFI PART"):
+        return 'disk'
+    return 'other'
 
 
 def calculate_file_md5(file_path):

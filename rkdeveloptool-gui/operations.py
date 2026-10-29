@@ -1606,12 +1606,14 @@ def unpack_firmware(gui):
     Allows selecting a firmware package file and extracts all contained
     images to a selected output directory.
     """
-    # Select input firmware package
-    input_file = app_settings.get_open_file(
-        gui,
-        gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
-        "Image Files (*.img *.uimg);;All Files (*)"
-    )
+    # The package chosen in the unpack field (browsed or dropped); ask if none.
+    input_file = gui.unpack_input_path.text().strip() if hasattr(gui, 'unpack_input_path') else ""
+    if not os.path.isfile(input_file):
+        input_file = app_settings.get_open_file(
+            gui,
+            gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
+            "Image Files (*.img *.uimg);;All Files (*)"
+        )
     if not input_file or not os.path.exists(input_file):
         return
     
@@ -1682,12 +1684,14 @@ def import_gpt_table(gui):
     Reads a GPT partition table from a binary file and writes it to the
     device. Requires multiple confirmations to prevent data loss.
     """
-    # Select input GPT file
-    input_file = app_settings.get_open_file(
-        gui,
-        gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
-        "Binary Files (*.bin);;All Files (*)"
-    )
+    # The file chosen in the GPT field (browsed or dropped); ask if none.
+    input_file = gui.gpt_path.text().strip() if hasattr(gui, 'gpt_path') else ""
+    if not os.path.isfile(input_file):
+        input_file = app_settings.get_open_file(
+            gui,
+            gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
+            "Binary Files (*.bin);;All Files (*)"
+        )
     if not input_file or not os.path.exists(input_file):
         return
     

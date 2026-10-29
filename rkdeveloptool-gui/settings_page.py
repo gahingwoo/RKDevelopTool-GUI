@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QSlider,
-    QSizePolicy, QSpinBox, QVBoxLayout, QWidget
+    QSizePolicy, QSpacerItem, QSpinBox, QVBoxLayout, QWidget
 )
 
 from . import __version__
@@ -95,7 +95,12 @@ class SettingsPage(QWidget):
         right.addWidget(self._updates_group())
         right.addStretch(1)
         layout = QHBoxLayout(self)
+        layout.setSpacing(8)
         layout.addLayout(left, 1)
+        # A clear gutter between the columns: 24 px where there's room,
+        # giving way (down to 8) rather than forcing a horizontal scrollbar.
+        layout.addSpacerItem(QSpacerItem(16, 0, QSizePolicy.Policy.Preferred,
+                                         QSizePolicy.Policy.Minimum))
         layout.addLayout(right, 1)
 
     def showEvent(self, event):
@@ -160,7 +165,6 @@ class SettingsPage(QWidget):
         box = QGroupBox("rkdeveloptool")
         v = QVBoxLayout(box)
         self.tool_path = QLineEdit(utils.saved_rkdeveloptool())
-        self.tool_path.setAcceptDrops(False)  # the window handles file drops
         self.tool_path.setPlaceholderText(
             self.tr("settings_tool_auto").format(utils.auto_detected_rkdeveloptool()))
         self.tool_path.editingFinished.connect(safe_slot(self._apply_tool_path))
@@ -217,7 +221,6 @@ class SettingsPage(QWidget):
         box = QGroupBox(self.tr("settings_loader"))
         v = QVBoxLayout(box)
         self.loader_path = QLineEdit(self.gui.loader_path.text())
-        self.loader_path.setAcceptDrops(False)  # the window handles file drops
         self.gui.loader_path.textChanged.connect(self._loader_changed_elsewhere)
         self.loader_path.setPlaceholderText(self.tr("settings_loader_none"))
         self.loader_path.editingFinished.connect(safe_slot(self._apply_loader))
@@ -285,6 +288,13 @@ class SettingsPage(QWidget):
 
     def _sync_unpack_dir_enabled(self):
         self.unpack_dir.setEnabled(self._unpack_mode() == UNPACK_CUSTOM)
+
+    def _select_custom_unpack_dir(self):
+        """Switch to "this folder" for the path now in the field."""
+        for button in self.unpack_buttons.buttons():
+            if button.property("mode") == UNPACK_CUSTOM:
+                button.setChecked(True)
+        self._apply_unpack()
 
     def _browse_unpack_dir(self):
         path = QFileDialog.getExistingDirectory(self, self.tr("settings_unpack_custom"),
