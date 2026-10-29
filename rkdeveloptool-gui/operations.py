@@ -668,8 +668,11 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
                 return
             gui.log_message(f"[ERROR] {label}")
             _finish_rkfw_flow(gui, tmp_dir)
-            _show_rkfw_message(gui, "rkfw_flash_failed_title",
-                                gui.tr("rkfw_flash_failed_message"))
+            text = gui.tr("rkfw_flash_failed_message")
+            guidance = gui.explain_failure(output) if hasattr(gui, 'explain_failure') else None
+            if guidance:
+                text += f"\n\n{label}: {guidance[0]}\n\n{guidance[1]}"
+            _show_rkfw_message(gui, "rkfw_flash_failed_title", text)
             return
 
         # `db` and `ul` both make the device re-enumerate on USB; give the

@@ -763,6 +763,93 @@ def check_drag_and_drop(app):
         app.processEvents()
 
 
+def check_failure_guidance(app):
+    """rkdeveloptool's failure messages map to a cause and what to try."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import failures
+
+    # Messages as rkdeveloptool prints them (main.cpp / RKComm.cpp).
+    samples = {
+        "Found too many rockusb devices, please plug devices out!": "too_many_devices",
+        "Did not find any rockusb device, please plug device in!": "no_device",
+        "not found any devices!": "no_device",
+        "Parameter of [UL] command is invalid, please check help!": "bad_arguments",
+        "command is invalid!": "bad_arguments",
+        "Upgrading loader failed!": "loader_upgrade",
+        "Downloading bootloader failed!": "loader_download",
+        "Write LBA failed, err=-1, can't open file: /x.img": "file_open",
+        "Creating Comm Object failed!": "cannot_open",
+        "Write LBA quit, creating comm object failed!": "cannot_open",
+        "Write LBA failed!": "write_failed",
+        "Writing master gpt failed!": "write_failed",
+        "Read LBA failed!": "read_failed",
+        "Not found any partition table!": "no_partition_table",
+        "Parse parameter failed!": "bad_parameter_file",
+        "Change Storage failed!": "storage_switch",
+        "Reading Flash Info failed!": "needs_loader",
+    }
+    for output, kind in samples.items():
+        got = failures.classify_failure("Downloading bootloader...\n" * (kind != "loader_download") + output)
+        if got != kind:
+            errors.append(f"{output!r} classified as {got}, want {kind}")
+    if failures.classify_failure("something nobody has seen\n") is not None:
+        errors.append("unrecognised output was classified")
+    for lang, table in TRANSLATIONS.items():
+        for kind in failures.KINDS:
+            for part in ("title", "causes", "actions"):
+                if f"err_{kind}_{part}" not in table:
+                    errors.append(f"{lang}: missing err_{kind}_{part}")
+
+    tr = TranslationManager(lang="en").tr
+    with_rule = failures.explain(tr, "Creating Comm Object failed!", "sudo tee RULE")
+    write = failures.explain(tr, "Write LBA failed!", "sudo tee RULE")
+    if not with_rule or "sudo tee RULE" not in with_rule[1]:
+        errors.append("the Linux udev command isn't offered for a device that can't be opened")
+    if not write or "sudo tee RULE" in write[1]:
+        errors.append("the Linux udev command was offered for a write failure")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+
+    class FakeWorker:
+        description_key = "burning"
+
+        def __init__(self, output):
+            self.output = output
+
+    shown = []
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    try:
+        def finish(output, mode="Loader", loaded=True, rkfw=False):
+            shown.clear()
+            window.device_mode, window.loader_loaded = mode, loaded
+            window.maskrom_device_shown_hint = False
+            window._rkfw_flashing = rkfw
+            window.command_worker = FakeWorker(output)
+            window.on_command_finished(False, "failed")
+            return list(shown)
+
+        if finish("Write LBA failed!") != ["Writing failed"]:
+            errors.append(f"write failure dialog: {shown}")
+        if finish("Write LBA failed!", rkfw=True):
+            errors.append("a failure during an RKFW flash popped its own dialog")
+        hint = finish("Reading Flash Info failed!", mode="Maskrom", loaded=False)
+        if len(hint) != 1 or "Reading device information failed" in hint[0]:
+            errors.append(f"Maskrom without loader should show only the loader hint: {hint}")
+        if finish("something nobody has seen"):
+            errors.append("an unrecognised failure popped a dialog")
+        if "Writing failed" not in window.log_output.toPlainText():
+            errors.append("the guidance wasn't logged")
+    finally:
+        QMessageBox.exec = real_exec
+        window._rkfw_flashing = False
+        window.command_worker = None
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
 def check_preflight(app):
     """The checks shown before a write, and that a failed one blocks it."""
     from PySide6.QtCore import QTimer
@@ -883,6 +970,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_failure_guidance(app)
     check_preflight(app)
     check_linux_usb_access(app)
     check_updates(app)
