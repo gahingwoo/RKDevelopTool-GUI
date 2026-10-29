@@ -70,5 +70,13 @@ def add(image, result, kind="image", address="", loader="", chip="", seconds=Non
     return entry
 
 
+def remove(index):
+    """Delete the entry at index (0 is the newest)."""
+    entries = load()
+    if 0 <= index < len(entries):
+        del entries[index]
+        _save(entries)
+
+
 def clear():
     _save([])

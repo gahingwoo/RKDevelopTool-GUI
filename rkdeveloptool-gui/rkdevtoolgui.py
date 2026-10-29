@@ -1211,6 +1211,80 @@ class RKDevToolGUI(QMainWindow):
         self.tab_widget.setCurrentWidget(self.download_tab)
         self.log_message(f"[INFO] {self.tr('history_reused').format(os.path.basename(image))}")
 
+    def show_history_menu(self, pos):
+        """Right-click on a history entry: details, flash again, show the
+        file, copy its path, or delete the entry."""
+        menu = self.history_menu(self.history_table.rowAt(pos.y()))
+        if menu is not None:
+            menu.exec(self.history_table.viewport().mapToGlobal(pos))
+
+    def history_menu(self, row):
+        """The right-click menu for a history row, or None."""
+        from PySide6.QtWidgets import QMenu
+        entries = getattr(self, '_history', [])
+        if not 0 <= row < len(entries):
+            return None
+        self.history_table.selectRow(row)
+        entry = entries[row]
+        menu = QMenu(self)
+        menu.addAction(self.tr("history_details"), lambda: self.show_history_details(row))
+        menu.addAction(self.tr("history_again"), self.flash_again)
+        menu.addSeparator()
+        reveal = menu.addAction(self.tr("history_reveal"),
+                                lambda: self._reveal_file(entry.get("image", "")))
+        reveal.setEnabled(os.path.isfile(entry.get("image", "")))
+        menu.addAction(self.tr("history_copy_path"),
+                       lambda: QApplication.clipboard().setText(entry.get("image", "")))
+        menu.addSeparator()
+        menu.addAction(self.tr("history_delete"), lambda: self._delete_history(row))
+        return menu
+
+    def history_details_text(self, entry):
+        seconds = entry.get("seconds")
+        took = "" if seconds is None else f"{seconds // 60}:{seconds % 60:02d}"
+        result = self.tr(f"history_{entry.get('result', '')}")
+        if entry.get("note"):
+            result += f" ({entry['note']})"
+        none = self.tr("history_none")
+        kind = "update.img" if entry.get("kind") == "update.img" else self.tr("history_kind_image")
+        rows = [
+            (self.tr("history_time"), entry.get("time", "")),
+            (self.tr("history_result"), result),
+            (self.tr("chip"), entry.get("chip") or none),
+            (self.tr("history_kind"), kind),
+            (self.tr("history_image"), entry.get("image", "")),
+            (self.tr("target_address"), entry.get("address") or none),
+            (self.tr("history_loader"), entry.get("loader") or none),
+            (self.tr("history_duration"), took or none),
+        ]
+        if entry.get("image") and not os.path.isfile(entry["image"]):
+            rows.append(("", self.tr("history_file_missing")))
+        return "\n".join(f"{label}: {value}" if label else value for label, value in rows)
+
+    def show_history_details(self, row):
+        entries = getattr(self, '_history', [])
+        if not 0 <= row < len(entries):
+            return
+        msg = QMessageBox()
+        style_messagebox(msg)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setWindowTitle(self.tr("history_details"))
+        msg.setText(self.history_details_text(entries[row]))
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        msg.exec()
+
+    def _reveal_file(self, path):
+        """Show the file in Finder / the file manager (its folder elsewhere)."""
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+
+    def _delete_history(self, row):
+        from . import history
+        history.remove(row)
+        self.refresh_history()
+
     def clear_history(self):
         from . import history
         msg = QMessageBox()

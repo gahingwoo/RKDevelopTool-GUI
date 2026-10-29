@@ -1712,6 +1712,19 @@ def check_flash_history(app):
         window.flash_again()
         if not shown or window.firmware_path.text() != disk:
             errors.append("Flash Again with a missing file didn't say so")
+        # Right-click: the menu, the details, deleting one entry.
+        menu = window.history_menu(1)
+        items = [a.text() for a in menu.actions() if a.text()] if menu else []
+        if items[:1] != [window.tr("history_details")] or window.tr("history_delete") not in items:
+            errors.append(f"history menu: {items}")
+        if window.history_menu(99) is not None:
+            errors.append("a menu for a row that isn't there")
+        details = window.history_details_text(history.load()[1])
+        if disk not in details or "0x0" not in details:
+            errors.append(f"history details: {details!r}")
+        window._delete_history(0)
+        if [e["image"] for e in history.load()] != [disk, disk]:
+            errors.append("deleting one history entry removed the wrong one")
         window.clear_history()
         if history.load() or window.history_table.rowCount():
             errors.append("Clear History left entries")

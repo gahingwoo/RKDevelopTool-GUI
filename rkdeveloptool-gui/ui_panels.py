@@ -1558,6 +1558,8 @@ def create_history_tab(gui):
         header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
     header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
     table.cellDoubleClicked.connect(safe_slot(lambda row, col: gui.flash_again()))
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    table.customContextMenuRequested.connect(safe_slot(gui.show_history_menu))
 
     buttons = QHBoxLayout()
     again_btn = QPushButton()
