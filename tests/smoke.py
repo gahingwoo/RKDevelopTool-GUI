@@ -105,6 +105,36 @@ def check_updates(app):
         if got != (want and "https://x/" + want):
             errors.append(f"pick_asset({kind}, {machine}) = {got}, want {want}")
 
+    # Errors map to a reason the dialog can explain.
+    import ssl
+    import urllib.error
+    cert = urllib.error.URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer"))
+    for err, want in ((cert, "cert"),
+                      (urllib.error.HTTPError("u", 403, "rate", {}, None), "rate_limit"),
+                      (urllib.error.URLError("nodename nor servname"), "offline"),
+                      (ValueError("bad tag"), "other")):
+        if updater.describe_error(err) != want:
+            errors.append(f"describe_error({err!r}) = {updater.describe_error(err)}, want {want}")
+
+    # A certificate failure with the default trust store (python.org's macOS
+    # Python before "Install Certificates") retries with a CA bundle.
+    import urllib.request
+    real_urlopen, calls = urllib.request.urlopen, []
+
+    def fake_urlopen(request, timeout=None, context=None):
+        calls.append(context)
+        if context is None:
+            raise cert
+        return "opened"
+
+    urllib.request.urlopen = fake_urlopen
+    try:
+        got = updater._open(urllib.request.Request("https://example.invalid"))
+    finally:
+        urllib.request.urlopen = real_urlopen
+    if got != "opened" or calls[0] is not None or calls[-1] is None:
+        errors.append(f"no CA-bundle retry after a certificate error: {got!r}, {calls}")
+
     feed = os.path.join(_tmp, "release.json")
     old_env = os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"]
     os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + feed
@@ -117,7 +147,7 @@ def check_updates(app):
             worker = updater.UpdateCheckWorker()
             worker.available.connect(lambda r: got.update(available=r))
             worker.up_to_date.connect(lambda v: got.update(up_to_date=v))
-            worker.failed.connect(lambda e: got.update(failed=e))
+            worker.failed.connect(lambda k, e: got.update(failed=(k, e)))
             worker.run()
             if list(got) != [expect]:
                 errors.append(f"update check for release {tag}: {got}, want {expect}")

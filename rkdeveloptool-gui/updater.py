@@ -10,7 +10,9 @@ import os
 import platform
 import re
 import shutil
+import ssl
 import sys
+import urllib.error
 import urllib.request
 
 from PySide6.QtCore import QThread, Signal
@@ -81,6 +83,68 @@ def pick_asset(assets, kind=None, machine=None):
     return None
 
 
+# CA bundles to fall back on when Python's own OpenSSL has none. python.org's
+# macOS Python ships an empty cert directory until "Install Certificates" is
+# run, and a bundled Python may point at the build machine's paths.
+_CA_BUNDLES = (
+    "/etc/ssl/cert.pem",                                  # macOS, Alpine, Arch
+    "/etc/ssl/certs/ca-certificates.crt",                 # Debian, Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",                   # Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",                             # openSUSE
+)
+
+
+def _fallback_contexts():
+    """SSL contexts built from CA bundles found on this machine."""
+    paths = []
+    try:
+        import certifi
+        paths.append(certifi.where())
+    except ImportError:
+        pass
+    paths += [p for p in _CA_BUNDLES if os.path.isfile(p)]
+    for path in paths:
+        try:
+            yield ssl.create_default_context(cafile=path)
+        except (OSError, ssl.SSLError):
+            continue
+
+
+def _is_cert_error(error):
+    reason = getattr(error, "reason", error)
+    return isinstance(reason, ssl.SSLCertVerificationError)
+
+
+def _open(request):
+    """urlopen with the default trust store, retrying with the machine's CA
+    bundles when that store can't verify the certificate."""
+    try:
+        return urllib.request.urlopen(request, timeout=TIMEOUT_S)
+    except urllib.error.URLError as e:
+        if not _is_cert_error(e):
+            raise
+        first_error = e
+    for context in _fallback_contexts():
+        try:
+            return urllib.request.urlopen(request, timeout=TIMEOUT_S, context=context)
+        except urllib.error.URLError as e:
+            if not _is_cert_error(e):
+                raise
+    raise first_error
+
+
+def describe_error(error):
+    """Short, translatable reason for a failed check: 'cert', 'offline',
+    'rate_limit' or 'other'."""
+    if _is_cert_error(error):
+        return "cert"
+    if isinstance(error, urllib.error.HTTPError) and error.code in (403, 429):
+        return "rate_limit"
+    if isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError)):
+        return "offline"
+    return "other"
+
+
 def fetch_latest(url=None):
     """Return {'version', 'page', 'download', 'notes'} for the latest release.
     Raises OSError / ValueError on network or format problems."""
@@ -89,7 +153,7 @@ def fetch_latest(url=None):
         "Accept": "application/vnd.github+json",
         "User-Agent": f"RKDevelopTool-GUI/{__version__}",
     })
-    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+    with _open(request) as response:
         data = json.loads(response.read().decode("utf-8"))
     version = (data.get("tag_name") or "").lstrip("vV")
     if parse_version(version) is None:
@@ -108,18 +172,19 @@ class UpdateCheckWorker(QThread):
     Emits:
         available(dict)   a newer release (see fetch_latest)
         up_to_date(str)   the latest released version, not newer than ours
-        failed(str)       why the check failed (offline, rate limit, ...)
+        failed(str, str)  kind ('cert', 'offline', 'rate_limit', 'other')
+                          and the raw error
     """
 
     available = Signal(object)
     up_to_date = Signal(str)
-    failed = Signal(str)
+    failed = Signal(str, str)  # kind (see describe_error), raw message
 
     def run(self):
         try:
             release = fetch_latest()
         except Exception as e:  # urllib raises a wide range; all mean "no answer"
-            self.failed.emit(str(e))
+            self.failed.emit(describe_error(e), str(e))
             return
         if is_newer(release["version"]):
             self.available.emit(release)
