@@ -214,6 +214,22 @@ def parse_chip_info(chip_text):
     return chip_text
 
 
+def flash_capacity_bytes(rfi_text):
+    """Storage size in bytes from `rkdeveloptool rfi` output, or None.
+
+    rfi prints the size twice, "Flash Size: 29824 MB" and "Flash Size:
+    61079552 Sectors"; the sector count is exact, the MB figure rounded.
+    """
+    text = rfi_text or ""
+    match = re.search(r'Flash\s+Size\s*:\s*(\d+)\s*Sectors', text, re.I)
+    if match:
+        return int(match.group(1)) * 512
+    match = re.search(r'Flash\s+Size\s*:\s*([0-9.]+)\s*(MB|GB)', text, re.I)
+    if match:
+        return int(float(match.group(1)) * 1024 ** (3 if match.group(2).upper() == 'GB' else 2))
+    return None
+
+
 def parse_flash_info(flash_text):
     """Parse flash info from rkdeveloptool rfi output"""
     if not flash_text:

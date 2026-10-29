@@ -1653,6 +1653,41 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_rfi_capacity(app):
+    """The pre-flight storage size comes from real rfi output, exactly."""
+    import subprocess as sp
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import flash_capacity_bytes
+
+    out = ("Flash Info:\n\tManufacturer: SAMSUNG, value=00\n\tFlash Size: 29824 MB\n"
+           "\tFlash Size: 61079552 Sectors\n\tBlock Size: 512 KB\n")
+    if flash_capacity_bytes(out) != 61079552 * 512:
+        errors.append(f"flash_capacity_bytes: {flash_capacity_bytes(out)}")
+    if flash_capacity_bytes("Flash Size: 29824 MB") != 29824 * 1024 ** 2:
+        errors.append("flash_capacity_bytes ignores the MB line")
+    if flash_capacity_bytes("Read Flash Info failed!") is not None:
+        errors.append("flash_capacity_bytes found a size in a failure")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window._cached_flash_info = None
+    calls = []
+    real_run = ops.subprocess.run
+    ops.subprocess.run = lambda cmd, *a, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0, out, "")
+    try:
+        first = ops.get_flash_capacity_bytes(window)[0]
+        second = ops.get_flash_capacity_bytes(window)[0]
+    finally:
+        ops.subprocess.run = real_run
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if (first, second, len(calls)) != (61079552 * 512, 61079552 * 512, 1):
+        errors.append(f"capacity {first}, then cached {second}, {len(calls)} rfi call(s)")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1714,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_rfi_capacity(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)

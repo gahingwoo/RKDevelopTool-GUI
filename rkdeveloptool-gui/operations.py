@@ -17,7 +17,7 @@ from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
     detect_compression, decompressed_name, DECOMPRESSIBLE,
-    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info
+    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info, flash_capacity_bytes
 )
 from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
@@ -74,6 +74,8 @@ def get_flash_capacity_bytes(gui):
     """
     # Try cached flash info first
     if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
+        if gui._cached_flash_info.get('bytes'):
+            return gui._cached_flash_info['bytes'], "cached"
         capacity_str = gui._cached_flash_info.get('capacity', '')
         if capacity_str:
             m = re.match(r'([0-9.]+)\s*(MB|GB)', capacity_str, re.I)
@@ -94,6 +96,11 @@ def get_flash_capacity_bytes(gui):
             result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True,
                                     timeout=6, env=env)
         out = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        bytes_size = flash_capacity_bytes(out)
+        if bytes_size:
+            gui._cached_flash_info = dict(parse_flash_info(out) or {}, bytes=bytes_size)
+            return bytes_size, "detected"
 
         # Try to parse capacity
         m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
