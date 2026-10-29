@@ -1160,6 +1160,79 @@ def check_cancel(app):
         errors.append(f"stopping the RKFW prep worker gave {outcome}, not cancelled")
 
 
+def check_progress(app):
+    """Overall progress weighted by bytes, recent speed, an honest ETA."""
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.progress import ProgressTracker, format_eta
+
+    now = [0.0]
+    t = ProgressTracker(1000, clock=lambda: now[0])
+    now[0] = 1.0
+    t.update(100)
+    if t.eta() is not None:
+        errors.append("an ETA was offered after 1 s")
+    now[0] = 4.0
+    t.update(400)
+    if t.speed() != 100 or round(t.eta()) != 6:
+        errors.append(f"steady 100 B/s: speed={t.speed()}, eta={t.eta()}")
+    # Slows to 4 B/s: within a 10 s window the estimate follows.
+    for step, done in ((20.0, 500), (25.0, 520)):
+        now[0] = step
+        t.update(done)
+    if not (t.speed() < 10 and t.eta() > 50):
+        errors.append(f"after slowing down: speed={t.speed()}, eta={t.eta()} (stale average?)")
+    tr = TranslationManager(lang="en").tr
+    if format_eta(tr, 130) != "about 2 min 10 s left" or format_eta(tr, 0.2) != "about 1 s left":
+        errors.append(f"format_eta: {format_eta(tr, 130)!r}, {format_eta(tr, 0.2)!r}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.begin_job(1000)
+        window.job_stage("[2/3] rootfs", 400, 600)
+        if window.progress_bar.value() != 40:
+            errors.append(f"a step starting at 400 of 1000 B shows {window.progress_bar.value()}%")
+        window._on_command_progress(50)
+        label = window.progress_label.text()
+        if window.progress_bar.value() != 70 or not label.startswith("[2/3] rootfs 70%"):
+            errors.append(f"50% of that step: bar {window.progress_bar.value()}, label {label!r}")
+        window.log_message("Write LBA from file (15%)")
+        if window.progress_bar.value() != 70:
+            errors.append("a step's own NN% log line overwrote the overall progress")
+        window.end_job()
+        window.log_message("Write LBA from file (15%)")
+        if window.progress_bar.value() != 15:
+            errors.append("log-line progress didn't come back after the job")
+
+        # A full RKFW flash: step 2 starts with step 1's bytes counted.
+        work = tempfile.mkdtemp(dir=_tmp)
+        files = []
+        for name, size in (("loader.bin", 100), ("parameter.txt", 300), ("rootfs.img", 600)):
+            path = os.path.join(work, name)
+            with open(path, "wb") as f:
+                f.write(b"\0" * size)
+            files.append(path)
+        steps = [([ops.RKTOOL, "db", files[0]], "loading_loader", "Loader"),
+                 ([ops.RKTOOL, "gpt", files[1]], "importing_gpt", "GPT"),
+                 ([ops.RKTOOL, "wlx", "rootfs", files[2]], "burning", "rootfs")]
+        window._rkfw_step_bytes = [100, 300, 600]
+        window.begin_job(1000)
+        real_run = window.run_command
+        window.run_command = lambda *a, **k: None
+        try:
+            ops._run_rkfw_steps(window, steps, 1, work)
+        finally:
+            window.run_command = real_run
+        if window.progress_bar.value() != 10 or not window.progress_label.text().startswith("[2/3] GPT"):
+            errors.append(f"RKFW step 2: bar {window.progress_bar.value()}, label {window.progress_label.text()!r}")
+        window.end_job()
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1186,6 +1259,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_progress(app)
     check_cancel(app)
     check_disconnect_during_write(app)
     check_failure_guidance(app)

@@ -30,6 +30,9 @@ class RealtimeLogWidget(QWidget):
         self.init_ui()
         self.log_buffer = []
         self.max_lines = 1000  # Limit to 1000 lines for performance
+        # Off while the window shows overall progress for a multi-step write,
+        # which a step's own "NN%" lines would otherwise overwrite.
+        self.follow_log_progress = True
         
     def init_ui(self):
         """Initialize the UI"""
@@ -111,7 +114,7 @@ class RealtimeLogWidget(QWidget):
         formatted_msg = f"[{timestamp}] {message}"
         
         # Parse progress percentage
-        progress = self._extract_progress(message)
+        progress = self._extract_progress(message) if self.follow_log_progress else None
         if progress is not None:
             self.set_progress(progress)
         

@@ -1108,8 +1108,9 @@ class RKDevToolGUI(QMainWindow):
             self.show_message("Warning", "command_already_running", "Warning")
             return
 
-        self.progress_bar.setValue(0)
-        self.progress_label.setText(self.tr('ready'))
+        if getattr(self, '_job', None) is None:
+            self.progress_bar.setValue(0)
+            self.progress_label.setText(self.tr('ready'))
 
         # Surface the exact command for power users (copyable, scriptable).
         if hasattr(self, 'equiv_command_field'):
@@ -1122,7 +1123,7 @@ class RKDevToolGUI(QMainWindow):
         self._absent_polls = 0
         self._update_poll_mode()
         # Use safe_slot for all signal connections to handle thread-safety
-        self.command_worker.progress.connect(safe_slot(lambda v: self.progress_bar.setValue(v)))
+        self.command_worker.progress.connect(safe_slot(self._on_command_progress))
         self.command_worker.log.connect(safe_slot(self.log_message))
 
         # Mirror to device info text if reading device info
@@ -1166,10 +1167,56 @@ class RKDevToolGUI(QMainWindow):
             msg.setDetailedText(tail)
         msg.exec()
 
+    # Write progress: overall percent, speed and time left for a write that
+    # may span several rkdeveloptool commands (a full RKFW flash).
+    def begin_job(self, total_bytes):
+        from .progress import ProgressTracker
+        self._job = {"tracker": ProgressTracker(total_bytes), "stage": "", "before": 0, "step": 0}
+        self.log_widget.follow_log_progress = False
+        self.progress_bar.setValue(0)
+
+    def job_stage(self, stage, before_bytes, step_bytes):
+        """Start the next step: everything before it counts as written."""
+        job = getattr(self, '_job', None)
+        if job is None:
+            return
+        job.update(stage=stage, before=before_bytes, step=step_bytes)
+        job["tracker"].update(before_bytes)
+        self._show_job_progress()
+
+    def end_job(self):
+        self._job = None
+        self.log_widget.follow_log_progress = True
+
+    def _on_command_progress(self, percent):
+        job = getattr(self, '_job', None)
+        if job is None:
+            self.progress_bar.setValue(percent)
+            return
+        job["tracker"].update(job["before"] + job["step"] * percent / 100)
+        self._show_job_progress()
+
+    def _show_job_progress(self):
+        from .progress import format_eta, format_speed
+        job = self._job
+        tracker = job["tracker"]
+        self.progress_bar.setValue(tracker.percent())
+        parts = [f"{job['stage']} {tracker.percent()}%"]
+        speed, eta = tracker.speed(), tracker.eta()
+        if speed:
+            parts.append(format_speed(speed))
+        if eta is not None:
+            parts.append(format_eta(self.tr, eta))
+        self.progress_label.setText(" · ".join(parts))
+
     def on_command_finished(self, success, error_msg):
         """Handle command completion"""
-        self.progress_bar.setValue(100 if success else 0)
-        self.progress_label.setText(self.tr("ready_status"))
+        if getattr(self, '_rkfw_flashing', False) and getattr(self, '_job', None):
+            pass  # a full flash keeps its overall progress between steps
+        else:
+            self.end_job()
+            self.progress_bar.setValue(100 if success else 0)
+            self.progress_label.setText(self.tr("ready_status"))
         worker = self.command_worker
         output = getattr(worker, 'output', "") if worker is not None else ""
         description_key = getattr(worker, 'description_key', "")
