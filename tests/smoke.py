@@ -271,6 +271,60 @@ def check_burn_flow(app):
         app.processEvents()
 
 
+def check_linux_usb_access(app):
+    """Detecting a Rockchip device the user can't open, and the udev rule."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import utils
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "..", "packaging", "70-rkdeveloptool-gui.rules")) as f:
+        rules = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    if rules != [utils.UDEV_RULE]:
+        errors.append(f"packaged udev rule {rules} differs from utils.UDEV_RULE")
+    if utils.UDEV_RULE not in utils.udev_fix_command():
+        errors.append("udev_fix_command doesn't install UDEV_RULE")
+
+    sysfs = tempfile.mkdtemp(dir=_tmp)
+    devfs = tempfile.mkdtemp(dir=_tmp)
+    for name, vendor, dev in (("1-1", "2207", 5), ("1-2", "05ac", 6)):
+        os.makedirs(os.path.join(sysfs, name))
+        for key, value in (("idVendor", vendor), ("busnum", "1"), ("devnum", str(dev))):
+            with open(os.path.join(sysfs, name, key), "w") as f:
+                f.write(value + "\n")
+        os.makedirs(os.path.join(devfs, "001"), exist_ok=True)
+        node = os.path.join(devfs, "001", f"{dev:03d}")
+        open(node, "w").close()
+        os.chmod(node, 0)
+    rockchip = os.path.join(devfs, "001", "005")
+    check = lambda **k: utils.inaccessible_rockchip_usb(sysfs, devfs, **k)
+    if os.geteuid() != 0:  # root can open anything
+        if check(linux=True) != [rockchip]:
+            errors.append(f"blocked Rockchip node not reported (other vendors ignored): {check(linux=True)}")
+    if check(linux=False):
+        errors.append("USB access reported as a problem off Linux")
+    os.chmod(rockchip, 0o600)
+    if check(linux=True):
+        errors.append("an accessible Rockchip node was reported")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    shown = []
+    real = (utils.inaccessible_rockchip_usb, QMessageBox.exec)
+    utils.inaccessible_rockchip_usb = lambda: ["/dev/bus/usb/001/005"]
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    try:
+        window.on_device_lost()
+        window.on_device_lost()
+    finally:
+        utils.inaccessible_rockchip_usb, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if len(shown) != 1 or "/dev/bus/usb/001/005" not in shown[0]:
+        errors.append(f"USB permission hint shown {len(shown)} times (want once, naming the node)")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -297,6 +351,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_linux_usb_access(app)
     check_updates(app)
     check_decompression()
     check_burn_flow(app)

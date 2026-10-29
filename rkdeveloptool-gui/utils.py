@@ -229,6 +229,53 @@ def is_rkfw_image(file_path):
         return False
 
 
+# Linux USB access. Without a udev rule only root can open a Rockchip
+# device, and rkdeveloptool either doesn't find it or fails on every command.
+# packaging/70-rkdeveloptool-gui.rules holds the same rule (the deb/rpm
+# install it); tests keep the two in step.
+ROCKCHIP_USB_VENDOR = "2207"
+UDEV_RULE = 'SUBSYSTEM=="usb", ATTR{idVendor}=="2207", TAG+="uaccess"'
+UDEV_RULE_FILE = "/etc/udev/rules.d/70-rkdeveloptool-gui.rules"
+
+
+def inaccessible_rockchip_usb(sysfs="/sys/bus/usb/devices", devfs="/dev/bus/usb",
+                              linux=None):
+    """USB device nodes of connected Rockchip devices the current user can't
+    open read-write. Empty off Linux, or when everything is accessible."""
+    if linux is None:
+        linux = sys.platform.startswith("linux")
+    if not linux:
+        return []
+    try:
+        entries = os.listdir(sysfs)
+    except OSError:
+        return []
+    blocked = []
+    for name in sorted(entries):
+        base = os.path.join(sysfs, name)
+        try:
+            with open(os.path.join(base, "idVendor")) as f:
+                if f.read().strip().lower() != ROCKCHIP_USB_VENDOR:
+                    continue
+            with open(os.path.join(base, "busnum")) as f:
+                bus = int(f.read())
+            with open(os.path.join(base, "devnum")) as f:
+                dev = int(f.read())
+        except (OSError, ValueError):
+            continue
+        node = os.path.join(devfs, f"{bus:03d}", f"{dev:03d}")
+        if os.path.exists(node) and not os.access(node, os.R_OK | os.W_OK):
+            blocked.append(node)
+    return blocked
+
+
+def udev_fix_command():
+    """One shell command that installs the udev rule and applies it."""
+    return (f"echo '{UDEV_RULE}' | sudo tee {UDEV_RULE_FILE} && "
+            "sudo udevadm control --reload-rules && "
+            f"sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor={ROCKCHIP_USB_VENDOR}")
+
+
 # Leading bytes of the archive formats distro images ship in (Armbian, Ubuntu,
 # Debian and vendor images are usually .img.xz or .img.gz). Written raw with
 # `wl`, any of them leaves the board unbootable while the flash "succeeds".
