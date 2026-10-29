@@ -1747,6 +1747,56 @@ def check_production_line(app):
         app.processEvents()
 
 
+def check_production_line_real_commands(app):
+    """The same line through the real CommandWorker, with the stub
+    answering like a board: every step runs, including the reset after a
+    write long enough for its worker to be gone."""
+    from rkdeveloptool_gui import production
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image = os.path.join(work, "board.img")
+    with open(image, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 4096)
+    loader = os.path.join(work, "loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+    calls = os.path.join(work, "calls")
+    with open(_stub) as f:
+        quiet = f.read()
+    with open(_stub, "w") as f:
+        f.write('#!/bin/sh\necho "$1" >> ' + calls + '\ncase "$1" in\n'
+                '  rfi) printf "Flash Size: 61079552 Sectors\\n" ;;\n'
+                '  wl) sleep 1; echo "Write LBA from file (100%)" ;;\n'
+                '  *) echo "OK" ;;\nesac\n')
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.loader_path.setText(loader)
+    real_delay, production.AFTER_DB_MS = production.AFTER_DB_MS, 0
+    line = window.production
+    try:
+        line.start(image, verify=False)
+        window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
+                               "Maskrom", "RK3576")
+        end = time.time() + 20
+        while line.state != production.UNPLUG and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        with open(calls) as f:
+            ran = [c for c in f.read().split() if c != "-v"]   # -v: version at start-up
+        if ran != ["db", "rfi", "wl", "rd"] or line.ok != 1:
+            errors.append(f"line with real commands ran {ran}, ok {line.ok}, state {line.state}")
+    finally:
+        production.AFTER_DB_MS = real_delay
+        with open(_stub, "w") as f:
+            f.write(quiet)
+        if line.active:
+            line.stop()
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_fetch_loader(app):
     """'Get Loader for This Chip' needs a recognised chip, builds the Loader
     from rkbin (a local copy here) and fills in the Loader field."""
@@ -1873,6 +1923,7 @@ def main():
     check_translations()
     check_command_chain(app)
     check_production_line(app)
+    check_production_line_real_commands(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
