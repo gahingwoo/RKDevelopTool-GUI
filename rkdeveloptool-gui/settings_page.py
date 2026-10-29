@@ -12,8 +12,8 @@ import os
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QVBoxLayout,
-    QWidget
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QSlider,
+    QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 )
 
 from . import __version__
@@ -22,6 +22,58 @@ from . import utils
 from .utils import safe_slot
 
 UNPACK_BESIDE, UNPACK_TEMP, UNPACK_CUSTOM = "beside", "temp", "custom"
+
+
+class FontSizeControl(QWidget):
+    """A slider with a number box beside it, kept in step.
+
+    Dragging only updates the number; the size is applied when the slider
+    is released, since relaying out the whole window on every step of a
+    drag stutters. Typing applies on Enter or when the box loses focus.
+    """
+
+    def __init__(self, value, on_change):
+        super().__init__()
+        self._on_change = on_change
+        low, high = app_settings.FONT_SIZE_RANGE
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(low, high)
+        self.slider.setTracking(False)
+        self.slider.setPageStep(2)
+        self.spin = QSpinBox()
+        self.spin.setRange(low, high)
+        self.spin.setSuffix(" pt")
+        self.spin.setKeyboardTracking(False)
+        for control in (self.slider, self.spin):
+            control.blockSignals(True)
+            control.setValue(value)
+            control.blockSignals(False)
+        self.slider.sliderMoved.connect(safe_slot(self._show))
+        self.slider.valueChanged.connect(safe_slot(self.setValue))
+        self.spin.valueChanged.connect(safe_slot(self.setValue))
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.spin)
+        # Take the row's spare width (see ExpandingFieldsGrow below) without
+        # raising the column's minimum width.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def _show(self, value):
+        self.spin.blockSignals(True)
+        self.spin.setValue(value)
+        self.spin.blockSignals(False)
+
+    def value(self):
+        return self.spin.value()
+
+    def setValue(self, value):
+        """Set both controls and apply the size."""
+        for control in (self.slider, self.spin):
+            control.blockSignals(True)
+            control.setValue(value)
+            control.blockSignals(False)
+        self._on_change(self.spin.value())
 
 
 class SettingsPage(QWidget):
@@ -67,6 +119,9 @@ class SettingsPage(QWidget):
     def _appearance_group(self):
         box = QGroupBox(self.tr("settings_appearance"))
         form = QFormLayout(box)
+        # macOS keeps form fields at their size hint; let the font sliders
+        # (the only Expanding fields here) use the width that's there.
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         form.addRow(self.tr("settings_style"), self._mirror_combo(self.gui.style_combo))
         form.addRow(self.tr("settings_theme"), self._mirror_combo(self.gui.theme_combo))
         form.addRow(self.tr("settings_language"), self._mirror_combo(self.gui.lang_combo))
@@ -74,7 +129,31 @@ class SettingsPage(QWidget):
         note.setWordWrap(True)
         note.setEnabled(False)
         form.addRow(note)
+        self.ui_font = self._font_spin(app_settings.KEY_UI_FONT_SIZE,
+                                       app_settings.DEFAULT_UI_FONT_SIZE)
+        self.log_font = self._font_spin(app_settings.KEY_LOG_FONT_SIZE,
+                                        app_settings.DEFAULT_LOG_FONT_SIZE)
+        reset = QPushButton(self.tr("settings_font_reset"))
+        reset.clicked.connect(safe_slot(self._reset_fonts))
+        form.addRow(self.tr("settings_ui_font"), self.ui_font)
+        form.addRow(self.tr("settings_log_font"), self.log_font)
+        form.addRow("", reset)
         return box
+
+    def _font_spin(self, key, default):
+        return FontSizeControl(self.gui._font_size(key, default),
+                               lambda v: self._apply_font(key, v))
+
+    def _apply_font(self, key, value):
+        if self.settings.get_str(key, "") == str(value):
+            return
+        self.settings.set(key, str(value))
+        ui = key == app_settings.KEY_UI_FONT_SIZE
+        self.gui.apply_fonts(ui=ui, log=not ui)
+
+    def _reset_fonts(self):
+        self.ui_font.setValue(app_settings.DEFAULT_UI_FONT_SIZE)
+        self.log_font.setValue(app_settings.DEFAULT_LOG_FONT_SIZE)
 
     # rkdeveloptool
     def _tool_group(self):

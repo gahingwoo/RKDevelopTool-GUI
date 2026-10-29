@@ -307,7 +307,7 @@ def check_settings_and_command_line(app):
     """Settings dialog wiring and the manual command line."""
     from PySide6.QtCore import QEvent, Qt
     from PySide6.QtGui import QKeyEvent
-    from PySide6.QtWidgets import QMessageBox
+    from PySide6.QtWidgets import QApplication, QMessageBox
 
     from rkdeveloptool_gui import operations, utils, workers
     from rkdeveloptool_gui import settings as app_settings
@@ -370,6 +370,46 @@ def check_settings_and_command_line(app):
             if os.path.realpath(os.path.dirname(got)) != os.path.realpath(want_parent):
                 errors.append(f"unpack mode {mode}: {got}, want under {want_parent}")
         window.settings.set(app_settings.KEY_UNPACK_MODE, "beside")
+
+        # Font sizes apply at once to every kind of text, and are kept.
+        dialog.ui_font.setValue(15)
+        dialog.log_font.setValue(13)
+        app.processEvents()
+        sizes = {
+            "app": QApplication.font().pointSize(),
+            "label": window.device_status_label.font().pointSize(),
+            "table": window.partition_table.font().pointSize(),
+            "log": window.log_output.font().pointSize(),
+            "command": window.equiv_command_field.font().pointSize(),
+        }
+        if sizes != {"app": 15, "label": 15, "table": 15, "log": 13, "command": 13}:
+            errors.append(f"font sizes not applied everywhere: {sizes}")
+        reopened = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                                settings=AppSettings())
+        if (QApplication.font().pointSize(), reopened.log_output.font().pointSize()) != (15, 13):
+            errors.append("font sizes not restored in a new window")
+        reopened.cleanup()
+        reopened.deleteLater()
+        # Slider and number box stay in step; a drag only shows the number
+        # until the slider is released.
+        control = dialog.ui_font
+        control.slider.sliderMoved.emit(19)
+        if control.spin.value() != 19 or QApplication.font().pointSize() != 15:
+            errors.append("dragging the slider should show 19 without applying it yet")
+        control.slider.setValue(19)  # release
+        app.processEvents()
+        if QApplication.font().pointSize() != 19:
+            errors.append("releasing the slider didn't apply the size")
+        control.spin.setValue(12)  # typed
+        app.processEvents()
+        if control.slider.value() != 12 or QApplication.font().pointSize() != 12:
+            errors.append("typing a size didn't move the slider and apply it")
+
+        dialog._reset_fonts()
+        app.processEvents()
+        if (QApplication.font().pointSize(), window.log_output.font().pointSize()) != \
+                (app_settings.DEFAULT_UI_FONT_SIZE, app_settings.DEFAULT_LOG_FONT_SIZE):
+            errors.append("Reset text sizes didn't restore the defaults")
 
         # A language switch rebuilds the tab in the new language; the old
         # page's mirror connections must go with it.

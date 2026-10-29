@@ -33,6 +33,12 @@ KEY_RKTOOL_PATH = "tools/rkdeveloptool"     # "" = auto-detect
 KEY_UNPACK_MODE = "images/unpack_mode"      # "beside" | "temp" | "custom"
 KEY_UNPACK_DIR = "images/unpack_dir"
 KEY_DEBUG_LOG = "logs/debug"
+KEY_UI_FONT_SIZE = "ui/font_size"           # points
+KEY_LOG_FONT_SIZE = "ui/log_font_size"      # points, log and command line
+
+DEFAULT_UI_FONT_SIZE = 11
+DEFAULT_LOG_FONT_SIZE = 11
+FONT_SIZE_RANGE = (8, 24)
 
 # Path of an ini file to use instead of the platform store. Tests point it at
 # a temp file: on macOS the native store ignores $HOME, so without it a test
