@@ -520,6 +520,196 @@ def check_layout(app):
         app.processEvents()
 
 
+def check_drag_and_drop(app):
+    """Files dropped on the window go where they belong, with format checks."""
+    import lzma
+    import shlex
+
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    from PySide6.QtWidgets import QLineEdit, QMessageBox, QScrollArea
+
+    from rkdeveloptool_gui import operations, utils
+    from rkdeveloptool_gui import settings as app_settings
+
+    work = tempfile.mkdtemp(dir=_tmp)
+
+    def make(name, data):
+        path = os.path.join(work, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    mbr = b"\0" * 510 + b"\x55\xaa" + b"\0" * 512
+    files = {
+        "loader": make("rk3588_spl_loader_v1.16.bin", b"BOOT" + b"\0" * 600),
+        "loader_ldr": make("idbloader_ldr.bin", b"LDR " + b"\0" * 600),
+        "rkfw": make("update.img", b"RKFW" + b"\0" * 600),
+        "compressed": make("Armbian.img.xz", lzma.compress(mbr)),
+        "disk": make("disk.img", mbr),
+        "gpt": make("gpt.img", b"\0" * 512 + b"EFI PART" + b"\0" * 504),
+        "other": make("boot.img", b"ANDROID!" + b"\0" * 600),
+    }
+    want_kind = {"loader": "loader", "loader_ldr": "loader", "rkfw": "rkfw",
+                 "compressed": "compressed", "disk": "disk", "gpt": "disk", "other": "other"}
+    for key, path in files.items():
+        if utils.classify_image_file(path) != want_kind[key]:
+            errors.append(f"classify_image_file({key}) = {utils.classify_image_file(path)}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.resize(1300, 800)
+    window.show()
+
+    def at(widget):
+        """Window coordinates of a widget's centre, with its tab showing."""
+        page = widget
+        while page is not None and window.tab_widget.indexOf(page) < 0:
+            page = page.parentWidget()
+        if page is not None:
+            window.tab_widget.setCurrentWidget(page)
+        for _ in range(5):
+            app.processEvents()
+        # Scroll it into view, as a user would before dropping on it.
+        area = widget.parentWidget()
+        while area is not None and not isinstance(area, QScrollArea):
+            area = area.parentWidget()
+        if area is not None:
+            area.ensureWidgetVisible(widget)
+            for _ in range(5):
+                app.processEvents()
+        pos = widget.mapTo(window, widget.rect().center())
+        if window.childAt(pos) is not widget and not widget.isAncestorOf(window.childAt(pos)):
+            errors.append(f"test setup: {widget.objectName() or type(widget).__name__} "
+                          f"isn't under its own centre")
+        return QPointF(pos)
+
+    def drop(widget, *paths):
+        """Drag enter, then drop if accepted - the order Qt delivers a real
+        drag in (a Drop sent on its own is discarded). Returns whether the
+        drag was accepted."""
+        pos = at(widget)
+        # Keep the QMimeData referenced: the events only hold a pointer to it.
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        enter = QDragEnterEvent(pos.toPoint(), Qt.DropAction.CopyAction, data,
+                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        window.dragEnterEvent(enter)
+        if not enter.isAccepted():
+            return False
+        window.dropEvent(QDropEvent(pos, Qt.DropAction.CopyAction, data,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        app.processEvents()
+        return True
+
+    def reset():
+        for field in (window.loader_path, window.firmware_path, window.image_path):
+            field.clear()
+        window.log_widget.clear_log()
+
+    def warned():
+        return "[WARNING]" in window.log_output.toPlainText()
+
+    blank = window.home_cards_label
+    try:
+        # Dropped anywhere else: routed by contents.
+        for key in ("loader", "loader_ldr"):
+            reset()
+            drop(blank, files[key])
+            if window.loader_path.text() != files[key]:
+                errors.append(f"{key} dropped on the window didn't fill the Loader field")
+        for key in ("rkfw", "compressed", "disk", "gpt"):
+            reset()
+            drop(blank, files[key])
+            if window.firmware_path.text() != files[key] or \
+                    window.tab_widget.currentWidget() is not window.download_tab:
+                errors.append(f"{key} dropped on the window didn't fill one-click burn")
+        reset()
+        drop(blank, files["other"])
+        if window.firmware_path.text() or window.loader_path.text() or not warned():
+            errors.append("a partition image dropped on the window was routed somewhere")
+
+        # On a field: that field, with format checks.
+        reset()
+        drop(window.firmware_path, files["loader"])
+        if window.loader_path.text() != files["loader"] or window.firmware_path.text():
+            errors.append("a loader dropped on the firmware field wasn't moved to Loader")
+        reset()
+        drop(window.firmware_path, files["other"])
+        if window.firmware_path.text() != files["other"] or not warned():
+            errors.append("a partition image on the firmware field: not filled, or no warning")
+        reset()
+        drop(window.mass_firmware_path, files["rkfw"])
+        if window.mass_firmware_path.text() != files["rkfw"] or warned():
+            errors.append("update.img on the mass-production field: not filled, or warned")
+        reset()
+        drop(window.loader_path, files["disk"])
+        if window.loader_path.text() != files["disk"] or not warned():
+            errors.append("a non-loader on the Loader field: not filled, or no warning")
+        reset()
+        drop(window.image_path, files["other"])
+        if window.image_path.text() != files["other"] or warned():
+            errors.append("a file on the custom image field: not filled, or warned")
+        # (The partition file field is only shown with a device connected.)
+        for field in (window.unpack_input_path, window.gpt_path,
+                      window.tagspl_spl_path, window.verify_file_path):
+            drop(field, files["other"])
+            if field.text() != files["other"]:
+                errors.append(f"a file dropped on {field.objectName() or field} wasn't taken")
+
+        # Several files, and folders outside the unpack folder, are refused.
+        reset()
+        if drop(blank, files["rkfw"], files["disk"]) or window.firmware_path.text():
+            errors.append("dropping two files at once was accepted")
+        if drop(blank, work):
+            errors.append("a folder dropped on the window was accepted")
+
+        # Settings: unpack folder, rkdeveloptool.
+        drop(window.settings_page.unpack_dir, work)
+        if window.settings_page.unpack_dir.text() != work or \
+                window.settings.get_str(app_settings.KEY_UNPACK_MODE, "") != "custom":
+            errors.append("a folder dropped on the unpack folder field wasn't selected")
+        window.settings.set(app_settings.KEY_UNPACK_MODE, "beside")
+        tool = make("rkdeveloptool", b'#!/bin/sh\necho "rkdeveloptool ver 2.0"\n')
+        os.chmod(tool, 0o755)
+        drop(window.settings_page.tool_path, tool)
+        if utils.RKTOOL != tool:
+            errors.append("rkdeveloptool dropped on its Settings field wasn't applied")
+        window.settings_page._reset_tool()
+        drop(window.settings_page.loader_path, files["loader"])
+        if window.loader_path.text() != files["loader"]:
+            errors.append("a loader dropped on the Settings Loader field wasn't taken")
+
+        # Command line: the quoted path, at the cursor.
+        spaced = make("my image.img", mbr)
+        window.equiv_command_field.setText("wl 0x0 ")
+        drop(window.equiv_command_field, spaced)
+        if window.equiv_command_field.text() != "wl 0x0 " + shlex.quote(spaced):
+            errors.append(f"command line after a drop: {window.equiv_command_field.text()!r}")
+
+        # No line edit inserts "file://" text itself.
+        if any(e.acceptDrops() for e in window.findChildren(QLineEdit)):
+            errors.append("a line edit still takes drops itself (would insert file:// text)")
+
+        # The GPT and unpack fields are what those actions use now.
+        asked = []
+        real = (app_settings.get_open_file, app_settings.get_directory, QMessageBox.exec)
+        app_settings.get_open_file = lambda *a, **k: asked.append("file") or ""
+        app_settings.get_directory = lambda *a, **k: ""
+        QMessageBox.exec = lambda self: QMessageBox.StandardButton.No
+        try:
+            operations.import_gpt_table(window)
+            operations.unpack_firmware(window)
+        finally:
+            app_settings.get_open_file, app_settings.get_directory, QMessageBox.exec = real
+        if asked:
+            errors.append("Import GPT / Unpack asked for a file despite one in their field")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -550,6 +740,7 @@ def main():
     check_settings_and_command_line(app)
     check_native_macos_style(app)
     check_layout(app)
+    check_drag_and_drop(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:

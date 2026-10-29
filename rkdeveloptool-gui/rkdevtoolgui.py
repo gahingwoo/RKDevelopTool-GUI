@@ -36,7 +36,8 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from .widgets import AutoLoadCombo, CurrentPageTabWidget
@@ -177,6 +178,7 @@ class RKDevToolGUI(QMainWindow):
         # the AppImage catalog's 800x600 test screen) show the whole window.
         # A saved geometry (restore_settings) still takes precedence.
         self.setMinimumSize(800, 560)
+        self.setAcceptDrops(True)
         preferred_w, preferred_h = 1300, 720
         screen = QApplication.primaryScreen()
         if screen is not None:
@@ -243,6 +245,7 @@ class RKDevToolGUI(QMainWindow):
         # Restore remembered file paths and window geometry
         self.restore_settings()
         self.apply_fonts()
+        self._disable_text_drops()
 
         # Start device detection
         self.start_device_detection()
@@ -955,7 +958,13 @@ class RKDevToolGUI(QMainWindow):
         msg.exec()
 
     def register_browse(self, button, line_edit, filter_key=None, save=False):
-        """Helper to connect a browse button to a line_edit"""
+        """Helper to connect a browse button to a line_edit.
+
+        Fields for picking an existing file also take a file dropped on them
+        (see dropEvent).
+        """
+        if not save:
+            self._drop_fields = getattr(self, '_drop_fields', []) + [line_edit]
 
         def _on_browse():
             file_filter = self.tr(filter_key) if filter_key else ""
@@ -1079,6 +1088,8 @@ class RKDevToolGUI(QMainWindow):
             index = self.tab_widget.indexOf(old)
             current = self.tab_widget.currentIndex()
             self.settings_page = SettingsPage(self)
+            for edit in self.settings_page.findChildren(QLineEdit):
+                edit.setAcceptDrops(False)
             self.tab_widget.removeTab(index)
             self.tab_widget.insertTab(index, self.settings_page, self.tr("settings_title"))
             self.tab_widget.setCurrentIndex(current)
@@ -1143,6 +1154,131 @@ class RKDevToolGUI(QMainWindow):
             self._command_history.append(text)
         self._history_pos = len(self._command_history)
         self.run_command([RKTOOL, *args], "manual_command")
+
+    # Drag and drop
+    def _dropped_path(self, event):
+        """The single local file or folder being dragged, or None."""
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = urls[0].toLocalFile()
+        return path if os.path.exists(path) else None
+
+    def _widget_at(self, pos, candidates):
+        """The first of candidates that is, or contains, the widget at pos."""
+        widget = self.childAt(pos)
+        while widget is not None and widget is not self:
+            if any(widget is c for c in candidates):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    def _drop_plan(self, pos, path):
+        """What dropping path at pos would do, as (kind, target), or None.
+
+        kind is 'field' (fill a path field), 'tool' (the rkdeveloptool
+        field in Settings), 'folder' (the unpack folder in Settings),
+        'command' (insert into the command line) or 'auto' (decide from
+        the file's contents).
+        """
+        page = getattr(self, 'settings_page', None)
+        is_dir = os.path.isdir(path)
+        if page is not None and self._widget_at(pos, [page.unpack_dir]):
+            return ('folder', page.unpack_dir) if is_dir else None
+        if is_dir:
+            return None
+        if self._widget_at(pos, [self.equiv_command_field]):
+            return ('command', self.equiv_command_field)
+        if page is not None and self._widget_at(pos, [page.tool_path]):
+            return ('tool', page.tool_path)
+        if page is not None and self._widget_at(pos, [page.loader_path]):
+            return ('field', self.loader_path)
+        field = self._widget_at(pos, getattr(self, '_drop_fields', []))
+        return ('field', field) if field is not None else ('auto', None)
+
+    def dragEnterEvent(self, event):
+        path = self._dropped_path(event)
+        if path and self._drop_plan(event.position().toPoint(), path):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        path = self._dropped_path(event)
+        if path and self._drop_plan(event.position().toPoint(), path):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _firmware_fields(self):
+        return [f for f in (getattr(self, 'firmware_path', None),
+                            getattr(self, 'mass_firmware_path', None)) if f is not None]
+
+    def dropEvent(self, event):
+        """Put a dropped file where it belongs, checking what it is.
+
+        On a path field it fills that field, with a warning when the file
+        doesn't look like what the field takes (a loader dropped on a
+        firmware field goes to the Loader field instead). Anywhere else, a
+        loader fills the Loader field and a whole image (update.img,
+        compressed or whole-disk) one-click burn; anything else is left
+        alone, since there's no telling where it should go.
+        """
+        path = self._dropped_path(event)
+        plan = self._drop_plan(event.position().toPoint(), path) if path else None
+        if not plan:
+            return
+        event.acceptProposedAction()
+        action, target = plan
+        name = os.path.basename(path)
+
+        if action == 'folder':
+            target.setText(path)
+            self.settings_page._select_custom_unpack_dir()
+            return
+        if action == 'tool':
+            target.setText(path)
+            self.settings_page._apply_tool_path()
+            return
+        if action == 'command':
+            target.insert(shlex.quote(path))
+            target.setFocus()
+            return
+
+        kind = classify_image_file(path)
+        warning = None
+        if action == 'auto':
+            if kind == 'loader':
+                target = self.loader_path
+            elif kind in WHOLE_IMAGE_KINDS:
+                target = self.firmware_path
+                self.tab_widget.setCurrentWidget(self.download_tab)
+            else:
+                self._report_drop("WARNING", self.tr("drop_unknown").format(name))
+                return
+        elif target in self._firmware_fields():
+            if kind == 'loader':
+                target = self.loader_path
+                warning = self.tr("drop_loader_redirected").format(name)
+            elif kind not in WHOLE_IMAGE_KINDS:
+                warning = self.tr("drop_not_whole_image").format(name)
+        elif target is self.loader_path and kind != 'loader':
+            warning = self.tr("drop_not_loader").format(name)
+
+        target.setText(path)
+        if warning:
+            self._report_drop("WARNING", warning)
+        else:
+            label = self.tr("drop_loader") if target is self.loader_path else self.tr("drop_file")
+            self._report_drop("INFO", f"{label}: {name}")
+
+    def _report_drop(self, level, text):
+        self.log_message(f"[{level}] {text}")
+        self.statusBar().showMessage(text, 6000)
+
+    def _disable_text_drops(self):
+        """Stop line edits inserting a dropped file's "file://" URL as text;
+        the window handles file drops (see dropEvent)."""
+        for edit in self.findChildren(QLineEdit):
+            edit.setAcceptDrops(False)
 
     def _copy_equiv_command(self):
         """Copy the equivalent rkdeveloptool command to the clipboard."""

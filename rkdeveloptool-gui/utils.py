@@ -322,6 +322,36 @@ def decompressed_name(file_path):
     return name + ".img"
 
 
+# What classify_image_file() may return, by what it means for flashing.
+WHOLE_IMAGE_KINDS = ("rkfw", "compressed", "disk")
+
+
+def classify_image_file(file_path):
+    """Rough type of a file someone wants to flash, from its contents:
+
+    'loader'      Rockchip loader (BOOT / LDR tag)
+    'rkfw'        RKFW update.img
+    'compressed'  xz / gzip / bzip2 / zstd / zip / 7z archive
+    'disk'        whole-disk image: MBR boot signature or a GPT header
+    'other'       anything else (a single partition image, a text file...)
+    None          unreadable
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(520)
+    except OSError:
+        return None
+    if head[:4] in (b"BOOT", b"LDR "):
+        return 'loader'
+    if head[:4] == b"RKFW":
+        return 'rkfw'
+    if detect_compression(file_path):
+        return 'compressed'
+    if len(head) >= 520 and (head[510:512] == b"\x55\xaa" or head[512:520] == b"EFI PART"):
+        return 'disk'
+    return 'other'
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:
