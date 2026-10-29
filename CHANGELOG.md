@@ -3,6 +3,24 @@
 Each release's notes come from its section here (packaging/release-notes.sh).
 Releases before 5.5.0 are listed on the GitHub releases page.
 
+## 5.6.1
+
+### Fixes
+
+- Writes no longer fail on boards such as the RK3576 with "Write LBA failed!". To list storage types, the app used to switch the Loader's storage target with `cs`, and the board then refused every read and write. It now offers eMMC, SD card and SPI NOR without switching anything.
+- The chip shows as a name (RK3576) instead of the raw bytes from `rci`.
+- Reading the partition table no longer fails because the app was talking to the board in the background at the same time.
+- Import GPT writes a `parameter.txt` with `rkdeveloptool gpt`, and Export GPT saves the board's partition table as one.
+- When a read-back after a write doesn't match, the app checks whether the Loader just can't read that part of the storage back (it returns filler) and says the write couldn't be verified, instead of calling it bad.
+
+### New
+
+- **Get Loader for This Chip** on the Firmware Download tab builds the Loader for the connected chip from Rockchip's rkbin repository and fills in the Loader field. rkbin has the parts but no ready-made Loader; the app downloads them and puts them together.
+- The progress row stays at the bottom of the window instead of scrolling away with a long tab.
+- Releases include a Python wheel.
+
+**Full Changelog**: https://github.com/gahingwoo/RKDevelopTool-GUI/compare/5.6.0...5.6.1
+
 ## 5.6.0
 
 ### Flashing
