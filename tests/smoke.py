@@ -1623,17 +1623,25 @@ def check_fetch_loader(app):
     os.environ[loader_fetch.URL_ENV] = "file://" + rkbin + "/"
     real_cache = ops.loader_cache_dir
     ops.loader_cache_dir = lambda: cache
+    from PySide6.QtWidgets import QMessageBox
+
     window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                           settings=AppSettings())
     window.stop_device_detection()
+    # A board in Maskrom without chip info gets the "load a Loader?" hint.
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.No
     try:
         window.update_device_status()
         if window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader is enabled with no board connected")
+        # In Maskrom before a Loader runs rci can't answer: the USB ID tells.
         window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
-                               "Maskrom", "Chip Info: 36 37 35 33 0 0 0 0")
+                               "Maskrom", "unknown_chip")
         if not window.fetch_loader_btn.isEnabled():
-            errors.append("Get Loader is disabled for a recognised RK3576")
+            errors.append("Get Loader is disabled for an RK3576 known only by its USB ID")
+        if "RK3576" not in window.chip_info_label.text():
+            errors.append(f"chip shown as {window.chip_info_label.text()!r} for Pid 0x350e")
         window.loader_path.setText("")
         window.fetch_loader_btn.click()
         worker = window._loader_fetch_worker
@@ -1646,6 +1654,7 @@ def check_fetch_loader(app):
         if not window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader stays disabled after it finished")
     finally:
+        QMessageBox.exec = real_exec
         del os.environ[loader_fetch.URL_ENV]
         ops.loader_cache_dir = real_cache
         window.cleanup()
