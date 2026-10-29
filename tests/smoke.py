@@ -545,16 +545,27 @@ def check_native_macos_style(app):
         app.processEvents()
 
 
+def _window_rect(window, widget):
+    from PySide6.QtCore import QRect
+    return QRect(widget.mapTo(window, widget.rect().topLeft()), widget.size())
+
+
 def check_layout(app):
     """The tab area is sized by the current tab (QTabWidget asks for the
     tallest one by default, which pushed the log down and squeezed its
     progress row onto it), and the progress row never overlaps the log."""
+    from PySide6.QtWidgets import QScrollArea
+
     window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                           settings=AppSettings())
     try:
         window.resize(1300, 720)
         window.show()
         tabs = window.tab_widget
+        right_area = next(area for area in window.findChildren(QScrollArea)
+                          if area.isAncestorOf(window.log_output))
+        if right_area.isAncestorOf(window.progress_bar):
+            errors.append("the progress row scrolls with the panel")
         tallest = max(tabs.widget(i).sizeHint().height() for i in range(tabs.count()))
         for i in range(tabs.count()):
             tabs.setCurrentIndex(i)
@@ -564,9 +575,19 @@ def check_layout(app):
             if page.sizeHint().height() < tallest - 50 and \
                     tabs.sizeHint().height() >= tallest:
                 errors.append(f"tab {tabs.tabText(i)!r} asks for the tallest tab's height")
-            log, bar = window.log_output.geometry(), window.progress_bar.geometry()
-            if bar.top() <= log.bottom():
+            area = _window_rect(window, right_area)
+            bar = _window_rect(window, window.progress_bar)
+            if bar.top() <= area.bottom():
                 errors.append(f"tab {tabs.tabText(i)!r}: progress row overlaps the log")
+        # A window too short for the tab plus the log scrolls the right panel,
+        # but the progress row sits outside the scroll area and stays in view.
+        window.resize(1300, 420)
+        for _ in range(10):
+            app.processEvents()
+        bar = _window_rect(window, window.progress_bar)
+        if not window.progress_bar.isVisible() or bar.bottom() > window.height() \
+                or bar.height() <= 0:
+            errors.append(f"progress row out of view in a short window: {bar}")
     finally:
         window.cleanup()
         window.deleteLater()

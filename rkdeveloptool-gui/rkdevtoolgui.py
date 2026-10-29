@@ -216,12 +216,22 @@ class RKDevToolGUI(QMainWindow):
         left_scroll.setWidget(self.left_panel)
         self.splitter.addWidget(left_scroll)
 
-        # Right panel (main operations)
+        # Right panel (main operations), with the progress row pinned below
+        # its scroll area so a long tab can't scroll it out of view.
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
         self.right_panel = self.create_right_panel()
         right_scroll.setWidget(self.right_panel)
-        self.splitter.addWidget(right_scroll)
+        right_side = QWidget()
+        right_layout = QVBoxLayout(right_side)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        # Line the row up with the panel's contents, not the scroll frame.
+        margins = self.right_panel.layout().contentsMargins()
+        self.log_widget.progress_row.layout().setContentsMargins(
+            margins.left(), 0, margins.right(), 0)
+        right_layout.addWidget(right_scroll, 1)
+        right_layout.addWidget(self.log_widget.progress_row)
+        self.splitter.addWidget(right_side)
 
         # Set splitter sizes
         self._splitter_sizes = [430, 970]
