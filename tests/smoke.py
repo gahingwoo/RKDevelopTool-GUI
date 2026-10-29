@@ -1653,6 +1653,75 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_flash_history(app):
+    """Writes and full flashes are recorded with their result; the History
+    tab lists them and Flash Again puts the image back."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import history
+    from rkdeveloptool_gui import operations as ops
+
+    history.clear()
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "armbian.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    outcome, shown = [True], []
+
+    def fake_run(cmd, key, callback=None):
+        QTimer.singleShot(0, lambda: callback and callback(outcome[0], ""))
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = fake_run
+    QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
+    window.command_worker = None
+    window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+    try:
+        for ok in (True, False):
+            outcome[0] = ok
+            before = len(history.load())
+            ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+            end = time.time() + 5
+            while time.time() < end and len(history.load()) == before:
+                app.processEvents()
+                time.sleep(0.01)
+        window._rkfw_history = ("/fw/update.img", time.monotonic())
+        ops._record_rkfw(window, history.OK)
+        entries = history.load()
+        got = [(e["image"], e["kind"], e["result"]) for e in entries]
+        want = [("/fw/update.img", "update.img", "ok"), (disk, "image", "failed"),
+                (disk, "image", "ok")]
+        if got != want:
+            errors.append(f"history: {got}")
+        if window.history_table.rowCount() != 3 or \
+                window.history_table.item(1, 2).text() != "armbian.img":
+            errors.append("the History tab doesn't list the entries")
+
+        window.firmware_path.setText("")
+        window.history_table.selectRow(1)
+        window.flash_again()
+        if window.firmware_path.text() != disk or \
+                window.tab_widget.currentWidget() is not window.download_tab:
+            errors.append(f"Flash Again filled {window.firmware_path.text()!r}")
+        window.history_table.selectRow(0)       # /fw/update.img doesn't exist
+        shown.clear()
+        window.flash_again()
+        if not shown or window.firmware_path.text() != disk:
+            errors.append("Flash Again with a missing file didn't say so")
+        window.clear_history()
+        if history.load() or window.history_table.rowCount():
+            errors.append("Clear History left entries")
+    finally:
+        window.run_command, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1748,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_flash_history(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)

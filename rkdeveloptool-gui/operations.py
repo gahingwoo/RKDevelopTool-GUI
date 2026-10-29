@@ -8,10 +8,11 @@ import shutil
 import subprocess
 import tempfile
 import math
+import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit, QCheckBox
 
-from . import loader_fetch, rkfw
+from . import history, loader_fetch, rkfw
 from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
@@ -562,6 +563,7 @@ def _flash_rkfw_firmware(gui, firmware_path):
     confirmed, verify_crc = _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts)
     if not confirmed:
         return
+    gui._rkfw_history = (firmware_path, time.monotonic())
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
     _set_rkfw_busy(gui, True)
@@ -666,6 +668,14 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     _run_rkfw_steps(gui, steps, 0, tmp_dir)
 
 
+def _record_rkfw(gui, result):
+    """Record the full flash that just ended (once)."""
+    entry = getattr(gui, '_rkfw_history', None)
+    gui._rkfw_history = None
+    if entry:
+        _record_flash(gui, entry[0], result, "update.img", "", entry[1])
+
+
 def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     """Run the extracted RKFW flash steps one at a time, aborting on the
     first failure that persists after a few retries.
@@ -678,6 +688,7 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     max_attempts = 2  # extra attempts after the first failure
 
     if index >= len(steps):
+        _record_rkfw(gui, history.OK)
         _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
@@ -687,6 +698,7 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     if getattr(gui, '_cancel_requested', False):
         # Cancelled between steps (e.g. while the board re-enumerated).
         gui._cancel_requested = False
+        _record_rkfw(gui, history.CANCELLED)
         _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
         _show_rkfw_message(gui, "cancelled_partial_title",
@@ -702,12 +714,14 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     def on_step_done(success, output):
         if not success and getattr(gui, '_cancel_requested', False):
             # Cancelled mid-step: no retry; the window reports it.
+            _record_rkfw(gui, history.CANCELLED)
             _finish_rkfw_flow(gui, tmp_dir)
             return
         if not success and getattr(gui, '_lost_during_write', False):
             # The device went away mid-write; retrying can't help, and the
             # window explains how to recover once this returns.
             gui.log_message(f"[ERROR] {label}")
+            _record_rkfw(gui, history.FAILED)
             _finish_rkfw_flow(gui, tmp_dir)
             return
         if not success:
@@ -717,6 +731,7 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
                     lambda: _run_rkfw_steps(gui, steps, index, tmp_dir, attempts + 1)))
                 return
             gui.log_message(f"[ERROR] {label}")
+            _record_rkfw(gui, history.FAILED)
             _finish_rkfw_flow(gui, tmp_dir)
             text = gui.tr("rkfw_flash_failed_message")
             guidance = gui.explain_failure(output) if hasattr(gui, 'explain_failure') else None
@@ -1076,6 +1091,11 @@ def _burn_file(gui, file_path, address, make_cmd):
     lba = _sector_address(address)
 
     def start(path, cleanup):
+        started = time.monotonic()
+
+        def record(result, note=""):
+            _record_flash(gui, file_path, result, "image", address, started, note)
+
         size = os.path.getsize(path)
         verify = (lba is not None and getattr(gui, '_verify_after_write', False)
                   and getattr(gui, '_last_burn_md5', ''))
@@ -1086,9 +1106,14 @@ def _burn_file(gui, file_path, address, make_cmd):
 
         def after_write(success, output):
             if success and verify:
-                _verify_written(gui, path, address, size, expected, cleanup)
+                _verify_written(gui, path, address, size, expected, cleanup, record)
+                return
+            cleanup()
+            if success:
+                record(history.OK)
             else:
-                cleanup()
+                record(history.CANCELLED if getattr(gui, '_cancel_requested', False)
+                       else history.FAILED)
 
         gui.run_command(make_cmd(path), "burning", after_write)
 
@@ -1099,7 +1124,17 @@ def _burn_file(gui, file_path, address, make_cmd):
     _with_plain_image(gui, file_path, burn)
 
 
-def _verify_written(gui, path, address, size, expected_md5, cleanup):
+def _record_flash(gui, image, result, kind, address, started, note=""):
+    """Add a flash to the history and refresh the History tab."""
+    loader = gui.loader_path.text().strip() if hasattr(gui, 'loader_path') else ""
+    history.add(image, result, kind=kind, address=address,
+                loader=loader if loader and os.path.isfile(loader) else "",
+                chip=loader_chip(gui) or "", seconds=time.monotonic() - started, note=note)
+    if hasattr(gui, 'refresh_history'):
+        gui.refresh_history()
+
+
+def _verify_written(gui, path, address, size, expected_md5, cleanup, on_result=None):
     """Read back what was just written at address and compare its MD5 with
     the image's. The readback is rounded up to whole sectors, so only its
     first `size` bytes are hashed."""
@@ -1121,9 +1156,12 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
         gui.job_stage(gui.tr("stage_verifying").format(name), size, size)
     gui.log_message(f"[INFO] {gui.tr('stage_verifying').format(name)}")
 
+    on_result = on_result or (lambda result, note="": None)
+
     def after_read(success, output):
         if not success:  # the failure itself is explained by the window
             finish()
+            on_result(history.UNVERIFIED, gui.tr("history_read_back_failed"))
             return
         gui.progress_label.setText(gui.tr("verify_comparing"))
         worker = FileHashWorker(readback, length=size)
@@ -1133,6 +1171,7 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
             gui._verify_hash_worker = None
             if md5sum and md5sum == expected_md5:
                 finish()
+                on_result(history.OK, gui.tr("history_verified"))
                 gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
                 _show_rkfw_message(gui, "verify_ok_title",
                                    gui.tr("verify_ok").format(name), "Information")
@@ -1148,11 +1187,13 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
                 finish()
                 if isinstance(filler_at, int):
                     where = format_file_size(filler_at)
+                    on_result(history.UNVERIFIED, where)
                     gui.log_message(f"[WARNING] {gui.tr('verify_unreliable_title')}: "
                                     f"filler from {where}")
                     _show_rkfw_message(gui, "verify_unreliable_title",
                                        gui.tr("verify_unreliable_message").format(where), "Warning")
                     return
+                on_result(history.MISMATCH)
                 gui.log_message(f"[ERROR] {gui.tr('verify_mismatch_title')}: "
                                 f"{md5sum or '?'} != {expected_md5}")
                 _show_rkfw_message(gui, "verify_mismatch_title",
