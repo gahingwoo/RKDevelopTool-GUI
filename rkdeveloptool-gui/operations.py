@@ -589,6 +589,8 @@ def _on_rkfw_prep_progress(gui, value):
 
 def _finish_rkfw_flow(gui, tmp_dir):
     """Clean up state shared by every exit path of an RKFW full flash."""
+    if hasattr(gui, 'end_job'):
+        gui.end_job()
     shutil.rmtree(tmp_dir, ignore_errors=True)
     gui._rkfw_worker = None
     gui._rkfw_tmp_dir = None
@@ -641,6 +643,12 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
                       gui.tr("rkfw_step_partition").format(name)))
 
     gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
+    # Weight each step by the file it writes (every step's last argument),
+    # so the bar shows the whole flash rather than restarting per step.
+    gui._rkfw_step_bytes = [os.path.getsize(cmd[-1]) if os.path.isfile(cmd[-1]) else 0
+                            for cmd, _, _ in steps]
+    if hasattr(gui, 'begin_job'):
+        gui.begin_job(sum(gui._rkfw_step_bytes))
     _run_rkfw_steps(gui, steps, 0, tmp_dir)
 
 
@@ -673,6 +681,9 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
 
     cmd, description_key, label = steps[index]
     gui.log_message(f"[{index + 1}/{len(steps)}] {label}")
+    sizes = getattr(gui, '_rkfw_step_bytes', None)
+    if hasattr(gui, 'job_stage') and sizes and len(sizes) == len(steps):
+        gui.job_stage(f"[{index + 1}/{len(steps)}] {label}", sum(sizes[:index]), sizes[index])
 
     def on_step_done(success, output):
         if not success and getattr(gui, '_cancel_requested', False):
@@ -983,11 +994,15 @@ def _burn_file(gui, file_path, address, make_cmd):
     """Confirm and write an image, decompressing it first when it is an
     .img.xz / .img.gz / .img.bz2. make_cmd(path) builds the rkdeveloptool
     command for the file that will actually be written."""
+    def start(path, cleanup):
+        if hasattr(gui, 'begin_job'):
+            size = os.path.getsize(path)
+            gui.begin_job(size)
+            gui.job_stage(gui.tr("stage_writing").format(os.path.basename(path)), 0, size)
+        gui.run_command(make_cmd(path), "burning", lambda *_: cleanup())
+
     def burn(path, cleanup):
-        _burn_with_confirm(
-            gui, path, address,
-            lambda: gui.run_command(make_cmd(path), "burning", lambda *_: cleanup()),
-            on_cancel=cleanup)
+        _burn_with_confirm(gui, path, address, lambda: start(path, cleanup), on_cancel=cleanup)
 
     _with_plain_image(gui, file_path, burn)
 
