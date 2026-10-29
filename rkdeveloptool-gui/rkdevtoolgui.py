@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import math
 import locale
+import shlex
 import time
 import warnings
 
@@ -20,8 +21,10 @@ import warnings
 if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QFontDatabase, QIcon, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QUrl, QEvent
+from PySide6.QtGui import (
+    QFontDatabase, QIcon, QDesktopServices, QAction, QKeySequence, QShortcut
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QLabel, QLineEdit,
@@ -272,6 +275,9 @@ class RKDevToolGUI(QMainWindow):
                 if len(sizes) == self.splitter.count() and all(s >= 0 for s in sizes):
                     self.splitter.setSizes(sizes)
 
+            if self.settings.get_str(app_settings.KEY_DEBUG_LOG, "0") == "1":
+                self.enable_debug_log.setChecked(True)
+
             for key, widget in self._persisted_path_fields().items():
                 saved = self.settings.get_str(key, "")
                 # Only restore paths that still exist - a stale entry pointing
@@ -519,13 +525,16 @@ class RKDevToolGUI(QMainWindow):
 
         layout.addWidget(self.tab_widget)
 
-        # Equivalent-command bar: shows the exact rkdeveloptool command for the
-        # last/next operation so power users can copy it and script or learn it.
+        # Command line: shows the exact rkdeveloptool command of the last
+        # operation (to copy, script or learn from) and runs whatever is typed
+        # or edited there - rkdeveloptool arguments only, never a shell.
         equiv_row = QHBoxLayout()
         self.equiv_command_label = QLabel()
         self.equiv_command_field = QLineEdit()
-        self.equiv_command_field.setReadOnly(True)
-        self.equiv_command_field.setPlaceholderText("rkdeveloptool ...")
+        self.equiv_command_field.returnPressed.connect(safe_slot(self.run_manual_command))
+        self.equiv_command_field.installEventFilter(self)
+        self._command_history = []
+        self._history_pos = 0
         # Use the platform's default fixed-width font (Menlo/Consolas/etc.)
         # instead of the literal family "monospace", which doesn't exist on
         # macOS/Windows and triggers a slow font-alias lookup at startup.
@@ -533,8 +542,11 @@ class RKDevToolGUI(QMainWindow):
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.equiv_command_copy_btn = QPushButton()
         self.equiv_command_copy_btn.clicked.connect(safe_slot(self._copy_equiv_command))
+        self.run_command_btn = QPushButton()
+        self.run_command_btn.clicked.connect(safe_slot(self.run_manual_command))
         equiv_row.addWidget(self.equiv_command_label)
         equiv_row.addWidget(self.equiv_command_field, 1)
+        equiv_row.addWidget(self.run_command_btn)
         equiv_row.addWidget(self.equiv_command_copy_btn)
         layout.addLayout(equiv_row)
 
@@ -658,6 +670,31 @@ class RKDevToolGUI(QMainWindow):
         self.update_button.clicked.connect(safe_slot(self.check_for_updates))
         self.statusBar().addPermanentWidget(self.update_button)
         self._refresh_update_button()
+
+        # The Settings tab mirrors the pickers above, so it's built after them.
+        from .settings_page import SettingsPage
+        self.settings_page = SettingsPage(self)
+        self.tab_widget.addTab(self.settings_page, "")
+        self._resize_tabs_to_current(self.tab_widget.currentIndex())
+
+        # macOS: "Settings…" in the application menu with Cmd+, (Qt moves an
+        # action with PreferencesRole there). Elsewhere Ctrl+, opens it too.
+        self.settings_action = QAction(self)
+        self.settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        self.settings_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Preferences))
+        self.settings_action.triggered.connect(safe_slot(self.open_settings))
+        if sys.platform == "darwin":
+            # Qt moves the Settings action into the application menu; give
+            # the menu it came from real items so it isn't left empty.
+            self.help_menu = self.menuBar().addMenu("")
+            self.check_updates_action = self.help_menu.addAction("")
+            self.check_updates_action.triggered.connect(safe_slot(self.check_for_updates))
+            self.release_page_action = self.help_menu.addAction("")
+            self.release_page_action.triggered.connect(safe_slot(
+                lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))))
+            self.help_menu.addAction(self.settings_action)
+        else:
+            QShortcut(QKeySequence("Ctrl+,"), self, activated=safe_slot(self.open_settings))
 
     def on_style_changed(self):
         """Handle style selection change"""
@@ -984,6 +1021,84 @@ class RKDevToolGUI(QMainWindow):
         self._verify_tmpfile = None
         self._verify_expected_file = None
 
+    # Settings
+    def open_settings(self):
+        self.tab_widget.setCurrentWidget(self.settings_page)
+
+    def _rebuild_settings_page(self):
+        """Recreate the Settings tab in the current language. Deferred: the
+        language picker on that tab may be the one whose signal got us here."""
+        def rebuild():
+            from .settings_page import SettingsPage
+            old = self.settings_page
+            index = self.tab_widget.indexOf(old)
+            current = self.tab_widget.currentIndex()
+            self.settings_page = SettingsPage(self)
+            self.tab_widget.removeTab(index)
+            self.tab_widget.insertTab(index, self.settings_page, self.tr("settings_title"))
+            self.tab_widget.setCurrentIndex(current)
+            self._resize_tabs_to_current(current)
+            old.deleteLater()
+        QTimer.singleShot(0, safe_slot(rebuild))
+
+    # Command line
+    # Commands that write to or erase the device: confirm before running.
+    _WRITING_COMMANDS = {"ef", "wl", "wlx", "ul", "gpt", "prm", "wlf"}
+
+    def eventFilter(self, obj, event):
+        """Up/Down in the command line walk through earlier commands."""
+        if obj is getattr(self, 'equiv_command_field', None) and \
+                event.type() == QEvent.Type.KeyPress and \
+                event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self._command_history:
+            step = -1 if event.key() == Qt.Key.Key_Up else 1
+            self._history_pos = max(0, min(len(self._command_history),
+                                           self._history_pos + step))
+            text = (self._command_history[self._history_pos]
+                    if self._history_pos < len(self._command_history) else "")
+            self.equiv_command_field.setText(text)
+            return True
+        return super().eventFilter(obj, event)
+
+    def parse_manual_command(self, text):
+        """rkdeveloptool arguments from the command line, or None.
+
+        A leading `rkdeveloptool` (or any path to it, as the field shows after
+        a button press) is dropped; everything after it is passed as argv, so
+        nothing reaches a shell.
+        """
+        try:
+            args = shlex.split(text)
+        except ValueError:
+            return None
+        if args and os.path.basename(args[0]).lower() in ("rkdeveloptool", "rkdeveloptool.exe"):
+            args = args[1:]
+        return args or None
+
+    def run_manual_command(self):
+        text = self.equiv_command_field.text().strip()
+        args = self.parse_manual_command(text)
+        if not args:
+            if text:
+                self.log_message(f"[ERROR] {self.tr('manual_command_invalid')}")
+            return
+        if getattr(self, '_rkfw_flashing', False) or getattr(self, '_image_prep_busy', False) \
+                or (self.command_worker is not None and self.command_worker.isRunning()):
+            self.show_message("Warning", "command_already_running", "Warning")
+            return
+        display = " ".join(shlex.quote(a) for a in ["rkdeveloptool", *args])
+        if args[0].lower() in self._WRITING_COMMANDS:
+            reply = QMessageBox.warning(
+                self, self.tr("manual_command_confirm_title"),
+                self.tr("manual_command_confirm_message").format(display),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if not self._command_history or self._command_history[-1] != text:
+            self._command_history.append(text)
+        self._history_pos = len(self._command_history)
+        self.run_command([RKTOOL, *args], "manual_command")
+
     def _copy_equiv_command(self):
         """Copy the equivalent rkdeveloptool command to the clipboard."""
         text = self.equiv_command_field.text().strip()
@@ -997,6 +1112,7 @@ class RKDevToolGUI(QMainWindow):
         self.manager.set_language(selected_lang)
         # Update UI with new language
         self.update_ui_text()
+        self._rebuild_settings_page()
         # Update language combo display
         if selected_lang == 'auto':
             print(f"语言切换为自动模式 (检测到: {self.manager.lang})")

@@ -1388,6 +1388,10 @@ def on_verify_sector_changed(gui):
 def toggle_debug_log(gui):
     """Toggle debug logging"""
     gui.debug_enabled = gui.enable_debug_log.isChecked()
+    try:
+        gui.settings.set(app_settings.KEY_DEBUG_LOG, "1" if gui.debug_enabled else "0")
+    except AttributeError:
+        pass
     status = "Enabled" if gui.debug_enabled else "Disabled"
     gui.log_message(f"[INFO] Debug logging {status}")
 
