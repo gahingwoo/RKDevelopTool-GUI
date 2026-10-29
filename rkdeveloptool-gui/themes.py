@@ -153,9 +153,25 @@ class ThemeManager:
         
         # Set the style
         self.app.setStyle(self.current_style)
-        
-        # Apply appropriate palette
-        if self.current_theme == 'auto':
+
+        # Tell Qt (and through it the OS) which appearance we want: native
+        # widgets and the macOS title bar follow this, not the palette.
+        # setColorScheme is Qt 6.8+.
+        hints = self.app.styleHints()
+        if hasattr(hints, "setColorScheme"):
+            hints.setColorScheme({
+                self.LIGHT: Qt.ColorScheme.Light,
+                self.DARK: Qt.ColorScheme.Dark,
+            }.get(self.current_theme, Qt.ColorScheme.Unknown))
+
+        native = self.is_native_macos_style()
+        if native:
+            # The macOS style draws buttons, combos, tabs and group boxes with
+            # AppKit in the system appearance and ignores most palette roles,
+            # so a custom palette only recolours the rest: mismatched greys,
+            # washed-out checkboxes. Use the style's own.
+            palette = self.app.style().standardPalette()
+        elif self.current_theme == 'auto':
             # For auto theme, default to dark, but let ThemeAutoManager override it
             palette = create_dark_palette()
         elif self.current_theme == self.LIGHT:
@@ -174,6 +190,9 @@ class ThemeManager:
         self.app.setPalette(palette)
         for widget in self.app.allWidgets():
             widget.setPalette(palette)
+
+    def is_native_macos_style(self):
+        return str(self.current_style).lower() in ("macos", "macintosh")
 
     def set_style(self, style_name):
         """Set a specific style"""

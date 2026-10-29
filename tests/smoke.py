@@ -420,6 +420,38 @@ def check_settings_and_command_line(app):
         app.processEvents()
 
 
+def check_native_macos_style(app):
+    """Under the macOS style the app uses the style's palette and passes the
+    theme on as a color scheme (a custom palette clashes with AppKit-drawn
+    widgets). Only runs where that style exists."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QStyleFactory
+
+    if "macOS" not in QStyleFactory.keys():
+        return
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    try:
+        from rkdeveloptool_gui.themes import create_dark_palette
+        custom = create_dark_palette().color(QPalette.ColorRole.Window)
+        window.theme_manager.apply_theme(theme="dark", style="macOS")
+        if app.palette().color(QPalette.ColorRole.Window) == custom:
+            errors.append("macOS style still uses the custom dark palette")
+        # Only a real Cocoa session reports the scheme back (offscreen doesn't).
+        hints = app.styleHints()
+        if app.platformName() == "cocoa" and hasattr(hints, "colorScheme") \
+                and hints.colorScheme() != Qt.ColorScheme.Dark:
+            errors.append(f"dark theme under macOS style gave color scheme {hints.colorScheme()}")
+        window.theme_manager.apply_theme(theme="light", style="Fusion")
+        if app.palette().color(app.palette().ColorRole.Window).lightness() < 200:
+            errors.append("Fusion light theme lost its custom light palette")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -448,6 +480,7 @@ def main():
     check_translations()
     check_updates(app)
     check_settings_and_command_line(app)
+    check_native_macos_style(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:
