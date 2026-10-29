@@ -1047,10 +1047,36 @@ class RKDevToolGUI(QMainWindow):
         self.command_worker.finished_signal.connect(safe_slot(self.on_command_finished))
         self.command_worker.start()
 
+    def explain_failure(self, output):
+        """(title, body) with the likely cause of an rkdeveloptool failure
+        and what to try, or None when the output isn't recognised."""
+        from . import failures, utils
+        command = utils.udev_fix_command() if utils.inaccessible_rockchip_usb() else None
+        return failures.explain(self.tr, output, command)
+
+    def _show_failure_guidance(self, description_key, title, body, output):
+        msg = QMessageBox(self)
+        style_messagebox(msg)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(f"{self.tr(description_key)} — {self.tr('failure').rstrip(': ')}")
+        msg.setText(title)
+        msg.setInformativeText(body)
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        tail = "\n".join((output or "").strip().splitlines()[-40:])
+        if tail:
+            msg.setDetailedText(tail)
+        msg.exec()
+
     def on_command_finished(self, success, error_msg):
         """Handle command completion"""
         self.progress_bar.setValue(100 if success else 0)
         self.progress_label.setText(self.tr("ready_status"))
+        worker = self.command_worker
+        output = getattr(worker, 'output', "") if worker is not None else ""
+        description_key = getattr(worker, 'description_key', "")
+        # A full RKFW flash retries and reports its own failures (with this
+        # guidance added); don't pop a dialog for each step.
+        in_rkfw_flow = getattr(self, '_rkfw_flashing', False)
         # Call callback if provided
         if hasattr(self, '_command_callback') and self._command_callback:
             try:
@@ -1063,12 +1089,18 @@ class RKDevToolGUI(QMainWindow):
                 self.log_message(f"[ERROR] Callback error: {e}")
             finally:
                 self._command_callback = None
+        guidance = None if success else self.explain_failure(output)
+        if guidance:
+            title, body = guidance
+            self.log_message(f"[ERROR] {title}\n{body}")
         # If command failed and in Maskrom mode and no chip info, suggest loading Loader
         # (only show once per device connection via maskrom_device_shown_hint flag)
         if (not success and "Maskrom" in self.device_mode and 
             not self.loader_loaded and not self.maskrom_device_shown_hint):
             self.maskrom_device_shown_hint = True
             self._show_loader_hint(is_failure=True)
+        elif guidance and not in_rkfw_flow:
+            self._show_failure_guidance(description_key, title, body, output)
 
         # Handle verification completion
         if hasattr(self, '_verify_tmpfile'):
