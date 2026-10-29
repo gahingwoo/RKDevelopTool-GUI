@@ -2,28 +2,34 @@
 
 [中文](README.zh.md) | English
 
-RKDevelopTool GUI is a graphical front-end for Rockchip's official rkdeveloptool. It provides an intuitive interface to perform firmware flashing, partition management, and device debugging tasks without using the command line.
+RKDevelopTool GUI is a graphical front-end for Rockchip's rkdeveloptool, for Linux and macOS. It flashes firmware to Rockchip boards, manages their partitions and recovers them from Maskrom, without the command line. The prebuilt packages include rkdeveloptool.
 
 **GitHub:** https://github.com/gahingwoo/RKDevelopTool-GUI
 
-![App Screenshot](docs/images/home_en.png)  
-*RKDevelopTool GUI Main Interface*
+![Writing an image: overall progress, speed and time left](docs/images/home_en.png)
 
 ## Features
 
-**Device Monitoring** - Automatically detects connected Rockchip devices and displays their current mode (Maskrom or Loader).
+**Flashing**
+- One-click flashing of an `update.img` (RKFW, including images over 4 GiB), a raw disk image, or a compressed `.img.xz`, `.img.gz` or `.img.bz2`, which is decompressed first.
+- A check before every write: device connected, Loader loaded, the right kind of image for the address, and enough storage for it. A failed check stops the write.
+- Progress for the whole write with speed and time left, a Cancel button, and an optional read-back verification afterwards.
+- An `update.img` brings its own Loader. For other images in Maskrom mode, the app offers to load yours and picks the right way to do it.
 
-**One-Click Firmware Flashing** - Simplifies the firmware flashing process. Just select your update.img file and click to begin.
+**When something goes wrong**
+- Failures come with the likely cause and what to try, instead of an exit code.
+- If the board disconnects mid-write, the app stops and tells you how to recover it.
 
-**Partition Management** - Read device partition tables and perform individual operations on specific partitions: flashing, backup, or erasing.
+**Everything else**
+- Drag a firmware, Loader or other file onto the window; it goes to the right field.
+- Partition table: read it, then flash, back up or erase single partitions.
+- A command line for any rkdeveloptool command, with history.
+- A Settings tab: style, theme, language, text size, which rkdeveloptool to use, a default Loader, and where to decompress images.
+- Update check against GitHub releases, and Chinese and English.
 
-**Mode Switching** - Quick buttons to enter Maskrom or Loader mode, and to reboot the device.
-
-**Real-time Logging** - View command execution logs and flashing progress in real time.
-
-**Multi-language Support** - Available in both Chinese and English.
-
-**Theme Support** - Automatic system theme detection with manual switching between light and dark modes. Supports multiple styles: Fusion, Windows, macOS, and others.
+| Check before writing | Settings |
+| --- | --- |
+| ![The burn confirmation with its pre-flight check](docs/images/preflight_en.png) | ![The Settings tab](docs/images/settings_en.png) |
 
 ---
 
@@ -40,14 +46,28 @@ They **bundle `rkdeveloptool`**, so there is nothing else to install.
 | Debian/Ubuntu (amd64 / arm64) | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE (x86_64 / aarch64) | `rkdeveloptool-gui-*.rpm` |
 
-The app shows its version in the bottom-right corner; click it to check for
-a newer release. It also checks by itself at most once a day (a single request
-to the GitHub Releases API, nothing else is sent); untick the box in the
-update dialog to turn that off.
+To update, click "Check for updates" in the bottom-right corner. The app also
+checks by itself at most once a day: one request to the GitHub Releases API,
+and nothing else is sent. You can turn that off in Settings.
 
 > **macOS note:** the app is not notarized yet, so on first launch macOS may say
 > it "cannot be opened". Right-click the app → **Open** → **Open**, or run
 > `xattr -cr /Applications/RKDevelopTool-GUI.app`.
+
+### Linux: USB access
+
+Without a udev rule only root can open a Rockchip device, and the board won't
+show up. The `.deb` and `.rpm` packages install the rule, so the logged-in user
+has access straight away. With the AppImage or pip, the app notices when the
+board is there but can't be opened, and gives you a one-line command to
+install the rule. You can also install it yourself:
+
+```bash
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2207", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-rkdeveloptool-gui.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Then unplug and replug the board.
 
 ---
 
@@ -119,33 +139,48 @@ Alternatively, you can install it via a [self-hosted package repository](https:/
 
 ## Usage
 
-### Basic Workflow
+### Flashing a board
 
-1. Connect your Rockchip device via USB
-2. The application will automatically detect the device and display its status
-3. Select the operation you need: firmware flashing, backup, or partition management
-4. Review the settings and confirm to proceed
+1. Put the board into Maskrom mode: hold its Maskrom (or Recovery) button while
+   you plug in USB or power it on. The status bar shows "Connected (Maskrom)".
+2. Drag the firmware onto the window, or choose it with **Browse** on the
+   **Firmware Download** tab. An `update.img`, a raw `.img` or a compressed
+   `.img.xz` all work.
+3. For anything other than an `update.img` (which brings its own Loader),
+   choose the Loader for your chip, for example `rk3588_spl_loader_*.bin`, and
+   load it when the app asks, or with **Load Loader**.
+4. Click **Start One-Click Burn**. Review the check results and confirm. For
+   a raw or compressed image you can also tick "Read back and verify".
+5. Wait for it to finish. The bar covers the whole flash, and **Cancel**
+   stops it, but a cancelled write has to be flashed again before the board
+   boots.
 
-### Firmware Flashing
+### Partitions
 
-1. Navigate to the "Firmware Download" tab
-2. Click "Browse" and select your update.img file
-3. Click "Start One-Click Burn" to begin
-4. Wait for the process to complete (progress bar shows current status)
+1. Load the Loader, then click **Read Partition Table**.
+2. On the **Partition Management** tab, pick a partition and flash, back up or
+   erase it.
 
-### Partition Management
+### Commands
 
-1. Go to the "Partition Management" tab
-2. Click "Read Partition Table" to retrieve partitions from the device
-3. Select a partition and choose your operation: flash, backup, or erase
-4. Confirm and wait for completion
+The **Command** field above the log shows the rkdeveloptool command behind
+each button. You can type or edit a command there and run it with Enter, for
+example `ld`, `rci` or `ppt`. Commands that write or erase ask first.
 
-### Theme and Style Selection
+### Settings
 
-The status bar at the bottom provides quick access to:
-- Style selector: Choose between Fusion, Windows, macOS, and other available styles
-- Theme selector: Switch between Automatic, Dark, and Light themes
-- Language selector: Choose between Chinese and English
+The **Settings** tab (Ctrl+, or ⌘,) has the style, theme, language and text
+size, the rkdeveloptool binary to use, a default Loader, where to decompress
+images, debug logging and the update check. The style, theme and language
+pickers are also in the status bar.
+
+### If something fails
+
+The app explains the most common rkdeveloptool errors: no device found, the
+device can't be opened, the wrong Loader, a write that failed. Each comes with
+what to try, and rkdeveloptool's own output is under **Show Details**. To
+report a problem, use **Export diagnostics…** in Settings and attach the file
+to an issue.
 
 ---
 
@@ -155,7 +190,7 @@ This software is a graphical wrapper around rkdeveloptool. Firmware flashing is 
 
 Before using this tool:
 - Ensure you have a backup of important data
-- Verify that your device has sufficient battery
+- Use a reliable USB cable and a stable power supply for the board
 - Understand the implications of each operation
 - Consult device-specific documentation if needed
 
