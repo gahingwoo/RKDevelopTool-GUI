@@ -1811,6 +1811,40 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_command_chain(app):
+    """A callback that starts the next command right away (its worker
+    already gone) keeps that command's callback, and the window stays busy
+    while it runs."""
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    seen = []
+
+    def second(success, output):
+        seen.append("second")
+
+    def first(success, output):
+        seen.append("first")
+        window.command_worker.wait(5000)       # the worker has exited
+        window.run_command([RKTOOL, "rfi"], "reading_flash_info", second)
+        seen.append(("busy", window._command_active))
+
+    try:
+        window.run_command([RKTOOL, "ld"], "reading_flash_info", first)
+        end = time.time() + 10
+        while "second" not in seen and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        if seen[:3] != ["first", ("busy", True), "second"]:
+            errors.append(f"chained commands: {seen}")
+        if window._command_active:
+            errors.append("the window stays busy after the chain finished")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1837,6 +1871,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_command_chain(app)
     check_production_line(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
