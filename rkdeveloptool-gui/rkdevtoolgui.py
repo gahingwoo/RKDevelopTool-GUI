@@ -890,8 +890,10 @@ class RKDevToolGUI(QMainWindow):
                           and getattr(worker, 'description_key', '') in self._WRITE_KEYS)
         prep = getattr(self, '_rkfw_worker', None)
         preparing = prep is not None and prep.isRunning()
-        # A full RKFW flash writes from its first gpt step until it ends.
-        return command_writes or (getattr(self, '_rkfw_flashing', False) and not preparing)
+        # A full RKFW flash writes from its first gpt step until its
+        # read-back (if any) starts.
+        return command_writes or (getattr(self, '_rkfw_flashing', False) and not preparing
+                                  and not getattr(self, '_rkfw_verifying', False))
 
     def cancel_current(self):
         """Stop the running command, flash, or image preparation."""
