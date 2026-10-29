@@ -30,14 +30,24 @@ _PATTERNS = (
 )
 _COMPILED = tuple((kind, re.compile(pattern)) for kind, pattern in _PATTERNS)
 
-KINDS = tuple(kind for kind, _ in _PATTERNS)
+KINDS = ("rejected",) + tuple(kind for kind, _ in _PATTERNS)
 
 # Kinds a missing Linux udev rule can cause.
 PERMISSION_KINDS = ("no_device", "cannot_open")
 
 
+# A read or write that failed before any progress line: the board refused
+# the request outright (rkdeveloptool err -8, the loader's "failed" status),
+# rather than the USB connection dropping partway.
+_REJECTED = re.compile(r"(Write|Read) LBA failed!")
+_PROGRESS = re.compile(r"(Write LBA from file|Read LBA to file) \(")
+
+
 def classify_failure(output):
     """The kind of failure rkdeveloptool's output shows, or None."""
+    output = output or ""
+    if _REJECTED.search(output) and not _PROGRESS.search(output):
+        return "rejected"
     for kind, pattern in _COMPILED:
         if pattern.search(output or ""):
             return kind
