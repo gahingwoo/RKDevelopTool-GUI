@@ -190,6 +190,10 @@ class ThemeManager:
         self.app.setPalette(palette)
         for widget in self.app.allWidgets():
             widget.setPalette(palette)
+        # Changing the style re-polishes widgets with a style sheet at the
+        # style's default font; put the user's sizes back.
+        if hasattr(self.window, 'log_widget') and hasattr(self.window, 'apply_fonts'):
+            self.window.apply_fonts()
 
     def is_native_macos_style(self):
         return str(self.current_style).lower() in ("macos", "macintosh")

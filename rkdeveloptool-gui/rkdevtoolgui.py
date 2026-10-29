@@ -23,7 +23,7 @@ if "__compiled__" in globals():
 
 from PySide6.QtCore import Qt, QTimer, QUrl, QEvent
 from PySide6.QtGui import (
-    QFontDatabase, QIcon, QDesktopServices, QAction, QKeySequence, QShortcut
+    QFont, QFontDatabase, QIcon, QDesktopServices, QAction, QKeySequence, QShortcut
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -242,6 +242,7 @@ class RKDevToolGUI(QMainWindow):
 
         # Restore remembered file paths and window geometry
         self.restore_settings()
+        self.apply_fonts()
 
         # Start device detection
         self.start_device_detection()
@@ -304,20 +305,51 @@ class RKDevToolGUI(QMainWindow):
         except Exception as e:
             print(f"Warning: could not save settings: {e}")
 
+    def _font_size(self, key, default):
+        low, high = app_settings.FONT_SIZE_RANGE
+        try:
+            size = int(self.settings.get_str(key, str(default)) or default)
+        except ValueError:
+            size = default
+        return min(max(size, low), high)
+
     def set_application_font(self):
-        """Use the system default font at a consistent size.
+        """Use the system default font at the size chosen in Settings.
 
         CJK glyphs are provided by the platform's system fonts; no font file
         is bundled.
         """
         try:
-            # Use the platform's general-purpose system font; CJK glyphs come
-            # from the system fonts, so no font file is bundled.
             app_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
-            app_font.setPointSize(11)
+            app_font.setPointSize(self._font_size(app_settings.KEY_UI_FONT_SIZE,
+                                                  app_settings.DEFAULT_UI_FONT_SIZE))
             QApplication.setFont(app_font)
         except Exception:
             pass
+
+    def apply_fonts(self):
+        """Apply the UI and log font sizes from Settings to the open window.
+
+        QApplication.setFont reaches every widget that hasn't set its own
+        font; the few that have (the fixed-width log and command line, the
+        partition table) are updated here.
+        """
+        self.set_application_font()
+        log_size = self._font_size(app_settings.KEY_LOG_FONT_SIZE,
+                                   app_settings.DEFAULT_LOG_FONT_SIZE)
+        self.log_widget.set_font_size(log_size)
+        mono = QFont(self.equiv_command_field.font())
+        mono.setPointSize(log_size)
+        self.equiv_command_field.setFont(mono)
+        table = getattr(self, 'partition_table', None)
+        if table is not None:
+            table.setFont(QApplication.font())
+        # Widgets with a style sheet (bold banners and labels) keep the font
+        # they were polished with when the application font changes.
+        for widget in self.findChildren(QWidget):
+            if widget.styleSheet():
+                widget.setFont(QApplication.font())
+        self._resize_tabs_to_current(self.tab_widget.currentIndex())
 
     def create_left_panel(self):
         """Create left sidebar with device info and quick actions"""
