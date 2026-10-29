@@ -1573,6 +1573,11 @@ class RKDevToolGUI(QMainWindow):
             except Exception:
                 pass
 
+            # A capacity query for the pre-flight check times out after 6 s.
+            capacity_worker = getattr(self, '_capacity_worker', None)
+            if capacity_worker is not None and capacity_worker.isRunning():
+                capacity_worker.wait(8000)
+
             # An update check can't be interrupted, but its request times out;
             # wait for it rather than destroying a running QThread (which aborts).
             update_worker = getattr(self, '_update_worker', None)
