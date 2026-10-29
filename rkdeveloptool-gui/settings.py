@@ -9,6 +9,8 @@ Everything here is best-effort: a corrupt or unreadable settings store must
 never stop the app from starting, so reads fall back to the supplied default
 and writes are swallowed. Callers can rely on a value always coming back.
 """
+import os
+
 from PySide6.QtCore import QSettings, QByteArray
 from PySide6.QtWidgets import QFileDialog
 
@@ -27,6 +29,15 @@ KEY_FIRMWARE_PATH = "paths/firmware"
 KEY_IMAGE_PATH = "paths/image"
 KEY_UPDATE_AUTO = "updates/auto_check"
 KEY_UPDATE_LAST_CHECK = "updates/last_check"
+KEY_RKTOOL_PATH = "tools/rkdeveloptool"     # "" = auto-detect
+KEY_UNPACK_MODE = "images/unpack_mode"      # "beside" | "temp" | "custom"
+KEY_UNPACK_DIR = "images/unpack_dir"
+KEY_DEBUG_LOG = "logs/debug"
+
+# Path of an ini file to use instead of the platform store. Tests point it at
+# a temp file: on macOS the native store ignores $HOME, so without it a test
+# run reads and overwrites the user's real settings.
+SETTINGS_FILE_ENV = "RKDEVELOPTOOL_GUI_SETTINGS"
 
 
 class AppSettings:
@@ -34,7 +45,11 @@ class AppSettings:
 
     def __init__(self):
         try:
-            self._settings = QSettings(ORGANIZATION, APPLICATION)
+            path = os.environ.get(SETTINGS_FILE_ENV)
+            if path:
+                self._settings = QSettings(path, QSettings.Format.IniFormat)
+            else:
+                self._settings = QSettings(ORGANIZATION, APPLICATION)
         except Exception as e:
             print(f"Warning: could not open settings store: {e}")
             self._settings = None

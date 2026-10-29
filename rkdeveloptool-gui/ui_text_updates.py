@@ -53,6 +53,16 @@ def update_home_tab_texts(gui):
     # Equivalent-command bar
     gui.equiv_command_label.setText(gui.tr("equiv_command_label"))
     gui.equiv_command_copy_btn.setText(gui.tr("copy_btn"))
+    gui.run_command_btn.setText(gui.tr("run_btn"))
+    gui.equiv_command_field.setPlaceholderText(gui.tr("manual_command_placeholder"))
+    if hasattr(gui, 'settings_page'):
+        gui.tab_widget.setTabText(gui.tab_widget.indexOf(gui.settings_page),
+                                  gui.tr("settings_title"))
+        gui.settings_action.setText(gui.tr("settings_menu"))
+    if hasattr(gui, 'help_menu'):
+        gui.help_menu.setTitle(gui.tr("help_menu"))
+        gui.check_updates_action.setText(gui.tr("check_updates_label") + "…")
+        gui.release_page_action.setText(gui.tr("update_release_page"))
 
     # Reflect current connection state in the banner
     gui.update_device_status()

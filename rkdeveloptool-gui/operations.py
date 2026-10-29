@@ -904,11 +904,7 @@ def _with_plain_image(gui, file_path, on_ready):
         gui.log_message(gui.tr('command_already_running'))
         return
 
-    parent = os.path.dirname(os.path.abspath(file_path))
-    try:
-        tmp_dir = tempfile.mkdtemp(prefix=".rkdevtool_unpack_", dir=parent)
-    except OSError:
-        tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_unpack_")
+    tmp_dir = _make_unpack_dir(gui, file_path)
     dest = os.path.join(tmp_dir, decompressed_name(file_path))
 
     def cleanup():
@@ -958,6 +954,26 @@ def _with_plain_image(gui, file_path, on_ready):
     worker.finished.connect(safe_slot(done))
     worker.failed.connect(safe_slot(failed))
     worker.start()
+
+
+def _make_unpack_dir(gui, file_path):
+    """Temp dir for a decompressed image, where Settings says: next to the
+    original (default), the system temp dir, or a chosen directory. Falls back
+    to the system temp dir when the preferred place isn't writable."""
+    mode = gui.settings.get_str(app_settings.KEY_UNPACK_MODE, "beside") \
+        if getattr(gui, 'settings', None) else "beside"
+    if mode == "temp":
+        parent = None
+    elif mode == "custom":
+        parent = gui.settings.get_str(app_settings.KEY_UNPACK_DIR, "") or None
+    else:
+        parent = os.path.dirname(os.path.abspath(file_path))
+    if parent:
+        try:
+            return tempfile.mkdtemp(prefix=".rkdevtool_unpack_", dir=parent)
+        except OSError:
+            pass
+    return tempfile.mkdtemp(prefix="rkdevtool_unpack_")
 
 
 def _set_image_prep_busy(gui, busy):

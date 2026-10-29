@@ -10,7 +10,7 @@ Fails on: an import error, an exception raised anywhere (including inside a
 slot or a worker thread), a translation key present in one language but not
 another, missing icon assets, or a compressed image that is misdetected
 or does not decompress byte-for-byte, or an update check that gives the
-wrong answer.
+wrong answer, or settings / manual commands that don't take effect.
 
     pip install . && python tests/smoke.py
 """
@@ -32,7 +32,9 @@ with open(_stub, "w") as f:
     f.write('#!/bin/sh\necho "not found any devices!"\nexit 0\n')
 os.chmod(_stub, os.stat(_stub).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 os.environ["RKDEVELOPTOOL_BIN"] = _stub
-# Keep the run from reading or writing the developer's real QSettings.
+# Keep the run from reading or writing the developer's real settings. $HOME
+# alone isn't enough: macOS's native store ignores it.
+os.environ["RKDEVELOPTOOL_GUI_SETTINGS"] = os.path.join(_tmp, "settings.ini")
 os.environ["XDG_CONFIG_HOME"] = _tmp
 os.environ["HOME"] = _tmp
 # No network in CI: the startup update check reads this (missing) file and
@@ -301,6 +303,123 @@ def check_burn_flow(app):
         app.processEvents()
 
 
+def check_settings_and_command_line(app):
+    """Settings dialog wiring and the manual command line."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations, utils, workers
+    from rkdeveloptool_gui import settings as app_settings
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    ran = []
+    window.run_command = lambda cmd, key, callback=None: ran.append(cmd)
+    real_warning = QMessageBox.warning
+    answers = []
+    QMessageBox.warning = staticmethod(lambda *a, **k: answers.pop(0))
+    try:
+        window.open_settings()
+        if window.tab_widget.currentWidget() is not window.settings_page:
+            errors.append("open_settings() didn't switch to the Settings tab")
+        dialog = window.settings_page
+
+        # Appearance pickers mirror the status-bar ones, both ways.
+        theme = dialog.findChildren(type(window.theme_combo))
+        target = next(c for c in theme if c.count() == window.theme_combo.count()
+                      and c.itemData(0) == window.theme_combo.itemData(0))
+        new_index = (window.theme_combo.currentIndex() + 1) % window.theme_combo.count()
+        target.setCurrentIndex(new_index)
+        if window.theme_combo.currentIndex() != new_index:
+            errors.append("settings theme picker didn't change the status-bar one")
+        back = (new_index + 1) % window.theme_combo.count()
+        window.theme_combo.setCurrentIndex(back)
+        if target.currentIndex() != back:
+            errors.append("status-bar theme picker didn't update the Settings tab")
+
+        # rkdeveloptool path: invalid is refused, a valid one switches every module.
+        before = utils.RKTOOL
+        dialog.tool_path.setText(os.path.join(_tmp, "does-not-exist"))
+        dialog._apply_tool_path()
+        if utils.RKTOOL != before:
+            errors.append("an invalid rkdeveloptool path was applied")
+        other = os.path.join(_tmp, "rkdeveloptool-other")
+        with open(other, "w") as f:
+            f.write('#!/bin/sh\necho "rkdeveloptool ver 9.9"\n')
+        os.chmod(other, 0o755)
+        dialog.tool_path.setText(other)
+        dialog._apply_tool_path()
+        if not (utils.RKTOOL == operations.RKTOOL == workers.RKTOOL == other):
+            errors.append(f"rkdeveloptool not switched everywhere: {utils.RKTOOL}, "
+                          f"{operations.RKTOOL}, {workers.RKTOOL}")
+        if "9.9" not in dialog.tool_status.text():
+            errors.append(f"tool status doesn't show the version: {dialog.tool_status.text()!r}")
+        dialog._reset_tool()
+        if utils.RKTOOL != _stub:
+            errors.append(f"auto-detect didn't restore the stub: {utils.RKTOOL}")
+
+        # Unpack location.
+        image = os.path.join(tempfile.mkdtemp(dir=_tmp), "board.img.xz")
+        custom = tempfile.mkdtemp(dir=_tmp)
+        for mode, want_parent in (("beside", os.path.dirname(image)),
+                                  ("temp", tempfile.gettempdir()), ("custom", custom)):
+            window.settings.set(app_settings.KEY_UNPACK_MODE, mode)
+            window.settings.set(app_settings.KEY_UNPACK_DIR, custom)
+            got = operations._make_unpack_dir(window, image)
+            if os.path.realpath(os.path.dirname(got)) != os.path.realpath(want_parent):
+                errors.append(f"unpack mode {mode}: {got}, want under {want_parent}")
+        window.settings.set(app_settings.KEY_UNPACK_MODE, "beside")
+
+        # A language switch rebuilds the tab in the new language; the old
+        # page's mirror connections must go with it.
+        old_page = window.settings_page
+        window.lang_combo.setCurrentIndex(window.lang_combo.findData("zh"))
+        app.processEvents()
+        app.processEvents()
+        if window.settings_page is old_page:
+            errors.append("Settings tab not rebuilt after a language switch")
+        window.theme_combo.setCurrentIndex(0)
+        window.enable_debug_log.setChecked(not window.enable_debug_log.isChecked())
+        window.loader_path.setText("/tmp/x.bin")
+        app.processEvents()
+        window.lang_combo.setCurrentIndex(window.lang_combo.findData("en"))
+        app.processEvents()
+
+        # Command line.
+        parse = window.parse_manual_command
+        for text, want in (("ld", ["ld"]), ("rkdeveloptool rci", ["rci"]),
+                           (f"{_stub} wl 0x0 'my image.img'", ["wl", "0x0", "my image.img"]),
+                           ("ld; rm -rf /", ["ld;", "rm", "-rf", "/"]),
+                           ('rl 0 "unterminated', None), ("rkdeveloptool", None), ("", None)):
+            if parse(text) != want:
+                errors.append(f"parse_manual_command({text!r}) = {parse(text)}, want {want}")
+
+        field = window.equiv_command_field
+        field.setText("rci")
+        window.run_manual_command()
+        answers.append(QMessageBox.StandardButton.No)
+        field.setText("ef")
+        window.run_manual_command()
+        answers.append(QMessageBox.StandardButton.Yes)
+        field.setText("rkdeveloptool ef")
+        window.run_manual_command()
+        if ran != [[utils.RKTOOL, "rci"], [utils.RKTOOL, "ef"]]:
+            errors.append(f"manual commands ran {ran}; 'ef' must need a Yes first")
+
+        field.clear()
+        for _ in range(2):
+            app.sendEvent(field, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up,
+                                           Qt.KeyboardModifier.NoModifier))
+        if field.text() != "rci":
+            errors.append(f"Up twice in the command line gave {field.text()!r}, not 'rci'")
+    finally:
+        QMessageBox.warning = real_warning
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -328,6 +447,7 @@ def main():
 
     check_translations()
     check_updates(app)
+    check_settings_and_command_line(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:
