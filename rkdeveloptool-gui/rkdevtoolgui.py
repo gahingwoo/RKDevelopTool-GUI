@@ -781,6 +781,8 @@ class RKDevToolGUI(QMainWindow):
             self.device_worker = DeviceWorker(self.manager)
             self.device_worker.device_found.connect(safe_slot(self.on_device_found))
             self.device_worker.device_lost.connect(safe_slot(self.on_device_lost))
+            self.device_worker.presence.connect(safe_slot(self.on_device_presence))
+            self._update_poll_mode()
             self.device_worker.start()
 
     def stop_device_detection(self):
@@ -845,6 +847,54 @@ class RKDevToolGUI(QMainWindow):
                 self.maskrom_device_shown_hint = True  # Set immediately to prevent repeat
                 self._show_loader_hint()
         self.update_device_status()
+
+    # Disconnect during a write
+    # Commands that change what's on the storage: losing the device during
+    # one can leave it partly written.
+    _WRITE_KEYS = {"burning", "erase_flash", "erasing_all_storage", "importing_gpt",
+                   "writing_idb"}
+    # Polls (2 s apart) without the device before it counts as gone: a full
+    # RKFW flash makes the board re-enumerate after db and ul.
+    _ABSENT_POLLS_FOR_LOSS = 2
+
+    def _device_busy(self):
+        return getattr(self, '_command_active', False) or getattr(self, '_rkfw_flashing', False)
+
+    def _update_poll_mode(self):
+        """Only enumerate (ld) while a command or a flash owns the device."""
+        worker = getattr(self, 'device_worker', None)
+        if worker is not None:
+            worker.light = self._device_busy()
+        if not self._device_busy():
+            self._absent_polls = 0
+
+    def on_device_presence(self, present):
+        """Light-mode poll result while the device is in use."""
+        if present:
+            self._absent_polls = 0
+            return
+        self._absent_polls = getattr(self, '_absent_polls', 0) + 1
+        worker = self.command_worker
+        writing = (getattr(self, '_command_active', False) and worker is not None
+                   and getattr(worker, 'description_key', '') in self._WRITE_KEYS)
+        if (writing and self._absent_polls >= self._ABSENT_POLLS_FOR_LOSS
+                and not getattr(self, '_lost_during_write', False)):
+            self._lost_during_write = True
+            self.log_message(f"[ERROR] {self.tr('lost_during_write_title')}")
+            # rkdeveloptool can sit in a USB timeout for a long time; stop it.
+            try:
+                worker.terminate_process()
+            except Exception as e:
+                print(f"Warning: could not stop rkdeveloptool: {e}")
+
+    def _show_lost_during_write(self):
+        msg = QMessageBox(self)
+        style_messagebox(msg)
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setWindowTitle(self.tr("lost_during_write_title"))
+        msg.setText(self.tr("lost_during_write_title"))
+        msg.setInformativeText(self.tr("lost_during_write_message"))
+        msg.exec()
 
     def on_device_lost(self):
         """Handle device lost event"""
@@ -1022,6 +1072,10 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.setText(' '.join(str(c) for c in cmd))
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
+        self._command_active = True
+        self._lost_during_write = False
+        self._absent_polls = 0
+        self._update_poll_mode()
         # Use safe_slot for all signal connections to handle thread-safety
         self.command_worker.progress.connect(safe_slot(lambda v: self.progress_bar.setValue(v)))
         self.command_worker.log.connect(safe_slot(self.log_message))
@@ -1089,6 +1143,14 @@ class RKDevToolGUI(QMainWindow):
                 self.log_message(f"[ERROR] Callback error: {e}")
             finally:
                 self._command_callback = None
+        self._command_active = False
+        self._update_poll_mode()
+        if getattr(self, '_lost_during_write', False):
+            # Lost mid-write: say what state the storage is in and how to
+            # recover, instead of the generic write-failure explanation.
+            self._lost_during_write = False
+            self._show_lost_during_write()
+            return
         guidance = None if success else self.explain_failure(output)
         if guidance:
             title, body = guidance

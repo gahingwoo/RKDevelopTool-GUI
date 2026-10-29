@@ -19,6 +19,8 @@ class DeviceWorker(QThread):
     """Device detection worker thread"""
     device_found = Signal(list, str, str)  # devices, mode, chip_info
     device_lost = Signal()
+    # Light mode only: whether any Rockchip device is still listed.
+    presence = Signal(bool)
 
     def __init__(self, manager):
         super().__init__()
@@ -28,6 +30,10 @@ class DeviceWorker(QThread):
         # QThread behind, which aborts the process on exit).
         self.running = True
         self.manager = manager
+        # Set while a command or a full flash is using the device: then only
+        # `ld` runs (it just enumerates), never `rci`, which opens the device
+        # and would talk to it alongside the running rkdeveloptool.
+        self.light = False
 
     def tr(self, key):
         return self.manager.tr(key)
@@ -46,7 +52,9 @@ class DeviceWorker(QThread):
                 devices = [l for l in lines if "Did not find any rockusb device" not in l
                            and "not found" not in l and l.strip()]
 
-                if devices:
+                if self.light:
+                    self.presence.emit(bool(devices))
+                elif devices:
                     mode = "unknown_mode"
                     if "MASKROM" in result.stdout.upper():
                         mode = "Maskrom"
@@ -59,7 +67,10 @@ class DeviceWorker(QThread):
                     self.device_lost.emit()
 
             except Exception:
-                self.device_lost.emit()
+                if self.light:
+                    self.presence.emit(False)
+                else:
+                    self.device_lost.emit()
 
             # Poll every 2 s, but notice stop() within 0.1 s.
             for _ in range(20):
