@@ -1653,6 +1653,62 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_dangerous_confirmations(app):
+    """Erasing the whole storage needs "I understand" ticked before Erase
+    can be clicked, Cancel is the default, and the command is a bare ef.
+    Changing storage asks first, No by default."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import ui_panels
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, seen = [], []
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = lambda cmd, key, cb=None: ran.append(cmd[1:])
+
+    def erase_dialog(tick):
+        def fake(self):
+            erase = next(b for b in self.buttons() if b.text() == window.tr("erase_all_btn"))
+            seen.append((erase.isEnabled(), self.defaultButton() is self.button(
+                QMessageBox.StandardButton.Cancel)))
+            if tick:
+                self.checkBox().setChecked(True)
+            erase.click()
+            return 0
+        return fake
+
+    def answer(button):
+        def fake(self):
+            seen.append(self.defaultButton() is self.button(QMessageBox.StandardButton.No))
+            return button
+        return fake
+
+    try:
+        QMessageBox.exec = erase_dialog(tick=False)
+        ops.erase_all_storage(window)
+        QMessageBox.exec = erase_dialog(tick=True)
+        ops.erase_all_storage(window)
+        if ran != [["ef"]] or seen != [(False, True), (False, True)]:
+            errors.append(f"erase all: ran {ran}, (Erase enabled, Cancel default) {seen}")
+        ran.clear()
+        seen.clear()
+        if window.change_storage_combo.count():
+            QMessageBox.exec = answer(QMessageBox.StandardButton.No)
+            ui_panels.change_storage(window)
+            QMessageBox.exec = answer(QMessageBox.StandardButton.Yes)
+            ui_panels.change_storage(window)
+            if [r[0] for r in ran] != ["cs"] or seen != [True, True]:
+                errors.append(f"change storage: ran {ran}, No default {seen}")
+    finally:
+        window.run_command, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1735,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_dangerous_confirmations(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
