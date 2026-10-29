@@ -4,6 +4,8 @@ Background worker threads for RKDevelopTool GUI
 import subprocess
 import re
 import os
+import time
+import select
 import errno
 import hashlib
 import lzma
@@ -153,6 +155,10 @@ class CommandWorker(QThread):
         self.last_logged_line = ""
         self.output = ""  # Store command output for callbacks
         self.chunk_buffer = ""  # Buffer for small chunks to reduce signal overhead
+        # Stop rkdeveloptool when it prints nothing for this many seconds
+        # (a board that stopped answering); None waits forever.
+        self.idle_timeout = None
+        self.timed_out = False
 
     def tr(self, key):
         return self.manager.tr(key)
@@ -230,8 +236,20 @@ class CommandWorker(QThread):
         os.close(slave_fd)  # parent only reads from the master end
 
         line_buffer = ""
+        last_output = time.monotonic()
         try:
             while True:
+                ready, _, _ = select.select([master_fd], [], [], 1.0)
+                if not ready:
+                    if (self.idle_timeout and process.poll() is None
+                            and time.monotonic() - last_output > self.idle_timeout):
+                        self.timed_out = True
+                        self.log.emit(f"[ERROR] {self.tr('command_timed_out').format(self.idle_timeout)}")
+                        process.terminate()
+                    elif process.poll() is not None and not self._drain_ready(master_fd):
+                        break
+                    continue
+                last_output = time.monotonic()
                 try:
                     data = os.read(master_fd, 4096)
                 except OSError:
@@ -250,6 +268,12 @@ class CommandWorker(QThread):
                 pass
 
         return process.wait()
+
+    @staticmethod
+    def _drain_ready(fd):
+        """Whether fd still has output waiting (after the process exited)."""
+        ready, _, _ = select.select([fd], [], [], 0)
+        return bool(ready)
 
     def _run_with_pipe(self, env):
         """Fallback streaming via a regular pipe (e.g. on Windows)."""

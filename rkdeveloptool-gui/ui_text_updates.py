@@ -122,23 +122,12 @@ def update_partition_tab_texts(gui):
     ])
     gui.refresh_partitions_btn.setText(gui.tr("refresh_partitions_btn"))
 
-    gui.partition_ops_group.setTitle(gui.tr("partition_ops_group"))
-    gui.select_partition_label.setText(gui.tr("select_partition_label"))
-    gui.partition_file_label.setText(gui.tr("file_path"))
-    gui.partition_file_path.setPlaceholderText(gui.tr("file_path"))
-    gui.partition_file_browse_btn.setText(gui.tr("browse_btn"))
-    gui.burn_partition_btn.setText(gui.tr("burn_partition_btn"))
-    gui.backup_partition_btn.setText(gui.tr("backup_partition_btn"))
-    gui.erase_partition_btn.setText(gui.tr("erase_partition_btn"))
     gui.erase_all_btn.setText(gui.tr("erase_all_btn"))
     gui.manual_address_enable.setText(gui.tr("manual_address_override"))
     
     # Update danger zone label
     if hasattr(gui, 'danger_label') and gui.danger_label:
         gui.danger_label.setText(gui.tr("danger_zone_label"))
-
-    # Populate partition combo
-    populate_partition_combo(gui)
 
 
 def update_parameter_tab_texts(gui):
@@ -309,21 +298,3 @@ def populate_address_combo(gui):
             gui.address_combo.setCurrentIndex(current_idx)
     except (RuntimeError, AttributeError) as e:
         print(f"Warning: Failed to populate address combo: {e}")
-
-
-def populate_partition_combo(gui):
-    """Populate partition combo box, preserving the current selection (the
-    partition list itself doesn't change with the language, so this only
-    matters when it's called as part of a language-switch retranslate)."""
-    try:
-        current_idx = gui.partition_combo.currentIndex()
-        gui.partition_combo.clear()
-        if hasattr(gui, 'partitions') and gui.partitions:
-            for name, info in gui.partitions.items():
-                addr = info.get('address', '')
-                display = f"{name} ({addr})"
-                gui.partition_combo.addItem(display, name)
-        if 0 <= current_idx < gui.partition_combo.count():
-            gui.partition_combo.setCurrentIndex(current_idx)
-    except (RuntimeError, AttributeError) as e:
-        print(f"Warning: Failed to populate partition combo: {e}")

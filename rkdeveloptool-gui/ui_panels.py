@@ -385,30 +385,6 @@ def create_partition_tab(gui):
     list_group.setLayout(list_layout)
     list_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-    # Partition operations group
-    ops_group = QGroupBox()
-    ops_layout = QGridLayout()
-
-    select_label = QLabel()
-    partition_combo = QComboBox()
-
-    file_label = QLabel()
-    file_path = QLineEdit()
-    file_browse = QPushButton()
-    gui.register_browse(file_browse, file_path, "file_dialog_image")
-
-    burn_btn = QPushButton()
-    burn_btn.setProperty("class", "success")
-    burn_btn.clicked.connect(safe_slot(lambda: burn_partition(gui)))
-
-    backup_btn = QPushButton()
-    backup_btn.setProperty("class", "primary")
-    backup_btn.clicked.connect(safe_slot(lambda: backup_partition(gui)))
-
-    erase_partition_btn = QPushButton()
-    erase_partition_btn.setProperty("class", "warning")
-    erase_partition_btn.clicked.connect(safe_slot(lambda: erase_selected_partition(gui)))
-
     erase_all_btn = QPushButton()
     erase_all_btn.setProperty("class", "danger")
     erase_all_btn.clicked.connect(safe_slot(lambda: operations.erase_all_storage(gui)))
@@ -417,21 +393,8 @@ def create_partition_tab(gui):
     manual_address = QLineEdit()
     manual_address.setPlaceholderText("0x2000")
 
-    ops_layout.addWidget(select_label, 0, 0)
-    ops_layout.addWidget(partition_combo, 0, 1)
-    ops_layout.addWidget(file_label, 1, 0)
-    ops_layout.addWidget(file_path, 1, 1)
-    ops_layout.addWidget(file_browse, 1, 2)
-    ops_layout.addWidget(burn_btn, 2, 0)
-    ops_layout.addWidget(backup_btn, 2, 1)
-    ops_layout.addWidget(erase_partition_btn, 2, 2)
-    ops_layout.addWidget(erase_all_btn, 3, 2)
-
-    ops_group.setLayout(ops_layout)
-    ops_group.hide()  # Hide by default as operations are in table
-
-    # Manual address override - kept visible (unlike ops_group above) since the
-    # per-row table buttons have no equivalent for overriding the target address.
+    # Manual address override: the per-row table buttons have no equivalent
+    # for overriding the target address.
     manual_group = QGroupBox()
     manual_layout = QHBoxLayout()
     manual_layout.addWidget(manual_enable)
@@ -456,18 +419,9 @@ def create_partition_tab(gui):
         'list_group': list_group,
         'table': partition_table,
         'refresh_btn': refresh_btn,
-        'ops_group': ops_group,
-        'combo': partition_combo,
-        'file_path': file_path,
-        'file_browse': file_browse,
-        'burn_btn': burn_btn,
-        'backup_btn': backup_btn,
-        'erase_partition_btn': erase_partition_btn,
         'erase_all_btn': erase_all_btn,
         'manual_enable': manual_enable,
         'manual_address': manual_address,
-        'select_label': select_label,
-        'file_label': file_label,
         'danger_group': danger_group,
         'danger_label': danger_label
     }
@@ -1068,111 +1022,6 @@ def on_flash_info_read(gui, success):
         if 'capacity' in flash_info:
             info_text += f"  Total Capacity: {flash_info['capacity']}\n"
         gui.log_message(info_text)
-
-
-def burn_partition(gui):
-    """Burn partition"""
-    import re
-    import os
-    from .utils import RKTOOL
-
-    selected_partition_key = gui.partition_combo.currentData()
-    selected_partition = gui.partition_combo.currentText()
-    partition_path = gui.partition_file_path.text()
-
-    if not selected_partition:
-        gui.show_message("Warning", "select_partition", "Warning")
-        return
-    if not partition_path or not os.path.exists(partition_path):
-        gui.show_message("Warning", "select_file_for_partition", "Warning")
-        return
-
-    # Manual override
-    try:
-        if gui.manual_address_enable.isChecked():
-            addr = gui.manual_address.text().strip()
-            if not addr:
-                gui.show_message("Warning", "enter_manual_address", "Warning")
-                return
-            gui.run_command([RKTOOL, "wl", addr, partition_path], "burning")
-            return
-    except:
-        pass
-
-    # Use partition name key
-    if selected_partition_key:
-        gui.run_command([RKTOOL, "wlx", selected_partition_key, partition_path], "burning")
-        return
-
-    # Fallback: parse address
-    match = re.search(r'\((\S+)\)', selected_partition)
-    if not match:
-        gui.show_message("Warning", "select_partition", "Warning")
-        return
-    part_arg = match.group(1)
-    gui.run_command([RKTOOL, "wl", part_arg, partition_path], "burning")
-
-
-def backup_partition(gui):
-    """Backup partition"""
-    import re
-    import os
-    from .utils import RKTOOL
-
-    selected_partition_key = gui.partition_combo.currentData()
-    selected_partition = gui.partition_combo.currentText()
-    save_path = gui.partition_file_path.text()
-
-    if not selected_partition:
-        gui.show_message("Warning", "select_partition", "Warning")
-        return
-    if not save_path:
-        save_path = app_settings.get_save_file(gui, gui.tr("save_file_dialog"))
-        if not save_path:
-            return
-
-    # Manual override
-    try:
-        if gui.manual_address_enable.isChecked():
-            addr = gui.manual_address.text().strip()
-            if not addr:
-                gui.show_message("Warning", "enter_manual_address", "Warning")
-                return
-            gui.run_command([RKTOOL, "rl", addr, "0x1000", save_path], "backing_up")
-            return
-    except:
-        pass
-
-    # Use parsed partitions
-    if selected_partition_key and selected_partition_key in gui.partitions:
-        address = gui.partitions[selected_partition_key].get('address')
-        if address:
-            gui.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
-            return
-
-    # Fallback
-    match = re.search(r'\((\S+)\)', selected_partition)
-    if not match:
-        gui.show_message("Warning", "select_partition", "Warning")
-        return
-    address = match.group(1)
-    gui.run_command([RKTOOL, "rl", address, "0x1000", save_path], "backing_up")
-
-
-def erase_selected_partition(gui):
-    """Erase a selected partition"""
-    selected_partition_key = gui.partition_combo.currentData()
-    selected_partition = gui.partition_combo.currentText()
-    
-    if not selected_partition:
-        gui.show_message("Warning", "select_partition", "Warning")
-        return
-    
-    # Use the selected partition key/name for erase operation
-    partition_name = selected_partition_key if selected_partition_key else selected_partition
-    
-    # Call the erase_partition operation from operations module
-    operations.erase_partition(gui, partition_name)
 
 
 def pack_bootloader(gui):
