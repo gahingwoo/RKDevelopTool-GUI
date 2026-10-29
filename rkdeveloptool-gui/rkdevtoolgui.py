@@ -601,6 +601,8 @@ class RKDevToolGUI(QMainWindow):
         self.progress_bar = self.log_widget.progress_bar
         self.progress_label = self.log_widget.progress_label
         self.clear_log_btn = self.log_widget.clear_btn
+        self.cancel_btn = self.log_widget.cancel_btn
+        self.cancel_btn.clicked.connect(safe_slot(self.cancel_current))
         self.save_log_btn = self.log_widget.export_btn
         
         # Set up export callback
@@ -860,11 +862,53 @@ class RKDevToolGUI(QMainWindow):
     def _device_busy(self):
         return getattr(self, '_command_active', False) or getattr(self, '_rkfw_flashing', False)
 
+    def _update_cancel_button(self):
+        """Show Cancel only while something is running that it can stop."""
+        btn = getattr(self, 'cancel_btn', None)
+        if btn is None:
+            return
+        prep = getattr(self, '_rkfw_worker', None)
+        btn.setVisible(bool(self._device_busy() or getattr(self, '_image_prep_busy', False)
+                            or (prep is not None and prep.isRunning())))
+
+    def _writing_now(self):
+        """Whether stopping now would leave the storage partly written."""
+        worker = self.command_worker
+        command_writes = (getattr(self, '_command_active', False) and worker is not None
+                          and getattr(worker, 'description_key', '') in self._WRITE_KEYS)
+        prep = getattr(self, '_rkfw_worker', None)
+        preparing = prep is not None and prep.isRunning()
+        # A full RKFW flash writes from its first gpt step until it ends.
+        return command_writes or (getattr(self, '_rkfw_flashing', False) and not preparing)
+
+    def cancel_current(self):
+        """Stop the running command, flash, or image preparation."""
+        if not self.cancel_btn.isVisible():
+            return
+        writing = self._writing_now()
+        if writing:
+            reply = QMessageBox.warning(
+                self, self.tr("cancel_confirm_title"), self.tr("cancel_confirm_message"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self._cancel_requested = True
+        self._cancel_was_write = writing
+        for attr in ('_decompress_worker', '_rkfw_worker'):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                worker.stop()
+        if getattr(self, '_command_active', False) and self.command_worker is not None:
+            self.command_worker.terminate_process()
+        self.log_message(f"[WARNING] {self.tr('cancelling_log')}")
+
     def _update_poll_mode(self):
         """Only enumerate (ld) while a command or a flash owns the device."""
         worker = getattr(self, 'device_worker', None)
         if worker is not None:
             worker.light = self._device_busy()
+        self._update_cancel_button()
         if not self._device_busy():
             self._absent_polls = 0
 
@@ -1073,6 +1117,7 @@ class RKDevToolGUI(QMainWindow):
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
         self._command_active = True
+        self._cancel_requested = False
         self._lost_during_write = False
         self._absent_polls = 0
         self._update_poll_mode()
@@ -1145,6 +1190,17 @@ class RKDevToolGUI(QMainWindow):
                 self._command_callback = None
         self._command_active = False
         self._update_poll_mode()
+        if getattr(self, '_cancel_requested', False) and not success:
+            # Stopped by the user: not a failure to explain. A cancelled
+            # write leaves the storage partly written; say so. (A full RKFW
+            # flash has already wound down in its step callback.)
+            self._cancel_requested = False
+            self._lost_during_write = False
+            self.log_message(f"[WARNING] {self.tr('cancelled_log')}")
+            if getattr(self, '_cancel_was_write', False):
+                QMessageBox.warning(self, self.tr("cancelled_partial_title"),
+                                    self.tr("cancelled_partial_message"))
+            return
         if getattr(self, '_lost_during_write', False):
             # Lost mid-write: say what state the storage is in and how to
             # recover, instead of the generic write-failure explanation.

@@ -58,8 +58,13 @@ class RealtimeLogWidget(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setMinimumHeight(25)
         
+        # Shown only while something can be cancelled (see the main window).
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.hide()
+
         progress_layout.addWidget(self.progress_label)
         progress_layout.addWidget(self.progress_bar, 1)
+        progress_layout.addWidget(self.cancel_btn)
         
         # Control buttons
         button_layout = QHBoxLayout()

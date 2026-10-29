@@ -599,6 +599,10 @@ def _finish_rkfw_flow(gui, tmp_dir):
 def _on_rkfw_prep_failed(gui, kind, message, tmp_dir):
     """Handle a failed verify/unpack pass before any flashing started."""
     _finish_rkfw_flow(gui, tmp_dir)
+    if kind == 'cancelled':
+        gui._cancel_requested = False
+        gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
+        return
     if kind == 'crc':
         gui.log_message("[ERROR] RKAF CRC mismatch")
         _show_rkfw_message(gui, "rkfw_crc_mismatch_title", gui.tr("rkfw_crc_mismatch_message"))
@@ -658,10 +662,23 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
                             gui.tr("rkfw_flash_complete_message"), "Information")
         return
 
+    if getattr(gui, '_cancel_requested', False):
+        # Cancelled between steps (e.g. while the board re-enumerated).
+        gui._cancel_requested = False
+        _finish_rkfw_flow(gui, tmp_dir)
+        gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
+        _show_rkfw_message(gui, "cancelled_partial_title",
+                           gui.tr("cancelled_partial_message"), "Warning")
+        return
+
     cmd, description_key, label = steps[index]
     gui.log_message(f"[{index + 1}/{len(steps)}] {label}")
 
     def on_step_done(success, output):
+        if not success and getattr(gui, '_cancel_requested', False):
+            # Cancelled mid-step: no retry; the window reports it.
+            _finish_rkfw_flow(gui, tmp_dir)
+            return
         if not success and getattr(gui, '_lost_during_write', False):
             # The device went away mid-write; retrying can't help, and the
             # window explains how to recover once this returns.
@@ -1024,6 +1041,8 @@ def _with_plain_image(gui, file_path, on_ready):
         gui.progress_label.setText(gui.tr("ready"))
         cleanup()
         if reason == 'cancelled':
+            gui._cancel_requested = False
+            gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
             return
         gui.log_message(f"[ERROR] {gui.tr('decompress_failed_title')}: {message}")
         if reason == 'nospace':
@@ -1073,6 +1092,8 @@ def _make_unpack_dir(gui, file_path):
 def _set_image_prep_busy(gui, busy):
     """Disable flashing actions while an image is being decompressed."""
     gui._image_prep_busy = bool(busy)
+    if hasattr(gui, '_update_cancel_button'):
+        gui._update_cancel_button()
     try:
         gui._update_action_states()
     except Exception as e:
