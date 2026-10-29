@@ -944,6 +944,112 @@ def check_preflight(app):
         errors.append(f"pre-flight end to end: {results}")
 
 
+def check_disconnect_during_write(app):
+    """While the device is in use the poller only enumerates; losing the
+    device during a write stops it and explains how to recover."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import workers
+
+    # A stub rkdeveloptool that lists a Maskrom device and records its calls.
+    calls = os.path.join(_tmp, "calls.log")
+    tool = os.path.join(_tmp, "rkdeveloptool-logging")
+    with open(tool, "w") as f:
+        f.write('#!/bin/sh\necho "$1" >> ' + calls + '\n'
+                'echo "DevNo=1\tVid=0x2207,Pid=0x350b,LocationID=101\tMaskrom"\n')
+    os.chmod(tool, 0o755)
+    real_tool = workers.RKTOOL
+    workers.RKTOOL = tool
+    try:
+        for light in (True, False):
+            open(calls, "w").close()
+            got = []
+            worker = workers.DeviceWorker(TranslationManager(lang="en"))
+            worker.light = light
+            worker.presence.connect(lambda p: got.append(("presence", p)))
+            worker.device_found.connect(lambda *a: got.append(("found",)))
+            worker.start()
+            for _ in range(300):
+                app.processEvents()
+                if got:
+                    break
+                time.sleep(0.01)
+            worker.stop()
+            worker.wait(5000)
+            app.processEvents()
+            with open(calls) as f:
+                commands = set(f.read().split())
+            if light and (got[:1] != [("presence", True)] or "rci" in commands):
+                errors.append(f"light polling: signals {got}, commands {commands} (must not run rci)")
+            if not light and (got[:1] != [("found",)] or "rci" not in commands):
+                errors.append(f"normal polling: signals {got}, commands {commands}")
+    finally:
+        workers.RKTOOL = real_tool
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+
+    class FakeWorker:
+        def __init__(self, key):
+            self.description_key, self.output, self.killed = key, "Write LBA failed!", 0
+
+        def terminate_process(self):
+            self.killed += 1
+
+    shown = []
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    try:
+        def start(key):
+            window.command_worker = FakeWorker(key)
+            window._command_active, window._lost_during_write, window._absent_polls = True, False, 0
+            window.device_mode, window.loader_loaded = "Loader", True
+            return window.command_worker
+
+        w = start("burning")
+        window.on_device_presence(False)
+        if window._lost_during_write or w.killed:
+            errors.append("one missed poll during a write counted as a disconnect")
+        window.on_device_presence(True)
+        window.on_device_presence(False)
+        if window._lost_during_write:
+            errors.append("a poll that found the device didn't reset the count")
+        window.on_device_presence(False)
+        if not window._lost_during_write or w.killed != 1:
+            errors.append(f"two missed polls during a write: lost={window._lost_during_write}, killed={w.killed}")
+        shown.clear()
+        window.on_command_finished(False, "failed")
+        if shown != ["The device disconnected while being written"]:
+            errors.append(f"after a disconnect mid-write the dialogs were {shown}")
+
+        w = start("reading_flash")
+        for _ in range(3):
+            window.on_device_presence(False)
+        if window._lost_during_write or w.killed:
+            errors.append("a disconnect during a read was treated as a broken write")
+
+        window._command_active = False
+        window._rkfw_flashing = True
+        window.device_worker = workers.DeviceWorker(TranslationManager(lang="en"))
+        window._update_poll_mode()
+        if not window.device_worker.light:
+            errors.append("polling isn't light during a full RKFW flash")
+        window._rkfw_flashing = False
+        window._update_poll_mode()
+        if window.device_worker.light:
+            errors.append("polling stayed light after the flash")
+    finally:
+        QMessageBox.exec = real_exec
+        window._rkfw_flashing = False
+        window._command_active = False
+        window.command_worker = None
+        window.device_worker = None
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -970,6 +1076,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_disconnect_during_write(app)
     check_failure_guidance(app)
     check_preflight(app)
     check_linux_usb_access(app)

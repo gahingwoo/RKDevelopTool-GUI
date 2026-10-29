@@ -574,6 +574,8 @@ def _set_rkfw_busy(gui, busy):
     would be undone almost immediately.
     """
     gui._rkfw_flashing = bool(busy)
+    if hasattr(gui, '_update_poll_mode'):
+        gui._update_poll_mode()
     try:
         gui._update_action_states()
     except Exception as e:
@@ -660,6 +662,12 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     gui.log_message(f"[{index + 1}/{len(steps)}] {label}")
 
     def on_step_done(success, output):
+        if not success and getattr(gui, '_lost_during_write', False):
+            # The device went away mid-write; retrying can't help, and the
+            # window explains how to recover once this returns.
+            gui.log_message(f"[ERROR] {label}")
+            _finish_rkfw_flow(gui, tmp_dir)
+            return
         if not success:
             if attempts < max_attempts:
                 gui.log_message(f"[WARNING] {gui.tr('rkfw_step_retry').format(attempts + 1)}")
