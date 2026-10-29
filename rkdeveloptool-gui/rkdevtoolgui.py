@@ -44,6 +44,7 @@ from .widgets import AutoLoadCombo, CurrentPageTabWidget
 from .i18n import TRANSLATIONS
 from .themes import ThemeManager, ThemeAutoManager
 from .operations import style_messagebox
+from . import operations
 from .log_widget import RealtimeLogWidget
 from . import settings as app_settings
 from . import updater
@@ -435,6 +436,7 @@ class RKDevToolGUI(QMainWindow):
         self.loader_browse_btn = download_widgets['loader_browse']
         self.auto_load_loader = download_widgets['auto_load']
         self.load_loader_btn = download_widgets['load_btn']
+        self.fetch_loader_btn = download_widgets['fetch_btn']
         self.image_group = download_widgets['image_group']
         self.image_path = download_widgets['image_path']
         self.image_browse_btn = download_widgets['image_browse']
@@ -1025,6 +1027,7 @@ class RKDevToolGUI(QMainWindow):
     def update_device_status(self):
         """Update device status display"""
         self._update_action_states()
+        operations.update_fetch_loader_state(self)
         if self.current_device:
             mode_text = self.tr(f"connected_{self.device_mode.lower()}")
             # Parse chip info to show readable chip name
@@ -1720,6 +1723,11 @@ class RKDevToolGUI(QMainWindow):
                     self.command_worker.wait(1000)
                 except Exception as e:
                     print(f"Failed to stop command worker: {e}")
+
+            # A Loader download only needs to finish its current request.
+            fetch_worker = getattr(self, '_loader_fetch_worker', None)
+            if fetch_worker is not None and fetch_worker.isRunning():
+                fetch_worker.wait(3000)
 
             # Stop the RKFW prep worker (background verify/unpack) if running.
             prep_worker = getattr(self, '_rkfw_worker', None)

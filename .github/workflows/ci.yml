@@ -60,6 +60,9 @@ jobs:
       - name: RKFW parser layouts
         run: python tests/rkfw_layouts.py
 
+      - name: Check the Loader builder
+        run: python tests/loader_merge.py
+
   metadata:
     name: Desktop / AppStream metadata
     # Same validator version as the release build, which is what rejected the

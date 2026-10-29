@@ -11,13 +11,13 @@ import math
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit, QCheckBox
 
-from . import rkfw
+from . import loader_fetch, rkfw
 from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
     detect_compression, decompressed_name, DECOMPRESSIBLE,
-    classify_image_file, WHOLE_IMAGE_KINDS
+    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info
 )
 from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
@@ -816,6 +816,67 @@ def load_loader(gui):
         cmd_type = "db"
     
     _start_loader(gui, cmd_type, loader_path)
+
+
+def loader_chip(gui):
+    """The connected chip's name when rkbin may have a Loader for it."""
+    if not gui.current_device or not gui.chip_info or gui.chip_info == "unknown_chip":
+        return None
+    chip = parse_chip_info(gui.chip_info)
+    return chip if loader_fetch.ini_candidates(chip) else None
+
+
+def loader_cache_dir():
+    from PySide6.QtCore import QStandardPaths
+    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
+    return os.path.join(base or tempfile.gettempdir(), "loaders")
+
+
+def update_fetch_loader_state(gui):
+    worker = getattr(gui, '_loader_fetch_worker', None)
+    busy = worker is not None and worker.isRunning()
+    chip = loader_chip(gui)
+    gui.fetch_loader_btn.setEnabled(bool(chip) and not busy)
+    gui.fetch_loader_btn.setToolTip(
+        gui.tr("fetch_loader_tip").format(chip) if chip else gui.tr("fetch_loader_no_chip"))
+
+
+def fetch_loader(gui):
+    """Build the Loader for the connected chip from Rockchip's rkbin."""
+    chip = loader_chip(gui)
+    if not chip:
+        return
+    worker = loader_fetch.LoaderFetchWorker(chip, loader_cache_dir())
+    gui._loader_fetch_worker = worker
+    gui.log_message(f"[INFO] {gui.tr('fetch_loader_start').format(chip, loader_fetch.RKBIN_REPO)}")
+
+    def done(path, ini_name, sha):
+        gui.loader_path.setText(path)
+        source = f"{ini_name} @ {sha[:10]}" if sha else ini_name
+        gui.log_message(f"[OK] {gui.tr('fetch_loader_done').format(os.path.basename(path), source)}")
+        gui.log_message(f"[INFO] {gui.tr('fetch_loader_next')}")
+
+    def failed(kind, error):
+        gui.log_message(f"[ERROR] {gui.tr('fetch_loader_failed_title')}: {error}")
+        if kind == "unsupported":
+            reason = gui.tr("fetch_loader_unsupported").format(error)
+        elif kind == "bad_ini":
+            reason = gui.tr("fetch_loader_bad_ini")
+        else:
+            reason = gui.tr(f"update_error_{kind}")
+        msg = QMessageBox(gui)
+        style_messagebox(msg)
+        msg.setWindowTitle(gui.tr("fetch_loader_failed_title"))
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setText(reason)
+        msg.setDetailedText(error)
+        msg.exec()
+
+    worker.finished_ok.connect(safe_slot(done))
+    worker.failed.connect(safe_slot(failed))
+    worker.finished.connect(safe_slot(lambda: update_fetch_loader_state(gui)))
+    worker.start()
+    update_fetch_loader_state(gui)
 
 
 def _start_loader(gui, cmd_type, loader_path):
