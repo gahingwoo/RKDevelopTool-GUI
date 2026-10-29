@@ -16,11 +16,12 @@ from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
-    detect_compression, decompressed_name, DECOMPRESSIBLE
+    detect_compression, decompressed_name, DECOMPRESSIBLE,
+    classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
-    DecompressWorker
+    DecompressWorker, CallWorker
 )
 from .ui_text_updates import populate_address_combo, populate_partition_combo
 
@@ -814,6 +815,71 @@ def burn_image(gui):
     _burn_file(gui, image_path, address, lambda path: [RKTOOL, "wl", address, path])
 
 
+# Pre-flight check results.
+PASS, WARN, FAIL, UNKNOWN = "pass", "warn", "fail", "unknown"
+_CHECK_MARKS = {PASS: "✓", WARN: "⚠", FAIL: "✗", UNKNOWN: "?"}
+SECTOR_SIZE = 512
+
+
+def _sector_address(address):
+    """An rkdeveloptool LBA ("0x0", "0x8000", "32768"), or None."""
+    try:
+        return int(str(address).strip(), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _can_query_flash(gui):
+    """Whether rfi can answer now: a device is there and, in Maskrom, a
+    loader is running (otherwise it fails or times out)."""
+    if getattr(gui, 'current_device', None) is None:
+        return False
+    return not ('Maskrom' in (getattr(gui, 'device_mode', '') or '')
+                and not getattr(gui, 'loader_loaded', False))
+
+
+def preflight_checks(gui, file_path, address, capacity):
+    """What to check before writing file_path at address: a list of
+    (status, text). Any FAIL blocks the write. capacity is the storage size
+    in bytes, or None when it couldn't be read - reported as unknown, never
+    as passed.
+    """
+    tr = gui.tr
+    checks = []
+    mode = getattr(gui, 'device_mode', '') or ''
+    if getattr(gui, 'current_device', None) is None:
+        checks.append((FAIL, tr("pf_no_device")))
+    else:
+        checks.append((PASS, tr("pf_device").format(mode)))
+        if 'Maskrom' in mode and not getattr(gui, 'loader_loaded', False):
+            checks.append((FAIL, tr("pf_need_loader")))
+        else:
+            checks.append((PASS, tr("pf_loader_ready")))
+
+    lba = _sector_address(address)
+    size = os.path.getsize(file_path)
+    if lba == 0:
+        kind = classify_image_file(file_path)
+        if kind == 'loader':
+            checks.append((FAIL, tr("pf_loader_at_zero")))
+        elif kind in WHOLE_IMAGE_KINDS:
+            checks.append((PASS, tr("pf_whole_image")))
+        else:
+            checks.append((WARN, tr("pf_not_whole_image")))
+
+    if capacity is None or lba is None:
+        checks.append((UNKNOWN, tr("pf_capacity_unknown")))
+    else:
+        end = lba * SECTOR_SIZE + size
+        if end > capacity:
+            checks.append((FAIL, tr("pf_capacity_too_big").format(
+                format_file_size(end), format_file_size(capacity))))
+        else:
+            checks.append((PASS, tr("pf_capacity_fits").format(
+                format_file_size(end), format_file_size(capacity))))
+    return checks
+
+
 def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None):
     """Confirm a burn operation without freezing on large images.
 
@@ -846,16 +912,33 @@ def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None):
     gui.progress_bar.setValue(0)
     gui.progress_label.setText(gui.tr("calculating_md5"))
 
-    def on_md5_done(md5sum):
+    def show(md5sum, capacity):
         gui._burn_confirm_active = False
-        gui._md5_worker = None
         gui.progress_label.setText(gui.tr("ready"))
+        checks = preflight_checks(gui, file_path, address, capacity)
         if _show_burn_confirm(gui, file_name, file_size, size_str,
                               md5sum or gui.tr("md5_unavailable"), address,
-                              current_storage_name, storage_info):
+                              current_storage_name, storage_info, checks):
             on_confirm()
         else:
             on_cancel()
+
+    def on_md5_done(md5sum):
+        gui._md5_worker = None
+        if not _can_query_flash(gui):
+            show(md5sum, None)
+            return
+        # rfi can take seconds on a slow device; don't freeze the window.
+        gui.progress_label.setText(gui.tr("pf_reading_capacity"))
+        query = CallWorker(lambda: get_flash_capacity_bytes(gui)[0])
+        gui._capacity_worker = query
+
+        def on_capacity(result):
+            gui._capacity_worker = None
+            show(md5sum, result if isinstance(result, int) else None)
+
+        query.finished.connect(safe_slot(on_capacity))
+        query.start()
 
     worker = FileHashWorker(file_path)
     # Keep a reference on the window: a QThread held only by a local goes out
@@ -986,12 +1069,18 @@ def _set_image_prep_busy(gui, busy):
 
 
 def _show_burn_confirm(gui, file_name, file_size, size_str, md5sum, address,
-                       current_storage_name, storage_info):
-    """Show the modal burn confirmation dialog; True when the user accepts."""
+                       current_storage_name, storage_info, checks=()):
+    """Show the modal burn confirmation dialog; True when the user accepts.
+
+    With a failed pre-flight check there is nothing to accept: the dialog
+    explains what failed and only closes.
+    """
+    blocked = any(status == FAIL for status, _ in checks)
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr("confirm_burn_title"))
-    msg.setIcon(QMessageBox.Icon.Question)
+    msg.setIcon(QMessageBox.Icon.Critical if blocked else QMessageBox.Icon.Question)
+    check_lines = "\n".join(f"{_CHECK_MARKS[status]} {text}" for status, text in checks)
 
     detail_text = f"""
 {gui.tr("burn_confirmation_message")}
@@ -1003,16 +1092,23 @@ MD5: {md5sum}
 
 {gui.tr("storage_type")}: {current_storage_name} ({storage_info.get('type', 'Unknown')})
 
-{gui.tr("confirm_proceed")}
+{gui.tr("pf_title")}
+{check_lines}
+
+{gui.tr("pf_blocked") if blocked else gui.tr("confirm_proceed")}
         """
 
     msg.setText(detail_text)
-    msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
+    if blocked:
+        msg.setStandardButtons(QMessageBox.StandardButton.Close)
+    else:
+        msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     msg.setMinimumWidth(550)
     # Clear focus to prevent button highlighting
     msg.setFocus()
 
-    return msg.exec() == QMessageBox.StandardButton.Yes
+    answer = msg.exec()  # shown either way: a blocked write must say why
+    return not blocked and answer == QMessageBox.StandardButton.Yes
 
 
 def confirm_burn_operation(gui, file_path, address):
