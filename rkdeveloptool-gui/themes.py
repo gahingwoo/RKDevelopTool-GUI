@@ -153,9 +153,25 @@ class ThemeManager:
         
         # Set the style
         self.app.setStyle(self.current_style)
-        
-        # Apply appropriate palette
-        if self.current_theme == 'auto':
+
+        # Tell Qt (and through it the OS) which appearance we want: native
+        # widgets and the macOS title bar follow this, not the palette.
+        # setColorScheme is Qt 6.8+.
+        hints = self.app.styleHints()
+        if hasattr(hints, "setColorScheme"):
+            hints.setColorScheme({
+                self.LIGHT: Qt.ColorScheme.Light,
+                self.DARK: Qt.ColorScheme.Dark,
+            }.get(self.current_theme, Qt.ColorScheme.Unknown))
+
+        native = self.is_native_macos_style()
+        if native:
+            # The macOS style draws buttons, combos, tabs and group boxes with
+            # AppKit in the system appearance and ignores most palette roles,
+            # so a custom palette only recolours the rest: mismatched greys,
+            # washed-out checkboxes. Use the style's own.
+            palette = self.app.style().standardPalette()
+        elif self.current_theme == 'auto':
             # For auto theme, default to dark, but let ThemeAutoManager override it
             palette = create_dark_palette()
         elif self.current_theme == self.LIGHT:
@@ -174,6 +190,13 @@ class ThemeManager:
         self.app.setPalette(palette)
         for widget in self.app.allWidgets():
             widget.setPalette(palette)
+        # Changing the style re-polishes widgets with a style sheet at the
+        # style's default font; put the user's sizes back.
+        if hasattr(self.window, 'log_widget') and hasattr(self.window, 'apply_fonts'):
+            self.window.apply_fonts()
+
+    def is_native_macos_style(self):
+        return str(self.current_style).lower() in ("macos", "macintosh")
 
     def set_style(self, style_name):
         """Set a specific style"""
@@ -355,13 +378,8 @@ class ThemeAutoManager:
             return
         
         theme = self.get_system_theme()
-        
+
+        # Leave the picker on "Auto". Moving it to Dark/Light hid that auto
+        # mode was on, and picking that same theme afterwards changed nothing,
+        # so there was no way back to a fixed theme matching the system's.
         self.gui.theme_manager.apply_theme(theme=theme)
-        
-        # Update combo box
-        self.gui.theme_combo.blockSignals(True)
-        if theme == "dark":
-            self.gui.theme_combo.setCurrentIndex(1)  # Dark option (index 1)
-        else:
-            self.gui.theme_combo.setCurrentIndex(2)  # Light option (index 2)
-        self.gui.theme_combo.blockSignals(False)

@@ -904,11 +904,7 @@ def _with_plain_image(gui, file_path, on_ready):
         gui.log_message(gui.tr('command_already_running'))
         return
 
-    parent = os.path.dirname(os.path.abspath(file_path))
-    try:
-        tmp_dir = tempfile.mkdtemp(prefix=".rkdevtool_unpack_", dir=parent)
-    except OSError:
-        tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_unpack_")
+    tmp_dir = _make_unpack_dir(gui, file_path)
     dest = os.path.join(tmp_dir, decompressed_name(file_path))
 
     def cleanup():
@@ -958,6 +954,26 @@ def _with_plain_image(gui, file_path, on_ready):
     worker.finished.connect(safe_slot(done))
     worker.failed.connect(safe_slot(failed))
     worker.start()
+
+
+def _make_unpack_dir(gui, file_path):
+    """Temp dir for a decompressed image, where Settings says: next to the
+    original (default), the system temp dir, or a chosen directory. Falls back
+    to the system temp dir when the preferred place isn't writable."""
+    mode = gui.settings.get_str(app_settings.KEY_UNPACK_MODE, "beside") \
+        if getattr(gui, 'settings', None) else "beside"
+    if mode == "temp":
+        parent = None
+    elif mode == "custom":
+        parent = gui.settings.get_str(app_settings.KEY_UNPACK_DIR, "") or None
+    else:
+        parent = os.path.dirname(os.path.abspath(file_path))
+    if parent:
+        try:
+            return tempfile.mkdtemp(prefix=".rkdevtool_unpack_", dir=parent)
+        except OSError:
+            pass
+    return tempfile.mkdtemp(prefix="rkdevtool_unpack_")
 
 
 def _set_image_prep_busy(gui, busy):
@@ -1590,12 +1606,14 @@ def unpack_firmware(gui):
     Allows selecting a firmware package file and extracts all contained
     images to a selected output directory.
     """
-    # Select input firmware package
-    input_file = app_settings.get_open_file(
-        gui,
-        gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
-        "Image Files (*.img *.uimg);;All Files (*)"
-    )
+    # The package chosen in the unpack field (browsed or dropped); ask if none.
+    input_file = gui.unpack_input_path.text().strip() if hasattr(gui, 'unpack_input_path') else ""
+    if not os.path.isfile(input_file):
+        input_file = app_settings.get_open_file(
+            gui,
+            gui.tr("select_firmware_to_unpack") if hasattr(gui, 'tr') else "Select firmware package",
+            "Image Files (*.img *.uimg);;All Files (*)"
+        )
     if not input_file or not os.path.exists(input_file):
         return
     
@@ -1666,12 +1684,14 @@ def import_gpt_table(gui):
     Reads a GPT partition table from a binary file and writes it to the
     device. Requires multiple confirmations to prevent data loss.
     """
-    # Select input GPT file
-    input_file = app_settings.get_open_file(
-        gui,
-        gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
-        "Binary Files (*.bin);;All Files (*)"
-    )
+    # The file chosen in the GPT field (browsed or dropped); ask if none.
+    input_file = gui.gpt_path.text().strip() if hasattr(gui, 'gpt_path') else ""
+    if not os.path.isfile(input_file):
+        input_file = app_settings.get_open_file(
+            gui,
+            gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
+            "Binary Files (*.bin);;All Files (*)"
+        )
     if not input_file or not os.path.exists(input_file):
         return
     

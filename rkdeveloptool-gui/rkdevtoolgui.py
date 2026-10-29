@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import math
 import locale
+import shlex
 import time
 import warnings
 
@@ -20,8 +21,10 @@ import warnings
 if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QFontDatabase, QIcon, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, QUrl, QEvent
+from PySide6.QtGui import (
+    QFont, QFontDatabase, QIcon, QDesktopServices, QAction, QKeySequence, QShortcut
+)
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTabWidget, QListWidget, QTextEdit, QLabel, QLineEdit,
@@ -33,10 +36,11 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
-from .widgets import AutoLoadCombo
+from .widgets import AutoLoadCombo, CurrentPageTabWidget
 from .i18n import TRANSLATIONS
 from .themes import ThemeManager, ThemeAutoManager
 from .operations import style_messagebox
@@ -174,6 +178,7 @@ class RKDevToolGUI(QMainWindow):
         # the AppImage catalog's 800x600 test screen) show the whole window.
         # A saved geometry (restore_settings) still takes precedence.
         self.setMinimumSize(800, 560)
+        self.setAcceptDrops(True)
         preferred_w, preferred_h = 1300, 720
         screen = QApplication.primaryScreen()
         if screen is not None:
@@ -239,6 +244,8 @@ class RKDevToolGUI(QMainWindow):
 
         # Restore remembered file paths and window geometry
         self.restore_settings()
+        self.apply_fonts()
+        self._disable_text_drops()
 
         # Start device detection
         self.start_device_detection()
@@ -272,6 +279,9 @@ class RKDevToolGUI(QMainWindow):
                 if len(sizes) == self.splitter.count() and all(s >= 0 for s in sizes):
                     self.splitter.setSizes(sizes)
 
+            if self.settings.get_str(app_settings.KEY_DEBUG_LOG, "0") == "1":
+                self.enable_debug_log.setChecked(True)
+
             for key, widget in self._persisted_path_fields().items():
                 saved = self.settings.get_str(key, "")
                 # Only restore paths that still exist - a stale entry pointing
@@ -298,20 +308,61 @@ class RKDevToolGUI(QMainWindow):
         except Exception as e:
             print(f"Warning: could not save settings: {e}")
 
+    def _font_size(self, key, default):
+        low, high = app_settings.FONT_SIZE_RANGE
+        try:
+            size = int(self.settings.get_str(key, str(default)) or default)
+        except ValueError:
+            size = default
+        return min(max(size, low), high)
+
     def set_application_font(self):
-        """Use the system default font at a consistent size.
+        """Use the system default font at the size chosen in Settings.
 
         CJK glyphs are provided by the platform's system fonts; no font file
         is bundled.
         """
         try:
-            # Use the platform's general-purpose system font; CJK glyphs come
-            # from the system fonts, so no font file is bundled.
             app_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
-            app_font.setPointSize(11)
-            QApplication.setFont(app_font)
+            app_font.setPointSize(self._font_size(app_settings.KEY_UI_FONT_SIZE,
+                                                  app_settings.DEFAULT_UI_FONT_SIZE))
+            # Setting it re-lays out every widget, even when it's unchanged.
+            if QApplication.font() != app_font:
+                QApplication.setFont(app_font)
         except Exception:
             pass
+
+    def apply_fonts(self, ui=True, log=True):
+        """Apply the UI and/or log font sizes from Settings to the window.
+
+        QApplication.setFont reaches every widget that hasn't set its own
+        font; the few that have (the fixed-width log and command line, the
+        partition table, widgets with a style sheet) are updated here. Only
+        the part that changed is touched: resetting the application font
+        re-lays out the whole window, which flickered when just the log
+        size moved.
+        """
+        if log:
+            log_size = self._font_size(app_settings.KEY_LOG_FONT_SIZE,
+                                       app_settings.DEFAULT_LOG_FONT_SIZE)
+            if self.log_widget.mono_font.pointSize() != log_size:
+                self.log_widget.set_font_size(log_size)
+            mono = QFont(self.equiv_command_field.font())
+            if mono.pointSize() != log_size:
+                mono.setPointSize(log_size)
+                self.equiv_command_field.setFont(mono)
+        if not ui:
+            return
+        self.set_application_font()
+        table = getattr(self, 'partition_table', None)
+        if table is not None:
+            table.setFont(QApplication.font())
+        # Widgets with a style sheet (bold banners and labels) keep the font
+        # they were polished with when the application font changes.
+        for widget in self.findChildren(QWidget):
+            if widget.styleSheet():
+                widget.setFont(QApplication.font())
+        self._resize_tabs_to_current(self.tab_widget.currentIndex())
 
     def create_left_panel(self):
         """Create left sidebar with device info and quick actions"""
@@ -359,7 +410,7 @@ class RKDevToolGUI(QMainWindow):
         layout = QVBoxLayout(panel)
 
         # Tab widget
-        self.tab_widget = QTabWidget()
+        self.tab_widget = CurrentPageTabWidget()
 
         # Home tab (task-oriented landing page)
         self.home_tab, home_widgets = create_home_tab(self)
@@ -519,13 +570,16 @@ class RKDevToolGUI(QMainWindow):
 
         layout.addWidget(self.tab_widget)
 
-        # Equivalent-command bar: shows the exact rkdeveloptool command for the
-        # last/next operation so power users can copy it and script or learn it.
+        # Command line: shows the exact rkdeveloptool command of the last
+        # operation (to copy, script or learn from) and runs whatever is typed
+        # or edited there - rkdeveloptool arguments only, never a shell.
         equiv_row = QHBoxLayout()
         self.equiv_command_label = QLabel()
         self.equiv_command_field = QLineEdit()
-        self.equiv_command_field.setReadOnly(True)
-        self.equiv_command_field.setPlaceholderText("rkdeveloptool ...")
+        self.equiv_command_field.returnPressed.connect(safe_slot(self.run_manual_command))
+        self.equiv_command_field.installEventFilter(self)
+        self._command_history = []
+        self._history_pos = 0
         # Use the platform's default fixed-width font (Menlo/Consolas/etc.)
         # instead of the literal family "monospace", which doesn't exist on
         # macOS/Windows and triggers a slow font-alias lookup at startup.
@@ -533,8 +587,11 @@ class RKDevToolGUI(QMainWindow):
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.equiv_command_copy_btn = QPushButton()
         self.equiv_command_copy_btn.clicked.connect(safe_slot(self._copy_equiv_command))
+        self.run_command_btn = QPushButton()
+        self.run_command_btn.clicked.connect(safe_slot(self.run_manual_command))
         equiv_row.addWidget(self.equiv_command_label)
         equiv_row.addWidget(self.equiv_command_field, 1)
+        equiv_row.addWidget(self.run_command_btn)
         equiv_row.addWidget(self.equiv_command_copy_btn)
         layout.addLayout(equiv_row)
 
@@ -553,8 +610,9 @@ class RKDevToolGUI(QMainWindow):
         )
 
         # Log fills the space left below the (now current-tab-sized) tab area,
-        # so it's always visible and short tabs don't leave a gray void.
-        self.log_widget.setMinimumHeight(180)
+        # so it's always visible and short tabs don't leave a gray void. No
+        # fixed minimum height: one smaller than what its buttons, text box
+        # and progress row need squeezed the progress row onto the text box.
         layout.addWidget(self.log_widget, 1)
 
         # Apply the initial current-tab sizing once widgets exist.
@@ -576,9 +634,11 @@ class RKDevToolGUI(QMainWindow):
                 continue
             vpol = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
             page.setSizePolicy(QSizePolicy.Policy.Preferred, vpol)
-        current = self.tab_widget.widget(index)
-        if current is not None:
-            current.adjustSize()
+        # CurrentPageTabWidget sizes itself from the current page; let the
+        # layout re-ask. (No adjustSize() on the page: that shrank it to its
+        # size hint for a frame before the layout stretched it back, which
+        # flickered on every tab switch and font change.)
+        self.tab_widget.updateGeometry()
 
     def create_status_bar(self):
         """Create status bar with style, theme and language selectors"""
@@ -658,6 +718,31 @@ class RKDevToolGUI(QMainWindow):
         self.update_button.clicked.connect(safe_slot(self.check_for_updates))
         self.statusBar().addPermanentWidget(self.update_button)
         self._refresh_update_button()
+
+        # The Settings tab mirrors the pickers above, so it's built after them.
+        from .settings_page import SettingsPage
+        self.settings_page = SettingsPage(self)
+        self.tab_widget.addTab(self.settings_page, "")
+        self._resize_tabs_to_current(self.tab_widget.currentIndex())
+
+        # macOS: "Settings…" in the application menu with Cmd+, (Qt moves an
+        # action with PreferencesRole there). Elsewhere Ctrl+, opens it too.
+        self.settings_action = QAction(self)
+        self.settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        self.settings_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Preferences))
+        self.settings_action.triggered.connect(safe_slot(self.open_settings))
+        if sys.platform == "darwin":
+            # Qt moves the Settings action into the application menu; give
+            # the menu it came from real items so it isn't left empty.
+            self.help_menu = self.menuBar().addMenu("")
+            self.check_updates_action = self.help_menu.addAction("")
+            self.check_updates_action.triggered.connect(safe_slot(self.check_for_updates))
+            self.release_page_action = self.help_menu.addAction("")
+            self.release_page_action.triggered.connect(safe_slot(
+                lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))))
+            self.help_menu.addAction(self.settings_action)
+        else:
+            QShortcut(QKeySequence("Ctrl+,"), self, activated=safe_slot(self.open_settings))
 
     def on_style_changed(self):
         """Handle style selection change"""
@@ -902,7 +987,13 @@ class RKDevToolGUI(QMainWindow):
         msg.exec()
 
     def register_browse(self, button, line_edit, filter_key=None, save=False):
-        """Helper to connect a browse button to a line_edit"""
+        """Helper to connect a browse button to a line_edit.
+
+        Fields for picking an existing file also take a file dropped on them
+        (see dropEvent).
+        """
+        if not save:
+            self._drop_fields = getattr(self, '_drop_fields', []) + [line_edit]
 
         def _on_browse():
             file_filter = self.tr(filter_key) if filter_key else ""
@@ -1013,6 +1104,211 @@ class RKDevToolGUI(QMainWindow):
         self._verify_tmpfile = None
         self._verify_expected_file = None
 
+    # Settings
+    def open_settings(self):
+        self.tab_widget.setCurrentWidget(self.settings_page)
+
+    def _rebuild_settings_page(self):
+        """Recreate the Settings tab in the current language. Deferred: the
+        language picker on that tab may be the one whose signal got us here."""
+        def rebuild():
+            from .settings_page import SettingsPage
+            old = self.settings_page
+            index = self.tab_widget.indexOf(old)
+            current = self.tab_widget.currentIndex()
+            self.settings_page = SettingsPage(self)
+            for edit in self.settings_page.findChildren(QLineEdit):
+                edit.setAcceptDrops(False)
+            self.tab_widget.removeTab(index)
+            self.tab_widget.insertTab(index, self.settings_page, self.tr("settings_title"))
+            self.tab_widget.setCurrentIndex(current)
+            self._resize_tabs_to_current(current)
+            old.deleteLater()
+        QTimer.singleShot(0, safe_slot(rebuild))
+
+    # Command line
+    # Commands that write to or erase the device: confirm before running.
+    _WRITING_COMMANDS = {"ef", "wl", "wlx", "ul", "gpt", "prm", "wlf"}
+
+    def eventFilter(self, obj, event):
+        """Up/Down in the command line walk through earlier commands."""
+        if obj is getattr(self, 'equiv_command_field', None) and \
+                event.type() == QEvent.Type.KeyPress and \
+                event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self._command_history:
+            step = -1 if event.key() == Qt.Key.Key_Up else 1
+            self._history_pos = max(0, min(len(self._command_history),
+                                           self._history_pos + step))
+            text = (self._command_history[self._history_pos]
+                    if self._history_pos < len(self._command_history) else "")
+            self.equiv_command_field.setText(text)
+            return True
+        return super().eventFilter(obj, event)
+
+    def parse_manual_command(self, text):
+        """rkdeveloptool arguments from the command line, or None.
+
+        A leading `rkdeveloptool` (or any path to it, as the field shows after
+        a button press) is dropped; everything after it is passed as argv, so
+        nothing reaches a shell.
+        """
+        try:
+            args = shlex.split(text)
+        except ValueError:
+            return None
+        if args and os.path.basename(args[0]).lower() in ("rkdeveloptool", "rkdeveloptool.exe"):
+            args = args[1:]
+        return args or None
+
+    def run_manual_command(self):
+        text = self.equiv_command_field.text().strip()
+        args = self.parse_manual_command(text)
+        if not args:
+            if text:
+                self.log_message(f"[ERROR] {self.tr('manual_command_invalid')}")
+            return
+        if getattr(self, '_rkfw_flashing', False) or getattr(self, '_image_prep_busy', False) \
+                or (self.command_worker is not None and self.command_worker.isRunning()):
+            self.show_message("Warning", "command_already_running", "Warning")
+            return
+        display = " ".join(shlex.quote(a) for a in ["rkdeveloptool", *args])
+        if args[0].lower() in self._WRITING_COMMANDS:
+            reply = QMessageBox.warning(
+                self, self.tr("manual_command_confirm_title"),
+                self.tr("manual_command_confirm_message").format(display),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        if not self._command_history or self._command_history[-1] != text:
+            self._command_history.append(text)
+        self._history_pos = len(self._command_history)
+        self.run_command([RKTOOL, *args], "manual_command")
+
+    # Drag and drop
+    def _dropped_path(self, event):
+        """The single local file or folder being dragged, or None."""
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return None
+        path = urls[0].toLocalFile()
+        return path if os.path.exists(path) else None
+
+    def _widget_at(self, pos, candidates):
+        """The first of candidates that is, or contains, the widget at pos."""
+        widget = self.childAt(pos)
+        while widget is not None and widget is not self:
+            if any(widget is c for c in candidates):
+                return widget
+            widget = widget.parentWidget()
+        return None
+
+    def _drop_plan(self, pos, path):
+        """What dropping path at pos would do, as (kind, target), or None.
+
+        kind is 'field' (fill a path field), 'tool' (the rkdeveloptool
+        field in Settings), 'folder' (the unpack folder in Settings),
+        'command' (insert into the command line) or 'auto' (decide from
+        the file's contents).
+        """
+        page = getattr(self, 'settings_page', None)
+        is_dir = os.path.isdir(path)
+        if page is not None and self._widget_at(pos, [page.unpack_dir]):
+            return ('folder', page.unpack_dir) if is_dir else None
+        if is_dir:
+            return None
+        if self._widget_at(pos, [self.equiv_command_field]):
+            return ('command', self.equiv_command_field)
+        if page is not None and self._widget_at(pos, [page.tool_path]):
+            return ('tool', page.tool_path)
+        if page is not None and self._widget_at(pos, [page.loader_path]):
+            return ('field', self.loader_path)
+        field = self._widget_at(pos, getattr(self, '_drop_fields', []))
+        return ('field', field) if field is not None else ('auto', None)
+
+    def dragEnterEvent(self, event):
+        path = self._dropped_path(event)
+        if path and self._drop_plan(event.position().toPoint(), path):
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        path = self._dropped_path(event)
+        if path and self._drop_plan(event.position().toPoint(), path):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _firmware_fields(self):
+        return [f for f in (getattr(self, 'firmware_path', None),
+                            getattr(self, 'mass_firmware_path', None)) if f is not None]
+
+    def dropEvent(self, event):
+        """Put a dropped file where it belongs, checking what it is.
+
+        On a path field it fills that field, with a warning when the file
+        doesn't look like what the field takes (a loader dropped on a
+        firmware field goes to the Loader field instead). Anywhere else, a
+        loader fills the Loader field and a whole image (update.img,
+        compressed or whole-disk) one-click burn; anything else is left
+        alone, since there's no telling where it should go.
+        """
+        path = self._dropped_path(event)
+        plan = self._drop_plan(event.position().toPoint(), path) if path else None
+        if not plan:
+            return
+        event.acceptProposedAction()
+        action, target = plan
+        name = os.path.basename(path)
+
+        if action == 'folder':
+            target.setText(path)
+            self.settings_page._select_custom_unpack_dir()
+            return
+        if action == 'tool':
+            target.setText(path)
+            self.settings_page._apply_tool_path()
+            return
+        if action == 'command':
+            target.insert(shlex.quote(path))
+            target.setFocus()
+            return
+
+        kind = classify_image_file(path)
+        warning = None
+        if action == 'auto':
+            if kind == 'loader':
+                target = self.loader_path
+            elif kind in WHOLE_IMAGE_KINDS:
+                target = self.firmware_path
+                self.tab_widget.setCurrentWidget(self.download_tab)
+            else:
+                self._report_drop("WARNING", self.tr("drop_unknown").format(name))
+                return
+        elif target in self._firmware_fields():
+            if kind == 'loader':
+                target = self.loader_path
+                warning = self.tr("drop_loader_redirected").format(name)
+            elif kind not in WHOLE_IMAGE_KINDS:
+                warning = self.tr("drop_not_whole_image").format(name)
+        elif target is self.loader_path and kind != 'loader':
+            warning = self.tr("drop_not_loader").format(name)
+
+        target.setText(path)
+        if warning:
+            self._report_drop("WARNING", warning)
+        else:
+            label = self.tr("drop_loader") if target is self.loader_path else self.tr("drop_file")
+            self._report_drop("INFO", f"{label}: {name}")
+
+    def _report_drop(self, level, text):
+        self.log_message(f"[{level}] {text}")
+        self.statusBar().showMessage(text, 6000)
+
+    def _disable_text_drops(self):
+        """Stop line edits inserting a dropped file's "file://" URL as text;
+        the window handles file drops (see dropEvent)."""
+        for edit in self.findChildren(QLineEdit):
+            edit.setAcceptDrops(False)
+
     def _copy_equiv_command(self):
         """Copy the equivalent rkdeveloptool command to the clipboard."""
         text = self.equiv_command_field.text().strip()
@@ -1026,6 +1322,7 @@ class RKDevToolGUI(QMainWindow):
         self.manager.set_language(selected_lang)
         # Update UI with new language
         self.update_ui_text()
+        self._rebuild_settings_page()
         # Update language combo display
         if selected_lang == 'auto':
             print(f"语言切换为自动模式 (检测到: {self.manager.lang})")
@@ -1039,7 +1336,9 @@ class RKDevToolGUI(QMainWindow):
                 self.tr("update_available").format(self._update_release["version"]))
             self.update_button.setStyleSheet("font-weight: bold;")
         else:
-            self.update_button.setText(f"v{__version__}")
+            # Say what clicking does: a bare "v5.5.0" reads as a label.
+            self.update_button.setText(
+                f"v{__version__} · {self.tr('check_updates_label')}")
             self.update_button.setStyleSheet("")
         self.update_button.setToolTip(self.tr("check_updates_tooltip"))
 
@@ -1070,7 +1369,7 @@ class RKDevToolGUI(QMainWindow):
             self.update_button.setText(self.tr("checking_updates"))
         worker.available.connect(safe_slot(lambda r: self._on_update_available(r, manual)))
         worker.up_to_date.connect(safe_slot(lambda v: self._on_update_none(v, manual)))
-        worker.failed.connect(safe_slot(lambda e: self._on_update_failed(e, manual)))
+        worker.failed.connect(safe_slot(lambda kind, e: self._on_update_failed(kind, e, manual)))
         worker.start()
 
     def _on_update_available(self, release, manual):
@@ -1088,12 +1387,14 @@ class RKDevToolGUI(QMainWindow):
             self._update_message(self.tr("update_none_message").format(__version__),
                                  QMessageBox.Icon.Information)
 
-    def _on_update_failed(self, error, manual):
+    def _on_update_failed(self, kind, error, manual):
         self._refresh_update_button()
         if manual:
             self.log_message(f"[WARNING] {self.tr('update_failed_title')}: {error}")
-            self._update_message(self.tr("update_failed_message").format(error),
-                                 QMessageBox.Icon.Warning, page=updater.RELEASES_PAGE)
+            reason = self.tr(f"update_error_{kind}")
+            self._update_message(self.tr("update_failed_message").format(reason),
+                                 QMessageBox.Icon.Warning, page=updater.RELEASES_PAGE,
+                                 details=error)
 
     def _show_update_dialog(self, release):
         text = self.tr("update_found_message").format(release["version"], __version__)
@@ -1103,15 +1404,16 @@ class RKDevToolGUI(QMainWindow):
                              download=release.get("download") or release["page"],
                              page=release["page"], notes=release.get("notes"))
 
-    def _update_message(self, text, icon, download=None, page=None, notes=None):
+    def _update_message(self, text, icon, download=None, page=None, notes=None,
+                        details=None):
         """Update result dialog with an 'automatically check' checkbox."""
         msg = QMessageBox(self)
         style_messagebox(msg)
         msg.setWindowTitle(self.tr("update_title"))
         msg.setIcon(icon)
         msg.setText(text)
-        if notes:
-            msg.setDetailedText(notes)
+        if notes or details:
+            msg.setDetailedText(notes or details)
         auto = QCheckBox(self.tr("update_auto_check"))
         auto.setChecked(self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") == "1")
         msg.setCheckBox(auto)

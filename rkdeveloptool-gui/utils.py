@@ -36,11 +36,29 @@ def _candidate_tool_dirs():
     return dirs
 
 
-def _find_rkdeveloptool():
-    """Locate rkdeveloptool: explicit override, bundled copy, then PATH."""
+def _is_executable(path):
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def saved_rkdeveloptool():
+    """The rkdeveloptool path chosen in Settings, or "" for auto-detect."""
+    try:
+        from .settings import AppSettings, KEY_RKTOOL_PATH
+        return AppSettings().get_str(KEY_RKTOOL_PATH, "")
+    except Exception:
+        return ""
+
+
+def _find_rkdeveloptool(use_saved=True):
+    """Locate rkdeveloptool: RKDEVELOPTOOL_BIN, the path chosen in Settings,
+    a bundled copy, then PATH."""
     override = os.environ.get("RKDEVELOPTOOL_BIN")
-    if override and os.path.isfile(override) and os.access(override, os.X_OK):
+    if _is_executable(override):
         return override
+    if use_saved:
+        saved = saved_rkdeveloptool()
+        if _is_executable(saved):
+            return saved
     name = "rkdeveloptool.exe" if os.name == "nt" else "rkdeveloptool"
     for d in _candidate_tool_dirs():
         cand = os.path.join(d, name)
@@ -50,6 +68,38 @@ def _find_rkdeveloptool():
 
 
 RKTOOL = _find_rkdeveloptool()
+
+
+def auto_detected_rkdeveloptool():
+    """What auto-detection finds, ignoring the path chosen in Settings."""
+    return _find_rkdeveloptool(use_saved=False)
+
+
+def set_rkdeveloptool(path):
+    """Switch the rkdeveloptool binary at runtime ('' = auto-detect).
+
+    Modules took RKTOOL with `from .utils import RKTOOL` at import time, so
+    their copies are updated too; ui_panels imports it at call time and
+    picks up the new value by itself. Returns the path now in use.
+    """
+    global RKTOOL
+    RKTOOL = path if _is_executable(path) else auto_detected_rkdeveloptool()
+    package = __name__.rsplit(".", 1)[0]
+    for name in ("operations", "workers", "rkdevtoolgui"):
+        module = sys.modules.get(f"{package}.{name}")
+        if module is not None and hasattr(module, "RKTOOL"):
+            module.RKTOOL = RKTOOL
+    return RKTOOL
+
+
+def rkdeveloptool_version(path):
+    """`rkdeveloptool -v` output for a given binary, or "" if it won't run."""
+    try:
+        result = subprocess.run([path, "-v"], capture_output=True, text=True, timeout=3)
+        return (result.stdout or result.stderr).strip().splitlines()[0] if \
+            (result.stdout or result.stderr).strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 # Chip ID mapping (common Rockchip IDs)
 CHIP_ID_MAP = {
@@ -317,6 +367,36 @@ def decompressed_name(file_path):
     if ext.lower() in _COMPRESSED_SUFFIXES and root:
         return root
     return name + ".img"
+
+
+# What classify_image_file() may return, by what it means for flashing.
+WHOLE_IMAGE_KINDS = ("rkfw", "compressed", "disk")
+
+
+def classify_image_file(file_path):
+    """Rough type of a file someone wants to flash, from its contents:
+
+    'loader'      Rockchip loader (BOOT / LDR tag)
+    'rkfw'        RKFW update.img
+    'compressed'  xz / gzip / bzip2 / zstd / zip / 7z archive
+    'disk'        whole-disk image: MBR boot signature or a GPT header
+    'other'       anything else (a single partition image, a text file...)
+    None          unreadable
+    """
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(520)
+    except OSError:
+        return None
+    if head[:4] in (b"BOOT", b"LDR "):
+        return 'loader'
+    if head[:4] == b"RKFW":
+        return 'rkfw'
+    if detect_compression(file_path):
+        return 'compressed'
+    if len(head) >= 520 and (head[510:512] == b"\x55\xaa" or head[512:520] == b"EFI PART"):
+        return 'disk'
+    return 'other'
 
 
 def calculate_file_md5(file_path):

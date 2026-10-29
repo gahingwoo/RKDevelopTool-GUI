@@ -10,7 +10,7 @@ Fails on: an import error, an exception raised anywhere (including inside a
 slot or a worker thread), a translation key present in one language but not
 another, missing icon assets, or a compressed image that is misdetected
 or does not decompress byte-for-byte, or an update check that gives the
-wrong answer.
+wrong answer, or settings / manual commands that don't take effect.
 
     pip install . && python tests/smoke.py
 """
@@ -32,7 +32,9 @@ with open(_stub, "w") as f:
     f.write('#!/bin/sh\necho "not found any devices!"\nexit 0\n')
 os.chmod(_stub, os.stat(_stub).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 os.environ["RKDEVELOPTOOL_BIN"] = _stub
-# Keep the run from reading or writing the developer's real QSettings.
+# Keep the run from reading or writing the developer's real settings. $HOME
+# alone isn't enough: macOS's native store ignores it.
+os.environ["RKDEVELOPTOOL_GUI_SETTINGS"] = os.path.join(_tmp, "settings.ini")
 os.environ["XDG_CONFIG_HOME"] = _tmp
 os.environ["HOME"] = _tmp
 # No network in CI: the startup update check reads this (missing) file and
@@ -105,6 +107,36 @@ def check_updates(app):
         if got != (want and "https://x/" + want):
             errors.append(f"pick_asset({kind}, {machine}) = {got}, want {want}")
 
+    # Errors map to a reason the dialog can explain.
+    import ssl
+    import urllib.error
+    cert = urllib.error.URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer"))
+    for err, want in ((cert, "cert"),
+                      (urllib.error.HTTPError("u", 403, "rate", {}, None), "rate_limit"),
+                      (urllib.error.URLError("nodename nor servname"), "offline"),
+                      (ValueError("bad tag"), "other")):
+        if updater.describe_error(err) != want:
+            errors.append(f"describe_error({err!r}) = {updater.describe_error(err)}, want {want}")
+
+    # A certificate failure with the default trust store (python.org's macOS
+    # Python before "Install Certificates") retries with a CA bundle.
+    import urllib.request
+    real_urlopen, calls = urllib.request.urlopen, []
+
+    def fake_urlopen(request, timeout=None, context=None):
+        calls.append(context)
+        if context is None:
+            raise cert
+        return "opened"
+
+    urllib.request.urlopen = fake_urlopen
+    try:
+        got = updater._open(urllib.request.Request("https://example.invalid"))
+    finally:
+        urllib.request.urlopen = real_urlopen
+    if got != "opened" or calls[0] is not None or calls[-1] is None:
+        errors.append(f"no CA-bundle retry after a certificate error: {got!r}, {calls}")
+
     feed = os.path.join(_tmp, "release.json")
     old_env = os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"]
     os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + feed
@@ -117,7 +149,7 @@ def check_updates(app):
             worker = updater.UpdateCheckWorker()
             worker.available.connect(lambda r: got.update(available=r))
             worker.up_to_date.connect(lambda v: got.update(up_to_date=v))
-            worker.failed.connect(lambda e: got.update(failed=e))
+            worker.failed.connect(lambda k, e: got.update(failed=(k, e)))
             worker.run()
             if list(got) != [expect]:
                 errors.append(f"update check for release {tag}: {got}, want {expect}")
@@ -125,7 +157,7 @@ def check_updates(app):
         window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                               settings=AppSettings())
         try:
-            if window.update_button.text() != f"v{__version__}":
+            if not window.update_button.text().startswith(f"v{__version__} · "):
                 errors.append(f"status bar shows {window.update_button.text()!r}")
             window._on_update_available(
                 {"version": "9.0.0", "page": "https://x/page", "download": None,
@@ -323,6 +355,411 @@ def check_linux_usb_access(app):
         app.processEvents()
     if len(shown) != 1 or "/dev/bus/usb/001/005" not in shown[0]:
         errors.append(f"USB permission hint shown {len(shown)} times (want once, naming the node)")
+def check_settings_and_command_line(app):
+    """Settings dialog wiring and the manual command line."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from rkdeveloptool_gui import operations, utils, workers
+    from rkdeveloptool_gui import settings as app_settings
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    ran = []
+    window.run_command = lambda cmd, key, callback=None: ran.append(cmd)
+    real_warning = QMessageBox.warning
+    answers = []
+    QMessageBox.warning = staticmethod(lambda *a, **k: answers.pop(0))
+    try:
+        window.open_settings()
+        if window.tab_widget.currentWidget() is not window.settings_page:
+            errors.append("open_settings() didn't switch to the Settings tab")
+        dialog = window.settings_page
+
+        # Appearance pickers mirror the status-bar ones, both ways.
+        theme = dialog.findChildren(type(window.theme_combo))
+        target = next(c for c in theme if c.count() == window.theme_combo.count()
+                      and c.itemData(0) == window.theme_combo.itemData(0))
+        new_index = (window.theme_combo.currentIndex() + 1) % window.theme_combo.count()
+        target.setCurrentIndex(new_index)
+        if window.theme_combo.currentIndex() != new_index:
+            errors.append("settings theme picker didn't change the status-bar one")
+        back = (new_index + 1) % window.theme_combo.count()
+        window.theme_combo.setCurrentIndex(back)
+        if target.currentIndex() != back:
+            errors.append("status-bar theme picker didn't update the Settings tab")
+
+        # rkdeveloptool path: invalid is refused, a valid one switches every module.
+        before = utils.RKTOOL
+        dialog.tool_path.setText(os.path.join(_tmp, "does-not-exist"))
+        dialog._apply_tool_path()
+        if utils.RKTOOL != before:
+            errors.append("an invalid rkdeveloptool path was applied")
+        other = os.path.join(_tmp, "rkdeveloptool-other")
+        with open(other, "w") as f:
+            f.write('#!/bin/sh\necho "rkdeveloptool ver 9.9"\n')
+        os.chmod(other, 0o755)
+        dialog.tool_path.setText(other)
+        dialog._apply_tool_path()
+        if not (utils.RKTOOL == operations.RKTOOL == workers.RKTOOL == other):
+            errors.append(f"rkdeveloptool not switched everywhere: {utils.RKTOOL}, "
+                          f"{operations.RKTOOL}, {workers.RKTOOL}")
+        if "9.9" not in dialog.tool_status.text():
+            errors.append(f"tool status doesn't show the version: {dialog.tool_status.text()!r}")
+        dialog._reset_tool()
+        if utils.RKTOOL != _stub:
+            errors.append(f"auto-detect didn't restore the stub: {utils.RKTOOL}")
+
+        # Unpack location.
+        image = os.path.join(tempfile.mkdtemp(dir=_tmp), "board.img.xz")
+        custom = tempfile.mkdtemp(dir=_tmp)
+        for mode, want_parent in (("beside", os.path.dirname(image)),
+                                  ("temp", tempfile.gettempdir()), ("custom", custom)):
+            window.settings.set(app_settings.KEY_UNPACK_MODE, mode)
+            window.settings.set(app_settings.KEY_UNPACK_DIR, custom)
+            got = operations._make_unpack_dir(window, image)
+            if os.path.realpath(os.path.dirname(got)) != os.path.realpath(want_parent):
+                errors.append(f"unpack mode {mode}: {got}, want under {want_parent}")
+        window.settings.set(app_settings.KEY_UNPACK_MODE, "beside")
+
+        # Font sizes apply at once to every kind of text, and are kept.
+        dialog.ui_font.setValue(15)
+        dialog.log_font.setValue(13)
+        app.processEvents()
+        sizes = {
+            "app": QApplication.font().pointSize(),
+            "label": window.device_status_label.font().pointSize(),
+            "table": window.partition_table.font().pointSize(),
+            "log": window.log_output.font().pointSize(),
+            "command": window.equiv_command_field.font().pointSize(),
+        }
+        if sizes != {"app": 15, "label": 15, "table": 15, "log": 13, "command": 13}:
+            errors.append(f"font sizes not applied everywhere: {sizes}")
+        reopened = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                                settings=AppSettings())
+        if (QApplication.font().pointSize(), reopened.log_output.font().pointSize()) != (15, 13):
+            errors.append("font sizes not restored in a new window")
+        reopened.cleanup()
+        reopened.deleteLater()
+        # Slider and number box stay in step; a drag only shows the number
+        # until the slider is released.
+        control = dialog.ui_font
+        control.slider.sliderMoved.emit(19)
+        if control.spin.value() != 19 or QApplication.font().pointSize() != 15:
+            errors.append("dragging the slider should show 19 without applying it yet")
+        control.slider.setValue(19)  # release
+        app.processEvents()
+        if QApplication.font().pointSize() != 19:
+            errors.append("releasing the slider didn't apply the size")
+        control.spin.setValue(12)  # typed
+        app.processEvents()
+        if control.slider.value() != 12 or QApplication.font().pointSize() != 12:
+            errors.append("typing a size didn't move the slider and apply it")
+
+        dialog._reset_fonts()
+        app.processEvents()
+        if (QApplication.font().pointSize(), window.log_output.font().pointSize()) != \
+                (app_settings.DEFAULT_UI_FONT_SIZE, app_settings.DEFAULT_LOG_FONT_SIZE):
+            errors.append("Reset text sizes didn't restore the defaults")
+
+        # A language switch rebuilds the tab in the new language; the old
+        # page's mirror connections must go with it.
+        old_page = window.settings_page
+        window.lang_combo.setCurrentIndex(window.lang_combo.findData("zh"))
+        app.processEvents()
+        app.processEvents()
+        if window.settings_page is old_page:
+            errors.append("Settings tab not rebuilt after a language switch")
+        window.theme_combo.setCurrentIndex(0)
+        window.enable_debug_log.setChecked(not window.enable_debug_log.isChecked())
+        window.loader_path.setText("/tmp/x.bin")
+        app.processEvents()
+        window.lang_combo.setCurrentIndex(window.lang_combo.findData("en"))
+        app.processEvents()
+
+        # Command line.
+        parse = window.parse_manual_command
+        for text, want in (("ld", ["ld"]), ("rkdeveloptool rci", ["rci"]),
+                           (f"{_stub} wl 0x0 'my image.img'", ["wl", "0x0", "my image.img"]),
+                           ("ld; rm -rf /", ["ld;", "rm", "-rf", "/"]),
+                           ('rl 0 "unterminated', None), ("rkdeveloptool", None), ("", None)):
+            if parse(text) != want:
+                errors.append(f"parse_manual_command({text!r}) = {parse(text)}, want {want}")
+
+        field = window.equiv_command_field
+        field.setText("rci")
+        window.run_manual_command()
+        answers.append(QMessageBox.StandardButton.No)
+        field.setText("ef")
+        window.run_manual_command()
+        answers.append(QMessageBox.StandardButton.Yes)
+        field.setText("rkdeveloptool ef")
+        window.run_manual_command()
+        if ran != [[utils.RKTOOL, "rci"], [utils.RKTOOL, "ef"]]:
+            errors.append(f"manual commands ran {ran}; 'ef' must need a Yes first")
+
+        field.clear()
+        for _ in range(2):
+            app.sendEvent(field, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Up,
+                                           Qt.KeyboardModifier.NoModifier))
+        if field.text() != "rci":
+            errors.append(f"Up twice in the command line gave {field.text()!r}, not 'rci'")
+    finally:
+        QMessageBox.warning = real_warning
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_native_macos_style(app):
+    """Under the macOS style the app uses the style's palette and passes the
+    theme on as a color scheme (a custom palette clashes with AppKit-drawn
+    widgets). Only runs where that style exists."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QStyleFactory
+
+    if "macOS" not in QStyleFactory.keys():
+        return
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    try:
+        from rkdeveloptool_gui.themes import create_dark_palette
+        custom = create_dark_palette().color(QPalette.ColorRole.Window)
+        window.theme_manager.apply_theme(theme="dark", style="macOS")
+        if app.palette().color(QPalette.ColorRole.Window) == custom:
+            errors.append("macOS style still uses the custom dark palette")
+        # Only a real Cocoa session reports the scheme back (offscreen doesn't).
+        hints = app.styleHints()
+        if app.platformName() == "cocoa" and hasattr(hints, "colorScheme") \
+                and hints.colorScheme() != Qt.ColorScheme.Dark:
+            errors.append(f"dark theme under macOS style gave color scheme {hints.colorScheme()}")
+        window.theme_manager.apply_theme(theme="light", style="Fusion")
+        if app.palette().color(app.palette().ColorRole.Window).lightness() < 200:
+            errors.append("Fusion light theme lost its custom light palette")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_layout(app):
+    """The tab area is sized by the current tab (QTabWidget asks for the
+    tallest one by default, which pushed the log down and squeezed its
+    progress row onto it), and the progress row never overlaps the log."""
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    try:
+        window.resize(1300, 720)
+        window.show()
+        tabs = window.tab_widget
+        tallest = max(tabs.widget(i).sizeHint().height() for i in range(tabs.count()))
+        for i in range(tabs.count()):
+            tabs.setCurrentIndex(i)
+            for _ in range(10):
+                app.processEvents()
+            page = tabs.currentWidget()
+            if page.sizeHint().height() < tallest - 50 and \
+                    tabs.sizeHint().height() >= tallest:
+                errors.append(f"tab {tabs.tabText(i)!r} asks for the tallest tab's height")
+            log, bar = window.log_output.geometry(), window.progress_bar.geometry()
+            if bar.top() <= log.bottom():
+                errors.append(f"tab {tabs.tabText(i)!r}: progress row overlaps the log")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_drag_and_drop(app):
+    """Files dropped on the window go where they belong, with format checks."""
+    import lzma
+    import shlex
+
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+    from PySide6.QtWidgets import QLineEdit, QMessageBox, QScrollArea
+
+    from rkdeveloptool_gui import operations, utils
+    from rkdeveloptool_gui import settings as app_settings
+
+    work = tempfile.mkdtemp(dir=_tmp)
+
+    def make(name, data):
+        path = os.path.join(work, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    mbr = b"\0" * 510 + b"\x55\xaa" + b"\0" * 512
+    files = {
+        "loader": make("rk3588_spl_loader_v1.16.bin", b"BOOT" + b"\0" * 600),
+        "loader_ldr": make("idbloader_ldr.bin", b"LDR " + b"\0" * 600),
+        "rkfw": make("update.img", b"RKFW" + b"\0" * 600),
+        "compressed": make("Armbian.img.xz", lzma.compress(mbr)),
+        "disk": make("disk.img", mbr),
+        "gpt": make("gpt.img", b"\0" * 512 + b"EFI PART" + b"\0" * 504),
+        "other": make("boot.img", b"ANDROID!" + b"\0" * 600),
+    }
+    want_kind = {"loader": "loader", "loader_ldr": "loader", "rkfw": "rkfw",
+                 "compressed": "compressed", "disk": "disk", "gpt": "disk", "other": "other"}
+    for key, path in files.items():
+        if utils.classify_image_file(path) != want_kind[key]:
+            errors.append(f"classify_image_file({key}) = {utils.classify_image_file(path)}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.resize(1300, 800)
+    window.show()
+
+    def at(widget):
+        """Window coordinates of a widget's centre, with its tab showing."""
+        page = widget
+        while page is not None and window.tab_widget.indexOf(page) < 0:
+            page = page.parentWidget()
+        if page is not None:
+            window.tab_widget.setCurrentWidget(page)
+        for _ in range(5):
+            app.processEvents()
+        # Scroll it into view, as a user would before dropping on it.
+        area = widget.parentWidget()
+        while area is not None and not isinstance(area, QScrollArea):
+            area = area.parentWidget()
+        if area is not None:
+            area.ensureWidgetVisible(widget)
+            for _ in range(5):
+                app.processEvents()
+        pos = widget.mapTo(window, widget.rect().center())
+        if window.childAt(pos) is not widget and not widget.isAncestorOf(window.childAt(pos)):
+            errors.append(f"test setup: {widget.objectName() or type(widget).__name__} "
+                          f"isn't under its own centre")
+        return QPointF(pos)
+
+    def drop(widget, *paths):
+        """Drag enter, then drop if accepted - the order Qt delivers a real
+        drag in (a Drop sent on its own is discarded). Returns whether the
+        drag was accepted."""
+        pos = at(widget)
+        # Keep the QMimeData referenced: the events only hold a pointer to it.
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        enter = QDragEnterEvent(pos.toPoint(), Qt.DropAction.CopyAction, data,
+                                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        window.dragEnterEvent(enter)
+        if not enter.isAccepted():
+            return False
+        window.dropEvent(QDropEvent(pos, Qt.DropAction.CopyAction, data,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        app.processEvents()
+        return True
+
+    def reset():
+        for field in (window.loader_path, window.firmware_path, window.image_path):
+            field.clear()
+        window.log_widget.clear_log()
+
+    def warned():
+        return "[WARNING]" in window.log_output.toPlainText()
+
+    blank = window.home_cards_label
+    try:
+        # Dropped anywhere else: routed by contents.
+        for key in ("loader", "loader_ldr"):
+            reset()
+            drop(blank, files[key])
+            if window.loader_path.text() != files[key]:
+                errors.append(f"{key} dropped on the window didn't fill the Loader field")
+        for key in ("rkfw", "compressed", "disk", "gpt"):
+            reset()
+            drop(blank, files[key])
+            if window.firmware_path.text() != files[key] or \
+                    window.tab_widget.currentWidget() is not window.download_tab:
+                errors.append(f"{key} dropped on the window didn't fill one-click burn")
+        reset()
+        drop(blank, files["other"])
+        if window.firmware_path.text() or window.loader_path.text() or not warned():
+            errors.append("a partition image dropped on the window was routed somewhere")
+
+        # On a field: that field, with format checks.
+        reset()
+        drop(window.firmware_path, files["loader"])
+        if window.loader_path.text() != files["loader"] or window.firmware_path.text():
+            errors.append("a loader dropped on the firmware field wasn't moved to Loader")
+        reset()
+        drop(window.firmware_path, files["other"])
+        if window.firmware_path.text() != files["other"] or not warned():
+            errors.append("a partition image on the firmware field: not filled, or no warning")
+        reset()
+        drop(window.mass_firmware_path, files["rkfw"])
+        if window.mass_firmware_path.text() != files["rkfw"] or warned():
+            errors.append("update.img on the mass-production field: not filled, or warned")
+        reset()
+        drop(window.loader_path, files["disk"])
+        if window.loader_path.text() != files["disk"] or not warned():
+            errors.append("a non-loader on the Loader field: not filled, or no warning")
+        reset()
+        drop(window.image_path, files["other"])
+        if window.image_path.text() != files["other"] or warned():
+            errors.append("a file on the custom image field: not filled, or warned")
+        # (The partition file field is only shown with a device connected.)
+        for field in (window.unpack_input_path, window.gpt_path,
+                      window.tagspl_spl_path, window.verify_file_path):
+            drop(field, files["other"])
+            if field.text() != files["other"]:
+                errors.append(f"a file dropped on {field.objectName() or field} wasn't taken")
+
+        # Several files, and folders outside the unpack folder, are refused.
+        reset()
+        if drop(blank, files["rkfw"], files["disk"]) or window.firmware_path.text():
+            errors.append("dropping two files at once was accepted")
+        if drop(blank, work):
+            errors.append("a folder dropped on the window was accepted")
+
+        # Settings: unpack folder, rkdeveloptool.
+        drop(window.settings_page.unpack_dir, work)
+        if window.settings_page.unpack_dir.text() != work or \
+                window.settings.get_str(app_settings.KEY_UNPACK_MODE, "") != "custom":
+            errors.append("a folder dropped on the unpack folder field wasn't selected")
+        window.settings.set(app_settings.KEY_UNPACK_MODE, "beside")
+        tool = make("rkdeveloptool", b'#!/bin/sh\necho "rkdeveloptool ver 2.0"\n')
+        os.chmod(tool, 0o755)
+        drop(window.settings_page.tool_path, tool)
+        if utils.RKTOOL != tool:
+            errors.append("rkdeveloptool dropped on its Settings field wasn't applied")
+        window.settings_page._reset_tool()
+        drop(window.settings_page.loader_path, files["loader"])
+        if window.loader_path.text() != files["loader"]:
+            errors.append("a loader dropped on the Settings Loader field wasn't taken")
+
+        # Command line: the quoted path, at the cursor.
+        spaced = make("my image.img", mbr)
+        window.equiv_command_field.setText("wl 0x0 ")
+        drop(window.equiv_command_field, spaced)
+        if window.equiv_command_field.text() != "wl 0x0 " + shlex.quote(spaced):
+            errors.append(f"command line after a drop: {window.equiv_command_field.text()!r}")
+
+        # No line edit inserts "file://" text itself.
+        if any(e.acceptDrops() for e in window.findChildren(QLineEdit)):
+            errors.append("a line edit still takes drops itself (would insert file:// text)")
+
+        # The GPT and unpack fields are what those actions use now.
+        asked = []
+        real = (app_settings.get_open_file, app_settings.get_directory, QMessageBox.exec)
+        app_settings.get_open_file = lambda *a, **k: asked.append("file") or ""
+        app_settings.get_directory = lambda *a, **k: ""
+        QMessageBox.exec = lambda self: QMessageBox.StandardButton.No
+        try:
+            operations.import_gpt_table(window)
+            operations.unpack_firmware(window)
+        finally:
+            app_settings.get_open_file, app_settings.get_directory, QMessageBox.exec = real
+        if asked:
+            errors.append("Import GPT / Unpack asked for a file despite one in their field")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
 
 
 def run_window(app, lang):
@@ -353,6 +790,10 @@ def main():
     check_translations()
     check_linux_usb_access(app)
     check_updates(app)
+    check_settings_and_command_line(app)
+    check_native_macos_style(app)
+    check_layout(app)
+    check_drag_and_drop(app)
     check_decompression()
     check_burn_flow(app)
     for lang in TRANSLATIONS:

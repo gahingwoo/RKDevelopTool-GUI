@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QTextEdit, QHBoxLayout, QPushButton, QLabel, QProgressBar
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QTextCursor, QFont, QColor, QTextCharFormat
+from PySide6.QtGui import QTextCursor, QFont, QColor, QTextCharFormat, QFontDatabase
 import re
 
 
@@ -40,7 +40,10 @@ class RealtimeLogWidget(QWidget):
         # Log display
         self.log_display = QTextEdit()
         self.log_display.setReadOnly(True)
-        self.log_display.setFont(QFont("Courier", 9))
+        # The platform's fixed-width font (Menlo, Consolas, DejaVu Sans Mono);
+        # its size comes from Settings via set_font_size().
+        self.mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.log_display.setFont(self.mono_font)
         self.log_display.setMinimumHeight(150)
         
         # Progress bar section
@@ -79,6 +82,20 @@ class RealtimeLogWidget(QWidget):
         
         self.setLayout(layout)
     
+    def set_font_size(self, points):
+        """Resize the log text, including lines already shown."""
+        self.mono_font = QFont(self.mono_font)
+        self.mono_font.setPointSize(points)
+        self.log_display.setFont(self.mono_font)
+        self._update_display()
+
+    def sizeHint(self):
+        # The log takes whatever height is left (stretch 1 in the window), so
+        # it has no "preferred" height of its own. Reporting a larger one made
+        # the right-hand scroll area taller than the window and scrolled the
+        # progress row out of view.
+        return self.minimumSizeHint()
+
     def add_log(self, message):
         """Add a log message with color coding and timestamp"""
         # Extract log level
@@ -141,7 +158,7 @@ class RealtimeLogWidget(QWidget):
             # Set text color based on level
             fmt = QTextCharFormat()
             fmt.setForeground(self.LOG_COLORS.get(level, QColor(170, 170, 170)))
-            fmt.setFont(QFont("Courier", 9))
+            fmt.setFont(self.mono_font)
             
             # Add to document
             cursor.insertText(msg + "\n", fmt)
