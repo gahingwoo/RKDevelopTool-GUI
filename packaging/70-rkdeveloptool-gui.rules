@@ -1,0 +1,4 @@
+# Rockchip devices in Maskrom or Loader mode (USB vendor 2207): give the
+# logged-in desktop user access, so rkdeveloptool works without root.
+# "uaccess" needs systemd-logind and must sort before 73-seat-late.rules.
+SUBSYSTEM=="usb", ATTR{idVendor}=="2207", TAG+="uaccess"

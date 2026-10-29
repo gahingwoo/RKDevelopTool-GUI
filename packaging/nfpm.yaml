@@ -43,8 +43,15 @@ contents:
   - src: ./packaging/icon/hicolor/
     dst: /usr/share/icons/hicolor/
     type: tree
+  # USB access for the desktop user, so flashing needs no sudo.
+  - src: ./packaging/70-rkdeveloptool-gui.rules
+    dst: /usr/lib/udev/rules.d/70-rkdeveloptool-gui.rules
   # License / third-party notices.
   - src: ./LICENSE
     dst: /usr/share/doc/rkdeveloptool-gui/LICENSE
   - src: ./THIRD_PARTY_LICENSES.md
     dst: /usr/share/doc/rkdeveloptool-gui/THIRD_PARTY_LICENSES.md
+
+scripts:
+  postinstall: ./packaging/udev-reload.sh
+  postremove: ./packaging/udev-reload.sh

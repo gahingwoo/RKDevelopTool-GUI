@@ -790,7 +790,34 @@ class RKDevToolGUI(QMainWindow):
             self.device_worker.wait()
             self.device_worker = None
 
+    def _check_usb_access(self):
+        """On Linux, explain once per session when a Rockchip device is
+        plugged in but the user may not open it (no udev rule)."""
+        if getattr(self, '_usb_access_warned', False):
+            return
+        from . import utils
+        blocked = utils.inaccessible_rockchip_usb()
+        if not blocked:
+            return
+        self._usb_access_warned = True
+        command = utils.udev_fix_command()
+        self.log_message(f"[WARNING] {self.tr('usb_permission_title')}: {', '.join(blocked)}")
+        msg = QMessageBox(self)
+        style_messagebox(msg)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(self.tr("usb_permission_title"))
+        msg.setText(self.tr("usb_permission_message").format(", ".join(blocked)))
+        msg.setInformativeText(command)
+        msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        copy = msg.addButton(self.tr("usb_permission_copy"), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(self.tr("update_close"), QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is copy:
+            QApplication.clipboard().setText(command)
+            self.statusBar().showMessage(self.tr("command_copied"), 3000)
+
     def on_device_found(self, devices, mode, chip_info):
+        self._check_usb_access()
         """Handle device found event"""
         from .operations import detect_supported_storage_types
         
@@ -821,6 +848,8 @@ class RKDevToolGUI(QMainWindow):
 
     def on_device_lost(self):
         """Handle device lost event"""
+        # Without access, rkdeveloptool may not list the device at all.
+        self._check_usb_access()
         self.connected_devices = []
         self.current_device = None
         self.device_mode = "not_connected_status"

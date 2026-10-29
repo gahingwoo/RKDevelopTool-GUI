@@ -71,7 +71,26 @@ jobs:
       - name: Install validators
         run: |
           sudo apt-get update
-          sudo apt-get install -y appstream desktop-file-utils
+          sudo apt-get install -y appstream desktop-file-utils rpm
+
+      # Build the deb and rpm from placeholder binaries to check the package
+      # layout (the real binaries are only built on release tags).
+      - name: Package layout (deb / rpm)
+        run: |
+          curl -fsSL -o /tmp/nfpm.tar.gz \
+            "https://github.com/goreleaser/nfpm/releases/download/v2.41.0/nfpm_2.41.0_Linux_x86_64.tar.gz"
+          sudo tar -xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm
+          mkdir -p dist
+          printf '#!/bin/sh\n' > dist/rkdevtoolgui
+          printf '#!/bin/sh\n' > dist/rkdeveloptool
+          export VERSION=0.0.0 PKG_ARCH=amd64
+          nfpm package -f packaging/nfpm.yaml -p deb -t /tmp/
+          nfpm package -f packaging/nfpm.yaml -p rpm -t /tmp/
+          dpkg-deb -c /tmp/*.deb | grep -q ' ./usr/lib/udev/rules.d/70-rkdeveloptool-gui.rules$'
+          dpkg-deb -I /tmp/*.deb postinst | grep -q udevadm
+          rpm -qlp /tmp/*.rpm | grep -qx /usr/lib/udev/rules.d/70-rkdeveloptool-gui.rules
+          rpm -qp --scripts /tmp/*.rpm | grep -q udevadm
+          echo "udev rule and reload scripts are in both packages"
 
       - name: Validate
         run: |
