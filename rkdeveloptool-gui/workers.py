@@ -519,6 +519,27 @@ class DecompressWorker(QThread):
         return None, ''
 
 
+class CallWorker(QThread):
+    """Run one blocking call (a device query) off the GUI thread.
+
+    Emits finished(result), where result is the call's return value or the
+    exception it raised.
+    """
+
+    finished = Signal(object)
+
+    def __init__(self, fn):
+        super().__init__()
+        self._fn = fn
+
+    def run(self):
+        try:
+            result = self._fn()
+        except Exception as e:
+            result = e
+        self.finished.emit(result)
+
+
 class FileHashWorker(QThread):
     """Compute a file's MD5 hash in the background (big images would
     otherwise freeze the GUI for the whole read)."""

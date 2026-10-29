@@ -19,6 +19,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -762,6 +763,100 @@ def check_drag_and_drop(app):
         app.processEvents()
 
 
+def check_preflight(app):
+    """The checks shown before a write, and that a failed one blocks it."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+
+    def make(name, data):
+        path = os.path.join(work, name)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    disk = make("disk.img", b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)  # 2 KiB
+    loader = make("loader.bin", b"BOOT" + b"\0" * 2044)
+    part = make("boot.img", b"ANDROID!" + b"\0" * 2040)
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+
+    def statuses(path, address, capacity, device="dev", mode="Loader", loaded=False):
+        window.current_device, window.device_mode, window.loader_loaded = device, mode, loaded
+        return [status for status, _ in ops.preflight_checks(window, path, address, capacity)]
+
+    P, W, F, U = ops.PASS, ops.WARN, ops.FAIL, ops.UNKNOWN
+    cases = {
+        "no device": (statuses(disk, "0x0", 1 << 20, device=None), [F, P, P]),
+        "maskrom, no loader": (statuses(disk, "0x0", None, mode="Maskrom"), [P, F, P, U]),
+        "maskrom, loader loaded": (statuses(disk, "0x0", 1 << 20, mode="Maskrom", loaded=True),
+                                   [P, P, P, P]),
+        "loader at 0x0": (statuses(loader, "0x0", 1 << 20), [P, P, F, P]),
+        "partition image at 0x0": (statuses(part, "0x0", 1 << 20), [P, P, W, P]),
+        "partition image elsewhere": (statuses(part, "0x8000", 1 << 30), [P, P, P]),
+        "too big": (statuses(disk, "0x0", 1024), [P, P, P, F]),
+        "too big from its offset": (statuses(disk, "0x2", 2048), [P, P, F]),
+        "capacity unknown": (statuses(disk, "0x0", None), [P, P, P, U]),
+        "named partition": (statuses(part, "boot", 1 << 30), [P, P, U]),
+    }
+    for name, (got, want) in cases.items():
+        if got != want:
+            errors.append(f"pre-flight '{name}': {got}, want {want}")
+
+    # A failed check: the dialog still appears, and no answer starts a write.
+    shown = []
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append(self.standardButtons()) or QMessageBox.StandardButton.Yes
+    try:
+        accepted = ops._show_burn_confirm(window, "x", 1, "1 B", "md5", "0x0", "eMMC", {},
+                                          [(F, "Capacity: too big")])
+        accepted_ok = ops._show_burn_confirm(window, "x", 1, "1 B", "md5", "0x0", "eMMC", {},
+                                             [(P, "fine"), (W, "careful")])
+    finally:
+        QMessageBox.exec = real_exec
+    if accepted or len(shown) != 2 or shown[0] != QMessageBox.StandardButton.Close:
+        errors.append(f"a failed pre-flight check didn't block (accepted={accepted}, shown={shown})")
+    if not accepted_ok:
+        errors.append("warnings alone blocked the write")
+
+    # End to end: the capacity read on a worker reaches the checks; no rfi
+    # call in Maskrom without a loader.
+    # (The stub rkdeveloptool reports no device; keep the poller from
+    # resetting the device state while the capacity query runs.)
+    window.stop_device_detection()
+    seen, queried, results = [], [], {}
+    real = (ops.get_flash_capacity_bytes, ops._show_burn_confirm)
+    ops.get_flash_capacity_bytes = lambda gui: queried.append(1) or (1 << 20, "test")
+    ops._show_burn_confirm = lambda *a: seen.append(a[-1]) or False
+    try:
+        for mode, loaded in (("Loader", False), ("Maskrom", False)):
+            window.current_device, window.device_mode, window.loader_loaded = "dev", mode, loaded
+            seen.clear()
+            ops._burn_with_confirm(window, disk, "0x0", lambda: None)
+            for _ in range(200):
+                app.processEvents()
+                if seen:
+                    break
+                time.sleep(0.01)
+            results[mode] = [status for status, _ in seen[0]] if seen else None
+    finally:
+        ops.get_flash_capacity_bytes, ops._show_burn_confirm = real
+        window.current_device = None
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if queried != [1]:
+        errors.append(f"capacity queried {len(queried)} times (want once: not in Maskrom without loader)")
+    # Loader mode: the queried 1 MiB reaches the capacity check (a pass for
+    # a 2 KiB image). Maskrom without a loader: blocked, capacity unknown.
+    if results.get("Loader") != [P, P, P, P] or results.get("Maskrom") != [P, F, P, U]:
+        errors.append(f"pre-flight end to end: {results}")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -788,6 +883,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_preflight(app)
     check_linux_usb_access(app)
     check_updates(app)
     check_settings_and_command_line(app)
