@@ -355,13 +355,8 @@ class ThemeAutoManager:
             return
         
         theme = self.get_system_theme()
-        
+
+        # Leave the picker on "Auto". Moving it to Dark/Light hid that auto
+        # mode was on, and picking that same theme afterwards changed nothing,
+        # so there was no way back to a fixed theme matching the system's.
         self.gui.theme_manager.apply_theme(theme=theme)
-        
-        # Update combo box
-        self.gui.theme_combo.blockSignals(True)
-        if theme == "dark":
-            self.gui.theme_combo.setCurrentIndex(1)  # Dark option (index 1)
-        else:
-            self.gui.theme_combo.setCurrentIndex(2)  # Light option (index 2)
-        self.gui.theme_combo.blockSignals(False)
