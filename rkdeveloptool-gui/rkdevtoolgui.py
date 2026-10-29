@@ -1236,20 +1236,19 @@ class RKDevToolGUI(QMainWindow):
         # A full RKFW flash retries and reports its own failures (with this
         # guidance added); don't pop a dialog for each step.
         in_rkfw_flow = getattr(self, '_rkfw_flashing', False)
-        # Call callback if provided
-        if hasattr(self, '_command_callback') and self._command_callback:
+        # Take the callback before calling it: a callback that starts the
+        # next command registers that command's callback, which clearing it
+        # afterwards used to throw away (the chain then stopped silently).
+        callback = getattr(self, '_command_callback', None)
+        self._command_callback = None
+        if callback:
             try:
-                # Get the command output from the worker if it has output
-                output = ""
-                if hasattr(self.command_worker, 'output'):
-                    output = self.command_worker.output
-                self._command_callback(success, output)
+                callback(success, output)
             except Exception as e:
                 self.log_message(f"[ERROR] Callback error: {e}")
-            finally:
-                self._command_callback = None
-        self._command_active = False
-        self._update_poll_mode()
+        if self.command_worker is worker:   # the callback started nothing new
+            self._command_active = False
+            self._update_poll_mode()
         if getattr(self, '_cancel_requested', False) and not success:
             # Stopped by the user: not a failure to explain. A cancelled
             # write leaves the storage partly written; say so. (A full RKFW
