@@ -1653,6 +1653,33 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_translations_and_sizes(app):
+    """Dialog titles and the update.img confirmation are translated, and
+    partition sizes read as sizes, not sector counts."""
+    from rkdeveloptool_gui import operations as ops
+
+    zh = TranslationManager(lang="zh", settings=AppSettings())
+    for key in ("Warning", "Information", "rkfw_model", "rkfw_partitions"):
+        if zh.tr(key) == key:
+            errors.append(f"{key!r} has no Chinese text")
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.partitions = {"boot": {"address": "0x4000", "size": "0x2000"},
+                             "rootfs": {"address": "0x8000", "size": "unknown"}}
+        ops.populate_partition_table(window)
+        sizes = [window.partition_table.item(r, 2).text() for r in range(2)]
+        if sizes != ["4.00 MB", window.tr("partition_to_end")]:
+            errors.append(f"partition sizes shown as {sizes}")
+        if window.partition_table.minimumWidth() >= 760:
+            errors.append("the partition table still forces its width")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1706,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_translations_and_sizes(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)

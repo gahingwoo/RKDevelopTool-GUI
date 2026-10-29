@@ -362,8 +362,12 @@ def create_partition_tab(gui):
     partition_table.setColumnCount(4)
 
     # Configure table
+    # Name, address and size as wide as their text, the actions take the
+    # rest; a narrow window scrolls the table instead of growing.
     header = partition_table.horizontalHeader()
-    header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    for column in range(3):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+    header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
 
     try:
         table_font = QApplication.font()
@@ -374,7 +378,6 @@ def create_partition_tab(gui):
 
     partition_table.verticalHeader().setDefaultSectionSize(28)
     partition_table.setMinimumHeight(320)
-    partition_table.setMinimumWidth(760)
     partition_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     refresh_btn = QPushButton()
