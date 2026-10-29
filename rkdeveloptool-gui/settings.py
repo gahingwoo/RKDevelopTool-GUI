@@ -33,6 +33,7 @@ KEY_RKTOOL_PATH = "tools/rkdeveloptool"     # "" = auto-detect
 KEY_UNPACK_MODE = "images/unpack_mode"      # "beside" | "temp" | "custom"
 KEY_UNPACK_DIR = "images/unpack_dir"
 KEY_DEBUG_LOG = "logs/debug"
+KEY_VERIFY_AFTER_WRITE = "flash/verify_after_write"
 KEY_UI_FONT_SIZE = "ui/font_size"           # points
 KEY_LOG_FONT_SIZE = "ui/log_font_size"      # points, log and command line
 

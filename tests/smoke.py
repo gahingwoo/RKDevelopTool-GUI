@@ -263,7 +263,7 @@ def check_burn_flow(app):
     seen = {}
     real_confirm, real_message = operations._burn_with_confirm, operations._show_rkfw_message
 
-    def fake_confirm(gui, path, address, on_confirm, on_cancel=None):
+    def fake_confirm(gui, path, address, on_confirm, on_cancel=None, **kwargs):
         with open(path, "rb") as f:
             seen["content_ok"] = f.read() == image
         on_confirm()
@@ -918,7 +918,8 @@ def check_preflight(app):
     seen, queried, results = [], [], {}
     real = (ops.get_flash_capacity_bytes, ops._show_burn_confirm)
     ops.get_flash_capacity_bytes = lambda gui: queried.append(1) or (1 << 20, "test")
-    ops._show_burn_confirm = lambda *a: seen.append(a[-1]) or False
+    # (gui, name, size, size_str, md5, address, storage, info, checks, verify)
+    ops._show_burn_confirm = lambda *a: seen.append(a[8]) or False
     try:
         for mode, loaded in (("Loader", False), ("Maskrom", False)):
             window.current_device, window.device_mode, window.loader_loaded = "dev", mode, loaded
@@ -1233,6 +1234,117 @@ def check_progress(app):
         app.processEvents()
 
 
+def check_verify_after_write(app):
+    """Optional readback after a write: offered, remembered, compared."""
+    import hashlib
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import settings as app_settings
+    from rkdeveloptool_gui.workers import FileHashWorker
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image = os.path.join(work, "board.img")
+    data = b"\0" * 510 + b"\x55\xaa" + os.urandom(3000)  # not a whole number of sectors
+    with open(image, "wb") as f:
+        f.write(data)
+    expected = hashlib.md5(data).hexdigest()
+
+    got = []
+    hasher = FileHashWorker(image, length=1000)
+    hasher.finished.connect(got.append)
+    hasher.run()
+    if got != [hashlib.md5(data[:1000]).hexdigest()]:
+        errors.append("FileHashWorker(length=) didn't hash just the prefix")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+
+    # The checkbox: offered with its remembered state, choice remembered.
+    boxes = []
+    real_exec = QMessageBox.exec
+
+    def fake_exec(self):
+        box = self.checkBox()
+        boxes.append(box.isChecked() if box else None)
+        if box:
+            box.setChecked(True)
+        return QMessageBox.StandardButton.Yes
+
+    QMessageBox.exec = fake_exec
+    try:
+        ops._show_burn_confirm(window, "x", 1, "1 B", "md5", "0x0", "eMMC", {}, [], False)
+        ops._show_burn_confirm(window, "x", 1, "1 B", "md5", "0x0", "eMMC", {}, [], None)
+        ops._show_burn_confirm(window, "x", 1, "1 B", "md5", "0x0", "eMMC", {},
+                               [(ops.FAIL, "no")], True)
+    finally:
+        QMessageBox.exec = real_exec
+    if boxes != [False, None, None] or \
+            window.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, "") != "1":
+        errors.append(f"verify checkbox offered {boxes} (want unchecked, absent, absent "
+                      "when blocked), choice remembered: "
+                      f"{window.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, '')}")
+
+    def run_burn(verify, corrupt=False, address="0x0"):
+        commands, reports, cleaned, offered = [], [], [], []
+
+        def fake_confirm(gui, path, addr, on_confirm, on_cancel=None, offer_verify=False):
+            offered.append(offer_verify)
+            gui._verify_after_write = verify
+            gui._last_burn_md5 = expected
+            on_confirm()
+
+        def fake_run(cmd, key, callback=None):
+            commands.append(cmd[1:3])
+            if cmd[1] == "rl":
+                sectors = int(cmd[3], 16)
+                back = bytearray(data + b"\xff" * (sectors * 512 - len(data)))
+                if corrupt:
+                    back[100] ^= 0xFF
+                with open(cmd[4], "wb") as f:
+                    f.write(back)
+            if callback:
+                callback(True, "")
+
+        real = (ops._burn_with_confirm, ops._show_rkfw_message, window.run_command)
+        ops._burn_with_confirm = fake_confirm
+        ops._show_rkfw_message = lambda gui, title, text, icon="Critical": reports.append(title)
+        window.run_command = fake_run
+        try:
+            ops._burn_file(window, image, address,
+                           lambda p: [ops.RKTOOL, "wl", address, p])
+            for _ in range(300):
+                app.processEvents()
+                if reports or (not verify and commands):
+                    break
+                time.sleep(0.01)
+        finally:
+            ops._burn_with_confirm, ops._show_rkfw_message, window.run_command = real
+        leftovers = [n for n in os.listdir(work) if n.startswith(".rkdevtool_verify_")]
+        return commands, reports, offered, leftovers
+
+    commands, reports, offered, leftovers = run_burn(verify=True)
+    sectors = hex(-(-len(data) // 512))
+    if commands != [["wl", "0x0"], ["rl", "0x0"]] or reports != ["verify_ok_title"] or leftovers:
+        errors.append(f"verify after write: commands {commands}, reports {reports}, "
+                      f"temp left {leftovers}")
+    commands, reports, _, _ = run_burn(verify=True, corrupt=True)
+    if reports != ["verify_mismatch_title"]:
+        errors.append(f"a corrupted readback was reported as {reports}")
+    commands, reports, _, _ = run_burn(verify=False)
+    if commands != [["wl", "0x0"]] or reports:
+        errors.append(f"verify off: commands {commands}, reports {reports}")
+    _, _, offered, _ = run_burn(verify=False, address="boot")
+    if offered != [False]:
+        errors.append("verify was offered for a write without a numeric address")
+
+    window.cleanup()
+    window.deleteLater()
+    app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1259,6 +1371,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_verify_after_write(app)
     check_progress(app)
     check_cancel(app)
     check_disconnect_during_write(app)

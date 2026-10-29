@@ -919,7 +919,8 @@ def preflight_checks(gui, file_path, address, capacity):
     return checks
 
 
-def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None):
+def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None,
+                       offer_verify=False):
     """Confirm a burn operation without freezing on large images.
 
     The MD5 shown in the dialog is computed on a FileHashWorker so the GUI
@@ -954,10 +955,14 @@ def _burn_with_confirm(gui, file_path, address, on_confirm, on_cancel=None):
     def show(md5sum, capacity):
         gui._burn_confirm_active = False
         gui.progress_label.setText(gui.tr("ready"))
+        gui._last_burn_md5 = md5sum
         checks = preflight_checks(gui, file_path, address, capacity)
+        verify = None
+        if offer_verify and md5sum:
+            verify = gui.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, "0") == "1"
         if _show_burn_confirm(gui, file_name, file_size, size_str,
                               md5sum or gui.tr("md5_unavailable"), address,
-                              current_storage_name, storage_info, checks):
+                              current_storage_name, storage_info, checks, verify):
             on_confirm()
         else:
             on_cancel()
@@ -994,17 +999,81 @@ def _burn_file(gui, file_path, address, make_cmd):
     """Confirm and write an image, decompressing it first when it is an
     .img.xz / .img.gz / .img.bz2. make_cmd(path) builds the rkdeveloptool
     command for the file that will actually be written."""
+    lba = _sector_address(address)
+
     def start(path, cleanup):
+        size = os.path.getsize(path)
+        verify = (lba is not None and getattr(gui, '_verify_after_write', False)
+                  and getattr(gui, '_last_burn_md5', ''))
+        expected = gui._last_burn_md5 if verify else ''
         if hasattr(gui, 'begin_job'):
-            size = os.path.getsize(path)
-            gui.begin_job(size)
+            gui.begin_job(size * 2 if verify else size)
             gui.job_stage(gui.tr("stage_writing").format(os.path.basename(path)), 0, size)
-        gui.run_command(make_cmd(path), "burning", lambda *_: cleanup())
+
+        def after_write(success, output):
+            if success and verify:
+                _verify_written(gui, path, address, size, expected, cleanup)
+            else:
+                cleanup()
+
+        gui.run_command(make_cmd(path), "burning", after_write)
 
     def burn(path, cleanup):
-        _burn_with_confirm(gui, path, address, lambda: start(path, cleanup), on_cancel=cleanup)
+        _burn_with_confirm(gui, path, address, lambda: start(path, cleanup), on_cancel=cleanup,
+                           offer_verify=lba is not None)
 
     _with_plain_image(gui, file_path, burn)
+
+
+def _verify_written(gui, path, address, size, expected_md5, cleanup):
+    """Read back what was just written at address and compare its MD5 with
+    the image's. The readback is rounded up to whole sectors, so only its
+    first `size` bytes are hashed."""
+    name = os.path.basename(path)
+    sectors = -(-size // SECTOR_SIZE)
+    try:
+        tmp_dir = tempfile.mkdtemp(prefix=".rkdevtool_verify_",
+                                   dir=os.path.dirname(os.path.abspath(path)))
+    except OSError:
+        tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_verify_")
+    readback = os.path.join(tmp_dir, "readback.bin")
+
+    def finish():
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        cleanup()
+
+    if hasattr(gui, 'begin_job'):
+        gui.begin_job(size * 2)
+        gui.job_stage(gui.tr("stage_verifying").format(name), size, size)
+    gui.log_message(f"[INFO] {gui.tr('stage_verifying').format(name)}")
+
+    def after_read(success, output):
+        if not success:  # the failure itself is explained by the window
+            finish()
+            return
+        gui.progress_label.setText(gui.tr("verify_comparing"))
+        worker = FileHashWorker(readback, length=size)
+        gui._verify_hash_worker = worker
+
+        def compared(md5sum):
+            gui._verify_hash_worker = None
+            finish()
+            if md5sum and md5sum == expected_md5:
+                gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
+                _show_rkfw_message(gui, "verify_ok_title",
+                                   gui.tr("verify_ok").format(name), "Information")
+            else:
+                gui.log_message(f"[ERROR] {gui.tr('verify_mismatch_title')}: "
+                                f"{md5sum or '?'} != {expected_md5}")
+                _show_rkfw_message(gui, "verify_mismatch_title",
+                                   gui.tr("verify_mismatch_message").format(name))
+
+        worker.finished.connect(safe_slot(compared))
+        worker.start()
+
+    # The write's worker is still winding down inside its finished signal.
+    _run_when_idle(gui, [RKTOOL, "rl", str(address), hex(sectors), readback],
+                   "verifying", after_read)
 
 
 def _with_plain_image(gui, file_path, on_ready):
@@ -1116,12 +1185,15 @@ def _set_image_prep_busy(gui, busy):
 
 
 def _show_burn_confirm(gui, file_name, file_size, size_str, md5sum, address,
-                       current_storage_name, storage_info, checks=()):
+                       current_storage_name, storage_info, checks=(), verify=None):
     """Show the modal burn confirmation dialog; True when the user accepts.
 
     With a failed pre-flight check there is nothing to accept: the dialog
-    explains what failed and only closes.
+    explains what failed and only closes. verify, when not None, offers a
+    "read back and compare" checkbox starting in that state; the choice is
+    kept in gui._verify_after_write and remembered.
     """
+    gui._verify_after_write = False
     blocked = any(status == FAIL for status, _ in checks)
     msg = QMessageBox()
     style_messagebox(msg)
@@ -1151,10 +1223,20 @@ MD5: {md5sum}
     else:
         msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     msg.setMinimumWidth(550)
+    verify_box = None
+    if verify is not None and not blocked:
+        verify_box = QCheckBox(gui.tr("verify_after_write"))
+        verify_box.setChecked(verify)
+        msg.setCheckBox(verify_box)
     # Clear focus to prevent button highlighting
     msg.setFocus()
 
     answer = msg.exec()  # shown either way: a blocked write must say why
+    if verify_box is not None:
+        gui._verify_after_write = verify_box.isChecked()
+        if hasattr(gui, 'settings'):
+            gui.settings.set(app_settings.KEY_VERIFY_AFTER_WRITE,
+                             "1" if verify_box.isChecked() else "0")
     return not blocked and answer == QMessageBox.StandardButton.Yes
 
 

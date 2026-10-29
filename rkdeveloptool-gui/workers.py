@@ -565,19 +565,24 @@ class FileHashWorker(QThread):
     progress = Signal(int)
     finished = Signal(str)  # hex digest, or '' on error
 
-    def __init__(self, file_path):
+    def __init__(self, file_path, length=None):
         super().__init__()
         self.file_path = file_path
+        # Hash only the first `length` bytes (a sector-rounded readback
+        # holds more than the image it's compared with).
+        self.length = length
 
     def run(self):
         h = hashlib.md5()
         last_pct = [-1]
         try:
             size = os.path.getsize(self.file_path)
+            if self.length is not None:
+                size = min(size, self.length)
             with open(self.file_path, "rb") as f:
                 done = 0
-                while True:
-                    chunk = f.read(1024 * 1024)
+                while done < size:
+                    chunk = f.read(min(1024 * 1024, size - done))
                     if not chunk:
                         break
                     h.update(chunk)
