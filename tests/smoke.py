@@ -1345,6 +1345,111 @@ def check_verify_after_write(app):
     app.processEvents()
 
 
+def check_chip_and_device_lock(app):
+    """Chip info decoding, and that the poller never opens the device while
+    a partition-table read (or capacity query) holds DEVICE_LOCK."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import utils, workers
+
+    for text, want in (("Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3576"),  # a real RK3576
+                       ("Chip Info: 38 38 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3588"),
+                       ("36 37 35 33 0 0", "RK3576"),
+                       ("RK3399", "RK3399"),
+                       ("", "Unknown Chip")):
+        if utils.parse_chip_info(text) != want:
+            errors.append(f"parse_chip_info({text!r}) = {utils.parse_chip_info(text)!r}, want {want}")
+
+    calls = os.path.join(_tmp, "lock-calls.log")
+    tool = os.path.join(_tmp, "rkdeveloptool-lock")
+    with open(tool, "w") as f:
+        f.write('#!/bin/sh\necho "$1" >> ' + calls + '\n'
+                'case "$1" in\n'
+                '  ld) echo "DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom" ;;\n'
+                '  rci) echo "Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0" ;;\n'
+                '  ppt) echo "Not found any partition table!"; exit 1 ;;\n'
+                'esac\n')
+    os.chmod(tool, 0o755)
+    real_tool = workers.RKTOOL
+    workers.RKTOOL = tool
+
+    def poll_once(hold_lock):
+        open(calls, "w").close()
+        got = []
+        worker = workers.DeviceWorker(TranslationManager(lang="en"))
+        worker.presence.connect(lambda p: got.append(("presence", p)))
+        worker.device_found.connect(lambda d, m, c: got.append(("found", c)))
+        if hold_lock:
+            utils.DEVICE_LOCK.acquire()
+        try:
+            worker.start()
+            for _ in range(300):
+                app.processEvents()
+                if got:
+                    break
+                time.sleep(0.01)
+        finally:
+            worker.stop()
+            if hold_lock:
+                utils.DEVICE_LOCK.release()
+            worker.wait(5000)
+            app.processEvents()
+        with open(calls) as f:
+            return got[:1], set(f.read().split())
+
+    try:
+        got, commands = poll_once(hold_lock=True)
+        if got != [("presence", True)] or "rci" in commands:
+            errors.append(f"poll while the device lock is held: {got}, ran {commands}")
+        got, commands = poll_once(hold_lock=False)
+        if got != [("found", "RK3576")] or "rci" not in commands:
+            errors.append(f"poll with the lock free: {got}, ran {commands}")
+
+        # The partition read waits for the lock.
+        done = []
+        ppt = workers.PartitionPPTWorker()
+        ppt.finished.connect(lambda out, code: done.append((out, code)))
+        utils.DEVICE_LOCK.acquire()
+        try:
+            ppt.start()
+            for _ in range(30):
+                app.processEvents()
+                time.sleep(0.01)
+            waited = not done
+        finally:
+            utils.DEVICE_LOCK.release()
+        ppt.wait(10000)
+        app.processEvents()
+        if not waited or not done:
+            errors.append(f"partition read didn't wait for the device lock (waited={waited}, done={done})")
+    finally:
+        workers.RKTOOL = real_tool
+
+    # A failed read says why instead of leaving the table empty.
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    shown = []
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    try:
+        ops.on_partition_ppt_finished(window, "Not found any partition table!\n", 1)
+        blank = list(shown)
+        shown.clear()
+        ops.on_partition_ppt_finished(window, "", 1)
+        unknown = list(shown)
+    finally:
+        QMessageBox.exec = real_exec
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if blank != ["No partition table could be read"]:
+        errors.append(f"blank storage on partition read showed {blank}")
+    if len(unknown) != 1:
+        errors.append(f"an unexplained partition read failure showed {unknown}")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1371,6 +1476,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_chip_and_device_lock(app)
     check_verify_after_write(app)
     check_progress(app)
     check_cancel(app)

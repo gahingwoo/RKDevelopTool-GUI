@@ -7,6 +7,7 @@ import sys
 import shutil
 import hashlib
 import subprocess
+import threading
 
 
 def _candidate_tool_dirs():
@@ -68,6 +69,12 @@ def _find_rkdeveloptool(use_saved=True):
 
 
 RKTOOL = _find_rkdeveloptool()
+
+# Held while something outside the command runner talks to the device (ppt,
+# rfi). The device poller only runs its own device-opening `rci` when it can
+# take this without waiting; otherwise that poll just enumerates. Two
+# rkdeveloptool processes opening the board at once make one of them fail.
+DEVICE_LOCK = threading.Lock()
 
 
 def auto_detected_rkdeveloptool():
@@ -165,7 +172,8 @@ def parse_chip_info(chip_text):
     """Parse chip info and return readable chip name in RKxxxx format
     
     Handles multiple formats:
-    - ASCII byte sequences: "36 37 35 33..." (decimal ASCII codes) -> "6753" -> "RK3576"
+    - rkdeveloptool rci output: "Chip Info: 36 37 35 33 ..." (hex ASCII bytes,
+      little-endian) -> "6753" reversed -> "RK3576"
     - Hex IDs: "0x330A" -> "RK3588"
     - Direct names: "RK3399" -> "RK3399"
     """
@@ -173,29 +181,23 @@ def parse_chip_info(chip_text):
         return "Unknown Chip"
 
     chip_text = chip_text.strip()
-    
-    # Try to parse ASCII byte sequence (rkdeveloptool rci format)
-    # Example: "36 37 35 33..." where each number is ASCII decimal code
-    # 36=ASCII('6'), 37=ASCII('7'), 35=ASCII('5'), 33=ASCII('3')
-    if ' ' in chip_text:
+
+    # rkdeveloptool rci prints "Chip Info: 36 37 35 33 0 0 ...": the 16 chip
+    # info bytes in unpadded hex (RKLog PrintBuffer, "%X"). The first four
+    # are the chip number in ASCII, stored little-endian: 36 37 35 33 is
+    # "6753", read backwards "3576", an RK3576.
+    body = re.sub(r'^\s*Chip Info:\s*', '', chip_text, flags=re.I)
+    byte_parts = body.split()
+    if len(byte_parts) >= 4 and all(re.fullmatch(r'[0-9A-Fa-f]{1,2}', b) for b in byte_parts[:4]):
         try:
-            byte_parts = chip_text.split()[:4]  # Take first 4 parts
-            chip_id_str = ''
-            for b in byte_parts:
-                ascii_val = int(b)
-                # Convert ASCII code to character, and keep only digits
-                char = chr(ascii_val)
-                if char.isdigit():
-                    chip_id_str += char
-            
-            if chip_id_str and len(chip_id_str) >= 3:
-                # Check if it matches our ASCII chip map
-                if chip_id_str in ASCII_CHIP_MAP:
-                    return ASCII_CHIP_MAP[chip_id_str]
-                else:
-                    return f"RK{chip_id_str}"  # Default to RKxxxx format
-        except (ValueError, OverflowError):
-            pass
+            raw = "".join(chr(int(b, 16)) for b in byte_parts[:4])
+        except ValueError:
+            raw = ""
+        if raw in ASCII_CHIP_MAP:
+            return ASCII_CHIP_MAP[raw]
+        number = raw[::-1]
+        if re.fullmatch(r'[0-9A-Za-z]{4}', number):
+            return f"RK{number.upper()}"
 
     # Try to extract chip ID in hex format
     match = re.search(r'0x[0-9A-Fa-f]+', chip_text)
