@@ -1598,6 +1598,61 @@ def check_storage_not_switched(app):
         errors.append("find_readback_filler reported filler for a one-byte difference")
 
 
+def check_fetch_loader(app):
+    """'Get Loader for This Chip' needs a recognised chip, builds the Loader
+    from rkbin (a local copy here) and fills in the Loader field."""
+    from rkdeveloptool_gui import loader_fetch
+    from rkdeveloptool_gui import operations as ops
+
+    rkbin = tempfile.mkdtemp(dir=_tmp)
+    files = {
+        "RKBOOT/RK3576MINIALL.ini": (
+            "[CHIP_NAME]\nNAME=RK3576\n[VERSION]\nMAJOR=1\nMINOR=1\n"
+            "[CODE471_OPTION]\nNUM=1\nPath1=bin/ddr.bin\nSleep=1\n"
+            "[CODE472_OPTION]\nNUM=1\nPath1=bin/usbplug.bin\n"
+            "[LOADER_OPTION]\nNUM=2\nLOADER1=FlashData\nLOADER2=FlashBoot\n"
+            "FlashData=bin/ddr.bin\nFlashBoot=bin/spl.bin\n"
+            "[OUTPUT]\nPATH=rk3576_loader_test.bin\n[SYSTEM]\nNEWIDB=true\n").encode(),
+        "bin/ddr.bin": b"D" * 3000, "bin/usbplug.bin": b"U" * 5000, "bin/spl.bin": b"S" * 7000,
+    }
+    for name, data in files.items():
+        os.makedirs(os.path.dirname(os.path.join(rkbin, name)), exist_ok=True)
+        with open(os.path.join(rkbin, name), "wb") as f:
+            f.write(data)
+    cache = tempfile.mkdtemp(dir=_tmp)
+    os.environ[loader_fetch.URL_ENV] = "file://" + rkbin + "/"
+    real_cache = ops.loader_cache_dir
+    ops.loader_cache_dir = lambda: cache
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.update_device_status()
+        if window.fetch_loader_btn.isEnabled():
+            errors.append("Get Loader is enabled with no board connected")
+        window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
+                               "Maskrom", "Chip Info: 36 37 35 33 0 0 0 0")
+        if not window.fetch_loader_btn.isEnabled():
+            errors.append("Get Loader is disabled for a recognised RK3576")
+        window.loader_path.setText("")
+        window.fetch_loader_btn.click()
+        worker = window._loader_fetch_worker
+        worker.wait(10000)
+        for _ in range(20):
+            app.processEvents()
+        want = os.path.join(cache, "rk3576_loader_test.bin")
+        if window.loader_path.text() != want or not os.path.isfile(want):
+            errors.append(f"Get Loader filled in {window.loader_path.text()!r}, not {want!r}")
+        if not window.fetch_loader_btn.isEnabled():
+            errors.append("Get Loader stays disabled after it finished")
+    finally:
+        del os.environ[loader_fetch.URL_ENV]
+        ops.loader_cache_dir = real_cache
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1624,6 +1679,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
     check_chip_and_device_lock(app)

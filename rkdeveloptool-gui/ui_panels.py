@@ -242,11 +242,15 @@ def create_download_tab(gui):
     load_btn = QPushButton()
     load_btn.setProperty("class", "primary")
     load_btn.clicked.connect(safe_slot(lambda: operations.load_loader(gui)))
+    # Builds the Loader for the connected chip from Rockchip's rkbin.
+    fetch_btn = QPushButton()
+    fetch_btn.clicked.connect(safe_slot(lambda: operations.fetch_loader(gui)))
 
     loader_layout.addWidget(loader_label, 0, 0)
     loader_layout.addWidget(loader_path, 0, 1)
     loader_layout.addWidget(loader_browse, 0, 2)
     loader_layout.addWidget(auto_load, 1, 0)
+    loader_layout.addWidget(fetch_btn, 1, 1, Qt.AlignmentFlag.AlignRight)
     loader_layout.addWidget(load_btn, 1, 2)
 
     loader_group.setLayout(loader_layout)
@@ -324,6 +328,7 @@ def create_download_tab(gui):
         'loader_browse': loader_browse,
         'auto_load': auto_load,
         'load_btn': load_btn,
+        'fetch_btn': fetch_btn,
         'image_group': image_group,
         'image_path': image_path,
         'image_browse': image_browse,

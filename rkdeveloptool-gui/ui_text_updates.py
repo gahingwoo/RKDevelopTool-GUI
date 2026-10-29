@@ -89,6 +89,7 @@ def update_download_tab_texts(gui):
     gui.loader_browse_btn.setText(gui.tr("browse_btn"))
     gui.auto_load_loader.setText(gui.tr("auto_load_loader"))
     gui.load_loader_btn.setText(gui.tr("load_loader_btn"))
+    gui.fetch_loader_btn.setText(gui.tr("fetch_loader_btn"))
 
     gui.image_group.setTitle(gui.tr("custom_image_group"))
     gui.image_label.setText(gui.tr("image_file_placeholder"))
