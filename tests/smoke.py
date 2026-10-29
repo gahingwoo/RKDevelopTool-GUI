@@ -1050,6 +1050,116 @@ def check_disconnect_during_write(app):
         app.processEvents()
 
 
+def check_cancel(app):
+    """Cancel: shown only while something runs, confirms before abandoning a
+    write, and reports a cancelled write as possibly partial."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import rkfw
+    from rkdeveloptool_gui.workers import RKFWPrepWorker
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.show()
+
+    class FakeWorker:
+        def __init__(self, key):
+            self.description_key, self.output, self.killed = key, "", 0
+
+        def terminate_process(self):
+            self.killed += 1
+
+    asked, shown = [], []
+    answer = [QMessageBox.StandardButton.Yes]
+    real = (QMessageBox.warning, QMessageBox.exec, ops._show_rkfw_message)
+    QMessageBox.warning = staticmethod(lambda *a, **k: asked.append(a[1]) or answer[0])
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    ops._show_rkfw_message = lambda gui, title, text, icon="Critical": shown.append(title)
+    try:
+        def start(key):
+            window.command_worker = FakeWorker(key)
+            window._command_active = True
+            window._cancel_requested = False
+            window._update_poll_mode()
+            app.processEvents()
+            return window.command_worker
+
+        window._command_active = False
+        window._update_poll_mode()
+        if window.cancel_btn.isVisible():
+            errors.append("Cancel is visible with nothing running")
+
+        # A read: stopped without asking, nothing to report afterwards.
+        w = start("reading_flash")
+        if not window.cancel_btn.isVisible():
+            errors.append("Cancel isn't shown while a command runs")
+        asked.clear(); shown.clear()
+        window.cancel_current()
+        window.on_command_finished(False, "killed")
+        if asked or w.killed != 1 or shown:
+            errors.append(f"cancelling a read: asked={asked}, killed={w.killed}, dialogs={shown}")
+
+        # A write, declined: nothing happens.
+        w = start("burning")
+        answer[0] = QMessageBox.StandardButton.No
+        asked.clear()
+        window.cancel_current()
+        if len(asked) != 1 or w.killed:
+            errors.append(f"declining to cancel a write still stopped it (asked={asked}, killed={w.killed})")
+
+        # A write, confirmed: stopped, reported as possibly partial, and not
+        # explained as a failure.
+        answer[0] = QMessageBox.StandardButton.Yes
+        asked.clear(); shown.clear()
+        window.cancel_current()
+        w.output = "Write LBA failed!"
+        window.on_command_finished(False, "killed")
+        if w.killed != 1 or asked != ["Cancel flashing?", "Flashing cancelled"] or shown:
+            errors.append(f"cancelling a write: killed={w.killed}, asked={asked}, dialogs={shown}")
+        if window.cancel_btn.isVisible():
+            errors.append("Cancel stayed visible after the command ended")
+
+        # Between two RKFW steps: the next step never starts.
+        window._command_active = False
+        ran = []
+        real_run = window.run_command
+        window.run_command = lambda *a, **k: ran.append(a)
+        window._cancel_requested = True
+        tmp = tempfile.mkdtemp(dir=_tmp)
+        shown.clear()
+        ops._run_rkfw_steps(window, [(["x"], "importing_gpt", "gpt")], 0, tmp)
+        window.run_command = real_run
+        if ran or shown != ["cancelled_partial_title"] or os.path.exists(tmp):
+            errors.append(f"cancel between RKFW steps: ran={ran}, dialogs={shown}")
+    finally:
+        QMessageBox.warning, QMessageBox.exec, ops._show_rkfw_message = real
+        window._command_active = False
+        window.command_worker = None
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+    # The RKFW verify/unpack pass stops when asked, and says it was cancelled.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import rkfw_layouts
+    image = os.path.join(tempfile.mkdtemp(dir=_tmp), "update.img")
+    rkfw_layouts.build(image, [("parameter", "parameter.txt", b"CMDLINE: x\n"),
+                               ("boot", "Image/boot.img", os.urandom(1 << 20))])
+    info = rkfw.parse_rkfw_header(image)
+    rkaf = rkfw.parse_rkaf_header(image, info.fw_offset, info.fw_size)
+    outcome = []
+    prep = RKFWPrepWorker(image, info, rkaf, tempfile.mkdtemp(dir=_tmp),
+                          TranslationManager(lang="en"))
+    prep.failed.connect(lambda kind, msg: outcome.append(kind))
+    prep.finished.connect(lambda paths: outcome.append("finished"))
+    prep.stop()
+    prep.run()
+    if outcome != ["cancelled"]:
+        errors.append(f"stopping the RKFW prep worker gave {outcome}, not cancelled")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1076,6 +1186,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_cancel(app)
     check_disconnect_during_write(app)
     check_failure_guidance(app)
     check_preflight(app)

@@ -360,6 +360,11 @@ class RKFWPrepWorker(QThread):
         self.tmp_dir = tmp_dir
         self.manager = manager
         self.verify_crc = verify_crc
+        self._stop = False
+
+    def stop(self):
+        """Ask the verify/unpack pass to stop at its next chunk."""
+        self._stop = True
 
     def tr(self, key):
         return self.manager.tr(key)
@@ -418,6 +423,8 @@ class RKFWPrepWorker(QThread):
         last_pct = [-1]
 
         def progress_cb(delta):
+            if self._stop:
+                raise rkfw.RKFWError("cancelled")
             done[0] += delta
             pct = int(done[0] * 100 // total) if total > 0 else 0
             pct = min(pct, 99)
@@ -441,7 +448,7 @@ class RKFWPrepWorker(QThread):
                 self.log.emit(f"[INFO] {label} ...")
                 extract(progress_cb)
         except (rkfw.RKFWError, OSError) as e:
-            self.failed.emit('error', str(e))
+            self.failed.emit('cancelled' if self._stop else 'error', str(e))
             return
 
         self.progress.emit(100)

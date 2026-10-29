@@ -54,6 +54,7 @@ def update_home_tab_texts(gui):
     gui.equiv_command_label.setText(gui.tr("equiv_command_label"))
     gui.equiv_command_copy_btn.setText(gui.tr("copy_btn"))
     gui.run_command_btn.setText(gui.tr("run_btn"))
+    gui.cancel_btn.setText(gui.tr("cancel_btn"))
     gui.equiv_command_field.setPlaceholderText(gui.tr("manual_command_placeholder"))
     if hasattr(gui, 'settings_page'):
         gui.tab_widget.setTabText(gui.tab_widget.indexOf(gui.settings_page),
