@@ -828,9 +828,8 @@ def _start_loader(gui, cmd_type, loader_path):
             if success:
                 gui.loader_loaded = True
                 gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
-                # Re-detect storage types now that loader is loaded
-                # This allows hardware like SD cards and SSDs to be recognized
-                gui.log_message("[INFO] Re-detecting storage types...")
+                # Don't touch the storage target here: switching it (cs) is
+                # what left an RK3576 refusing every read and write.
                 detect_supported_storage_types(gui)
             gui.on_command_finished(success, error_msg)
         
@@ -1071,16 +1070,35 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
 
         def compared(md5sum):
             gui._verify_hash_worker = None
-            finish()
             if md5sum and md5sum == expected_md5:
+                finish()
                 gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
                 _show_rkfw_message(gui, "verify_ok_title",
                                    gui.tr("verify_ok").format(name), "Information")
-            else:
+                return
+            # A mismatch may only mean the loader can't read part of the
+            # storage back; look for its filler before calling the write bad.
+            from .utils import find_readback_filler
+            scan = CallWorker(lambda: find_readback_filler(readback, path, size))
+            gui._verify_hash_worker = scan
+
+            def scanned(filler_at):
+                gui._verify_hash_worker = None
+                finish()
+                if isinstance(filler_at, int):
+                    where = format_file_size(filler_at)
+                    gui.log_message(f"[WARNING] {gui.tr('verify_unreliable_title')}: "
+                                    f"filler from {where}")
+                    _show_rkfw_message(gui, "verify_unreliable_title",
+                                       gui.tr("verify_unreliable_message").format(where), "Warning")
+                    return
                 gui.log_message(f"[ERROR] {gui.tr('verify_mismatch_title')}: "
                                 f"{md5sum or '?'} != {expected_md5}")
                 _show_rkfw_message(gui, "verify_mismatch_title",
                                    gui.tr("verify_mismatch_message").format(name))
+
+            scan.finished.connect(safe_slot(scanned))
+            scan.start()
 
         worker.finished.connect(safe_slot(compared))
         worker.start()
@@ -1281,121 +1299,31 @@ def confirm_burn_operation(gui, file_path, address):
                               address, current_storage_name, storage_info)
 
 
+# Storage types rkdeveloptool's `cs` accepts (1.32: EMMC, SD, SPINOR).
+STORAGE_TYPES = {
+    '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
+    '2': {'name': 'SD Card', 'code': '2', 'type': 'SD Card', 'enabled': True},
+    '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
+}
+
+
 def detect_supported_storage_types(gui):
+    """Offer the storage types rkdeveloptool can switch to.
+
+    This used to "detect" them by running `cs 1`, `cs 2` and `cs 9` in turn
+    whenever a loader came up. `cs` isn't a query: it switches the loader's
+    target, so the device was left on whichever ran last (an empty SD slot,
+    SPI NOR), and from then on every read and write was refused (err -8)
+    until the board went back through Maskrom. Found on an RK3576. The
+    storage is now only switched when the user asks, with Change Storage.
     """
-    Detect supported storage types by testing each one.
-    Only initializes storage types that the device actually supports.
-    
-    Note: Storage detection requires Loader to be loaded.
-    In Maskrom mode without Loader, only fallback types will be available.
-    
-    Supported storage types depend on rkdeveloptool version and device hardware:
-    - rkdeveloptool 1.32: EMMC (1), SD (2), SPINOR (9)
-    """
+    if getattr(gui, '_supported_storages', None):
+        return
+    gui._supported_storages = {code: dict(info) for code, info in STORAGE_TYPES.items()}
     try:
-        if not hasattr(gui, '_supported_storages'):
-            # Storage types supported by rkdeveloptool 1.32
-            # These are the officially documented storage types
-            all_types = {
-                '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash'},
-                '2': {'name': 'SD Card', 'code': '2', 'type': 'SD Card'},
-                '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash'},
-                # For newer rkdeveloptool versions (uncomment if your version supports these):
-                # '3': {'name': 'UFS', 'code': '3', 'type': 'Universal Flash Storage'},
-                # '4': {'name': 'NAND', 'code': '4', 'type': 'NAND Flash'},
-                # '10': {'name': 'NVMe SSD', 'code': '10', 'type': 'NVMe Solid State Drive'},
-            }
-            
-            # Start with empty dict - will be populated by detection
-            gui._supported_storages = {}
-            
-            # Check if device is in Maskrom mode without Loader
-            # In this mode, storage detection won't work
-            is_maskrom_no_loader = (
-                hasattr(gui, 'device_mode') and 'Maskrom' in gui.device_mode and
-                hasattr(gui, 'loader_loaded') and not gui.loader_loaded
-            )
-            
-            if is_maskrom_no_loader:
-                gui.log_message("[WARNING] Device in Maskrom mode - load firmware to detect storage types")
-                # Use default types that are most likely available
-                gui._supported_storages = {
-                    '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
-                    '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
-                }
-            else:
-                # Test which storage types are actually available
-                # by attempting to switch to each one
-                available = []
-                for code, info in all_types.items():
-                    try:
-                        env = os.environ.copy()
-                        env['NO_COLOR'] = '1'
-                        env['CLICOLOR'] = '0'
-                        env['CLICOLOR_FORCE'] = '0'
-                        result = subprocess.run(
-                            [RKTOOL, "cs", code],
-                            capture_output=True,
-                            text=True,
-                            timeout=3,
-                            env=env
-                        )
-                        output = (result.stdout or "") + (result.stderr or "")
-                        
-                        # Check for explicit success or failure
-                        has_not_available = "is not available" in output
-                        has_ok = "Change Storage OK" in output
-                        
-                        # Success if has "OK" or no "not available" message
-                        is_success = has_ok or (not has_not_available and result.returncode == 0)
-                        
-                        if is_success and not has_not_available:
-                            gui._supported_storages[code] = {
-                                'name': info['name'],
-                                'code': code,
-                                'type': info['type'],
-                                'enabled': True
-                            }
-                            available.append(f"{info['name']} ({code})")
-                            gui.log_message(f"Storage {code}: {info['name']}")
-                        else:
-                            # Only log if explicitly not available
-                            if has_not_available:
-                                gui.log_message(f"Storage {code}: {info['name']} not available")
-                    except Exception as e:
-                        gui.log_message(f"Storage {code} error: {str(e)[:50]}")
-                
-                if available:
-                    gui.log_message(f"[INFO] Detected {len(available)} storage type(s): {', '.join(available)}")
-                elif gui._supported_storages:
-                    # Some were added despite errors
-                    gui.log_message(f"[INFO] Detected storage types: {', '.join([info['name'] for info in gui._supported_storages.values()])}")
-                else:
-                    # No storage detected - use defaults
-                    gui._supported_storages = {
-                        '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
-                        '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
-                    }
-                    gui.log_message("[INFO] Using default storage types (EMMC, SPI NOR)")
-                    gui.log_message("[INFO] If your device has other storage, check:")
-                    gui.log_message("   - Is eMMC/SD physically installed on the board?")
-                    gui.log_message("   - Is rkdeveloptool up to date? (current: 1.32)")
-        
-        # Update UI combo box with detected types
         update_storage_combo(gui)
-    except Exception as e:
-        # Fallback to basic types if detection fails
-        import sys
-        print(f"Warning: Storage detection failed: {e}", file=sys.stderr)
-        if not hasattr(gui, '_supported_storages'):
-            gui._supported_storages = {
-                '1': {'name': 'EMMC', 'code': '1', 'type': 'eMMC Flash', 'enabled': True},
-                '9': {'name': 'SPI NOR', 'code': '9', 'type': 'SPI NOR Flash', 'enabled': True},
-            }
-        try:
-            update_storage_combo(gui)
-        except (AttributeError, RuntimeError) as e:
-            print(f"Warning: Failed to update storage combo: {e}")
+    except (AttributeError, RuntimeError) as e:
+        print(f"Warning: Failed to update storage combo: {e}")
 
 
 def update_storage_combo(gui):

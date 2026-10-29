@@ -401,6 +401,32 @@ def classify_image_file(file_path):
     return 'other'
 
 
+READBACK_FILLER = b"\xcc" * 512
+
+
+def find_readback_filler(readback, image, size, chunk=4 << 20):
+    """Byte offset of the first sector that read back as filler (all 0xCC)
+    where the image has something else, or None.
+
+    Some loaders (seen on an RK3576 with rkdeveloptool 1.32) return 0xCC
+    instead of data for reads past a point, though writes there land fine;
+    a readback comparison can't tell anything about that range.
+    """
+    with open(readback, "rb") as rb, open(image, "rb") as im:
+        offset = 0
+        while offset < size:
+            a = rb.read(min(chunk, size - offset))
+            b = im.read(len(a))
+            if not a:
+                break
+            if a != b:
+                for i in range(0, len(a) - 511, 512):
+                    if a[i:i + 512] == READBACK_FILLER and b[i:i + 512] != READBACK_FILLER:
+                        return offset + i
+            offset += len(a)
+    return None
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:

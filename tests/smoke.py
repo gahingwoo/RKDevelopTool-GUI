@@ -781,9 +781,11 @@ def check_failure_guidance(app):
         "Write LBA failed, err=-1, can't open file: /x.img": "file_open",
         "Creating Comm Object failed!": "cannot_open",
         "Write LBA quit, creating comm object failed!": "cannot_open",
-        "Write LBA failed!": "write_failed",
+        "Write LBA from file (37%)\nWrite LBA failed!": "write_failed",
+        "Write LBA failed!": "rejected",
+        "Read LBA failed!": "rejected",
         "Writing master gpt failed!": "write_failed",
-        "Read LBA failed!": "read_failed",
+        "Read LBA to file (12%)\nRead LBA failed!": "read_failed",
         "Not found any partition table!": "no_partition_table",
         "Parse parameter failed!": "bad_parameter_file",
         "Change Storage failed!": "storage_switch",
@@ -803,7 +805,7 @@ def check_failure_guidance(app):
 
     tr = TranslationManager(lang="en").tr
     with_rule = failures.explain(tr, "Creating Comm Object failed!", "sudo tee RULE")
-    write = failures.explain(tr, "Write LBA failed!", "sudo tee RULE")
+    write = failures.explain(tr, "Write LBA from file (5%)\nWrite LBA failed!", "sudo tee RULE")
     if not with_rule or "sudo tee RULE" not in with_rule[1]:
         errors.append("the Linux udev command isn't offered for a device that can't be opened")
     if not write or "sudo tee RULE" in write[1]:
@@ -832,9 +834,9 @@ def check_failure_guidance(app):
             window.on_command_finished(False, "failed")
             return list(shown)
 
-        if finish("Write LBA failed!") != ["Writing failed"]:
+        if finish("Write LBA from file (40%)\nWrite LBA failed!") != ["Writing failed"]:
             errors.append(f"write failure dialog: {shown}")
-        if finish("Write LBA failed!", rkfw=True):
+        if finish("Write LBA from file (40%)\nWrite LBA failed!", rkfw=True):
             errors.append("a failure during an RKFW flash popped its own dialog")
         hint = finish("Reading Flash Info failed!", mode="Maskrom", loaded=False)
         if len(hint) != 1 or "Reading device information failed" in hint[0]:
@@ -1287,7 +1289,7 @@ def check_verify_after_write(app):
                       "when blocked), choice remembered: "
                       f"{window.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, '')}")
 
-    def run_burn(verify, corrupt=False, address="0x0"):
+    def run_burn(verify, corrupt=False, address="0x0", filler_from=None):
         commands, reports, cleaned, offered = [], [], [], []
 
         def fake_confirm(gui, path, addr, on_confirm, on_cancel=None, offer_verify=False):
@@ -1303,6 +1305,8 @@ def check_verify_after_write(app):
                 back = bytearray(data + b"\xff" * (sectors * 512 - len(data)))
                 if corrupt:
                     back[100] ^= 0xFF
+                if filler_from is not None:
+                    back[filler_from:] = b"\xcc" * (len(back) - filler_from)
                 with open(cmd[4], "wb") as f:
                     f.write(back)
             if callback:
@@ -1333,6 +1337,10 @@ def check_verify_after_write(app):
     commands, reports, _, _ = run_burn(verify=True, corrupt=True)
     if reports != ["verify_mismatch_title"]:
         errors.append(f"a corrupted readback was reported as {reports}")
+    commands, reports, _, leftovers = run_burn(verify=True, filler_from=1024)
+    if reports != ["verify_unreliable_title"] or leftovers:
+        errors.append(f"a readback that turns to 0xCC filler was reported as {reports} "
+                      f"(temp left {leftovers})")
     commands, reports, _, _ = run_burn(verify=False)
     if commands != [["wl", "0x0"]] or reports:
         errors.append(f"verify off: commands {commands}, reports {reports}")
@@ -1526,6 +1534,49 @@ def check_gpt_import_export(app):
         app.processEvents()
 
 
+def check_storage_not_switched(app):
+    """Storage types are offered without running `cs`: switching the target
+    to probe it left an RK3576 refusing every read and write."""
+    import subprocess as sp
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import find_readback_filler
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran = []
+    real_run = ops.subprocess.run
+    ops.subprocess.run = lambda cmd, *a, **k: ran.append(cmd) or sp.CompletedProcess(cmd, 0, "Change Storage OK.", "")
+    try:
+        if hasattr(window, '_supported_storages'):  # as on a fresh connection
+            del window._supported_storages
+        window.device_mode, window.loader_loaded = "Loader", True
+        ops.detect_supported_storage_types(window)
+    finally:
+        ops.subprocess.run = real_run
+    names = [window.change_storage_combo.itemText(i) for i in range(window.change_storage_combo.count())]
+    if ran or names != ["EMMC", "SD Card", "SPI NOR"]:
+        errors.append(f"storage detection ran {ran} and offered {names}")
+    window.cleanup()
+    window.deleteLater()
+    app.processEvents()
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image, back = os.path.join(work, "i.img"), os.path.join(work, "b.bin")
+    data = os.urandom(8 << 20)
+    with open(image, "wb") as f:
+        f.write(data)
+    with open(back, "wb") as f:
+        f.write(data[:5 << 20] + b"\xcc" * (3 << 20))
+    if find_readback_filler(back, image, len(data)) != 5 << 20:
+        errors.append("find_readback_filler missed filler starting at 5 MiB")
+    with open(back, "wb") as f:
+        f.write(data[:100] + b"\x00" + data[101:])
+    if find_readback_filler(back, image, len(data)) is not None:
+        errors.append("find_readback_filler reported filler for a one-byte difference")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1552,6 +1603,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_storage_not_switched(app)
     check_gpt_import_export(app)
     check_chip_and_device_lock(app)
     check_verify_after_write(app)
