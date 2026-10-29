@@ -49,8 +49,10 @@ class RealtimeLogWidget(QWidget):
         self.log_display.setFont(self.mono_font)
         self.log_display.setMinimumHeight(150)
         
-        # Progress bar section
-        progress_layout = QHBoxLayout()
+        # Progress row. The main window places it under the scroll area, so
+        # it stays at the bottom of the window however the tabs scroll.
+        self.progress_row = QWidget()
+        progress_layout = QHBoxLayout(self.progress_row)
         progress_layout.setContentsMargins(0, 0, 0, 0)
         
         self.progress_label = QLabel("Progress: 0%")
@@ -86,7 +88,6 @@ class RealtimeLogWidget(QWidget):
         # Assemble layout
         layout.addLayout(button_layout)
         layout.addWidget(self.log_display)
-        layout.addLayout(progress_layout)
         
         self.setLayout(layout)
     
@@ -100,8 +101,7 @@ class RealtimeLogWidget(QWidget):
     def sizeHint(self):
         # The log takes whatever height is left (stretch 1 in the window), so
         # it has no "preferred" height of its own. Reporting a larger one made
-        # the right-hand scroll area taller than the window and scrolled the
-        # progress row out of view.
+        # the right-hand scroll area taller than the window.
         return self.minimumSizeHint()
 
     def add_log(self, message):
