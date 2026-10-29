@@ -1738,6 +1738,11 @@ class RKDevToolGUI(QMainWindow):
             except Exception:
                 pass
 
+            # A readback comparison hashes at most one image; let it finish.
+            hash_worker = getattr(self, '_verify_hash_worker', None)
+            if hash_worker is not None and hash_worker.isRunning():
+                hash_worker.wait(60000)
+
             # A capacity query for the pre-flight check times out after 6 s.
             capacity_worker = getattr(self, '_capacity_worker', None)
             if capacity_worker is not None and capacity_worker.isRunning():
