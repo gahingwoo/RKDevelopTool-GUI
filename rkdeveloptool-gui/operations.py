@@ -1817,31 +1817,34 @@ def unpack_firmware(gui):
 
 
 def export_gpt_table(gui):
+    """Save the device's partition table as a parameter file.
+
+    rkdeveloptool has no command that exports a GPT (`gpt` only writes one,
+    from a parameter file), so read the layout with `ppt` and write it out in
+    the parameter format, which Import GPT then accepts as is.
     """
-    Export GPT partition table from device to file
-    
-    Reads the current GPT partition table from the device and saves it
-    to a binary file for backup or analysis.
-    """
-    # Select output file path
+    from .utils import build_parameter_text
     output_path = app_settings.get_save_file(
-        gui,
-        gui.tr("save_gpt_table") if hasattr(gui, 'tr') else "Save GPT table",
-        "gpt.bin",
-        "Binary Files (*.bin);;All Files (*)"
-    )
+        gui, gui.tr("save_gpt_table"), "parameter.txt",
+        "Parameter (*.txt);;All Files (*)")
     if not output_path:
         return
-    
+
     def on_finished(success, output):
-        if success:
-            gui.log_message(f"[OK] {gui.tr('gpt_export_complete') if hasattr(gui, 'tr') else 'GPT table exported'}: {output_path}")
-        else:
-            error_msg = output if output else "Unknown error"
-            gui.log_message(f"[ERROR] {gui.tr('gpt_export_failed') if hasattr(gui, 'tr') else 'GPT export failed'}: {error_msg}")
-    
-    gui.log_message(f"[INFO] {gui.tr('exporting_gpt_table') if hasattr(gui, 'tr') else 'Exporting GPT table'}...")
-    gui.run_command([RKTOOL, "gpt", "export", output_path], "exporting_gpt", on_finished)
+        partitions = parse_partition_info(output or "") if success else {}
+        if not partitions:
+            gui.log_message(f"[ERROR] {gui.tr('gpt_export_failed')}")
+            return
+        try:
+            with open(output_path, "w") as f:
+                f.write(build_parameter_text(partitions))
+        except OSError as e:
+            gui.log_message(f"[ERROR] {gui.tr('gpt_export_failed')}: {e}")
+            return
+        gui.log_message(f"[OK] {gui.tr('gpt_export_complete')}: {output_path}")
+
+    gui.log_message(f"[INFO] {gui.tr('exporting_gpt_table')}...")
+    gui.run_command([RKTOOL, "ppt"], "exporting_gpt", on_finished)
 
 
 def import_gpt_table(gui):
@@ -1855,11 +1858,14 @@ def import_gpt_table(gui):
     input_file = gui.gpt_path.text().strip() if hasattr(gui, 'gpt_path') else ""
     if not os.path.isfile(input_file):
         input_file = app_settings.get_open_file(
-            gui,
-            gui.tr("select_gpt_file") if hasattr(gui, 'tr') else "Select GPT table file",
-            "Binary Files (*.bin);;All Files (*)"
-        )
+            gui, gui.tr("select_gpt_file"), "Parameter (*.txt);;All Files (*)")
     if not input_file or not os.path.exists(input_file):
+        return
+    # `rkdeveloptool gpt` builds the GPT from a parameter file's mtdparts
+    # line; anything else (a raw .bin) would just fail after the warnings.
+    from .utils import parameter_has_mtdparts
+    if not parameter_has_mtdparts(input_file):
+        gui.show_message("gpt_import_failed", "gpt_not_parameter", "Warning")
         return
     
     # First confirmation dialog
@@ -1899,7 +1905,7 @@ def import_gpt_table(gui):
             gui.log_message(f"[ERROR] {gui.tr('gpt_import_failed') if hasattr(gui, 'tr') else 'GPT import failed'}: {error_msg}")
     
     gui.log_message(f"[INFO] {gui.tr('importing_gpt_table') if hasattr(gui, 'tr') else 'Importing GPT table'}...")
-    gui.run_command([RKTOOL, "gpt", "import", input_file], "importing_gpt", on_finished)
+    gui.run_command([RKTOOL, "gpt", input_file], "importing_gpt", on_finished)
 
 
 def read_device_params(gui):

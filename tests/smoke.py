@@ -1458,6 +1458,82 @@ def check_chip_and_device_lock(app):
         errors.append(f"an unexplained partition read failure showed {unknown}")
 
 
+def check_gpt_import_export(app):
+    """Import GPT runs `rkdeveloptool gpt <parameter file>` (it has no import or
+    export subcommands); Export GPT writes a parameter file from `ppt` that
+    Import accepts."""
+    import re
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import settings as app_settings
+    from rkdeveloptool_gui import utils
+
+    # `rkdeveloptool ppt` output, as print_gpt prints it.
+    ppt = ("**********Partition Info(GPT)**********\r\n"
+           "NO  LBA       Name                \r\n"
+           "00  00004000  uboot\r\n"
+           "01  00006000  misc\r\n"
+           "02  00008000  boot\r\n"
+           "03  00040000  rootfs\r\n")
+    text = utils.build_parameter_text(utils.parse_partition_info(ppt))
+    line = next(l for l in text.splitlines() if "mtdparts" in l)
+    entries = line.split(":", 2)[2].split(",")
+    want = ["0x00002000@0x00004000(uboot)", "0x00002000@0x00006000(misc)",
+            "0x00038000@0x00008000(boot)", "-@0x00040000(rootfs:grow)"]
+    if entries != want:
+        errors.append(f"parameter text from ppt: {entries}")
+    # Every entry in the form rkdeveloptool's parse_parameter reads.
+    if not all(re.fullmatch(r"(0x[0-9a-f]+|-)@0x[0-9a-f]+\([^)]+\)", e) for e in entries):
+        errors.append(f"parameter entries not in size@offset(name) form: {entries}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    work = tempfile.mkdtemp(dir=_tmp)
+    exported = os.path.join(work, "parameter.txt")
+    ran, shown = [], []
+
+    def fake_run(cmd, key, callback=None):
+        ran.append(cmd[1:])
+        if callback:
+            callback(True, ppt if cmd[1] == "ppt" else "")
+
+    real = (app_settings.get_save_file, app_settings.get_open_file, window.run_command,
+            window.show_message, QMessageBox.exec)
+    app_settings.get_save_file = lambda *a, **k: exported
+    app_settings.get_open_file = lambda *a, **k: ""
+    window.run_command = fake_run
+    window.show_message = lambda title, msg, icon="Information": shown.append(msg)
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
+    try:
+        ops.export_gpt_table(window)
+        if ran != [["ppt"]] or not utils.parameter_has_mtdparts(exported):
+            errors.append(f"Export GPT ran {ran}; wrote a parameter file: "
+                          f"{os.path.exists(exported) and utils.parameter_has_mtdparts(exported)}")
+
+        ran.clear()
+        binary = os.path.join(work, "gpt.bin")
+        with open(binary, "wb") as f:
+            f.write(b"EFI PART" + b"\0" * 504)
+        window.gpt_path.setText(binary)
+        ops.import_gpt_table(window)
+        if ran or shown != ["gpt_not_parameter"]:
+            errors.append(f"importing a non-parameter file: ran {ran}, messages {shown}")
+
+        window.gpt_path.setText(exported)
+        ops.import_gpt_table(window)
+        if ran != [["gpt", exported]]:
+            errors.append(f"Import GPT ran {ran}, want ['gpt', <parameter file>]")
+    finally:
+        (app_settings.get_save_file, app_settings.get_open_file, window.run_command,
+         window.show_message, QMessageBox.exec) = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_storage_not_switched(app):
     """Storage types are offered without running `cs`: switching the target
     to probe it left an RK3576 refusing every read and write."""
@@ -1528,6 +1604,7 @@ def main():
 
     check_translations()
     check_storage_not_switched(app)
+    check_gpt_import_export(app)
     check_chip_and_device_lock(app)
     check_verify_after_write(app)
     check_progress(app)

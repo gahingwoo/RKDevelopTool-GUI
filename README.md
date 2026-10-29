@@ -99,7 +99,7 @@ pip install dist/rkdeveloptool_gui-*.whl
 
 If you run from source instead of a prebuilt package, you need:
 
-- Python 3.8 or later, PySide6 (Qt 6 for Python)
+- Python 3.9 or later, PySide6 (Qt 6 for Python)
 - `rkdeveloptool` installed and on PATH — verify with `rkdeveloptool --version`
   ([installation instructions](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool))
 
