@@ -820,7 +820,7 @@ class RKDevToolGUI(QMainWindow):
             # Enable automatic theme detection
             if hasattr(self, 'theme_auto_manager'):
                 self.theme_auto_manager.enable_auto = True
-                self.theme_auto_manager.apply_system_theme()
+                self.theme_auto_manager.apply_system_theme(force=True)
         elif selected_theme:
             # Disable auto and apply selected theme
             if hasattr(self, 'theme_auto_manager'):
