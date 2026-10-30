@@ -125,6 +125,20 @@ def create_light_palette():
 # ============================================
 
 
+def status_color(role):
+    """A colour for "ok", "muted" or "danger" text that reads well on the
+    current palette, light or dark."""
+    palette = QApplication.palette()
+    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+    if role == "muted":
+        text = palette.color(QPalette.ColorRole.WindowText)
+        window = palette.color(QPalette.ColorRole.Window)
+        mix = [round(a * 0.6 + b * 0.4) for a, b in zip(text.getRgb()[:3], window.getRgb()[:3])]
+        return "#%02x%02x%02x" % tuple(mix)
+    colors = {"ok": ("#1e7e34", "#5fd07a"), "danger": ("#c62828", "#ff8a80")}
+    return colors[role][1 if dark else 0]
+
+
 class ThemeManager:
     """Manages application styles and themes"""
     

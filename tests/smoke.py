@@ -276,7 +276,7 @@ def check_burn_flow(app):
         app.quit()
 
     operations._burn_with_confirm = fake_confirm
-    operations._show_rkfw_message = lambda gui, title, text, icon="Critical": seen.update(refused=text)
+    operations._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: seen.update(refused=text)
     window.run_command = fake_run
     try:
         window.firmware_path.setText(src)
@@ -899,10 +899,28 @@ def check_preflight(app):
         window.current_device, window.device_mode, window.loader_loaded = device, mode, loaded
         return [status for status, _ in ops.preflight_checks(window, path, address, capacity)]
 
+    def with_loader_field(fn):
+        window.loader_path.setText(loader)
+        try:
+            return fn()
+        finally:
+            window.loader_path.setText("")
+
+    def with_chip(fn):
+        window.chip_info = "RK3576"
+        try:
+            return fn()
+        finally:
+            window.chip_info = "unknown_chip"
+
     P, W, F, U = ops.PASS, ops.WARN, ops.FAIL, ops.UNKNOWN
     cases = {
         "no device": (statuses(disk, "0x0", 1 << 20, device=None), [F, P, P]),
         "maskrom, no loader": (statuses(disk, "0x0", None, mode="Maskrom"), [P, F, P, U]),
+        "maskrom, Loader in the field": (with_loader_field(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
+        "maskrom, chip known": (with_chip(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
         "maskrom, loader loaded": (statuses(disk, "0x0", 1 << 20, mode="Maskrom", loaded=True),
                                    [P, P, P, P]),
         "loader at 0x0": (statuses(loader, "0x0", 1 << 20), [P, P, F, P]),
@@ -1100,7 +1118,7 @@ def check_cancel(app):
     real = (QMessageBox.warning, QMessageBox.exec, ops._show_rkfw_message)
     QMessageBox.warning = staticmethod(lambda *a, **k: asked.append(a[1]) or answer[0])
     QMessageBox.exec = lambda self: shown.append(self.text()) or 0
-    ops._show_rkfw_message = lambda gui, title, text, icon="Critical": shown.append(title)
+    ops._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: shown.append(title)
     try:
         def start(key):
             window.command_worker = FakeWorker(key)
@@ -1335,7 +1353,7 @@ def check_verify_after_write(app):
 
         real = (ops._burn_with_confirm, ops._show_rkfw_message, window.run_command)
         ops._burn_with_confirm = fake_confirm
-        ops._show_rkfw_message = lambda gui, title, text, icon="Critical": reports.append(title)
+        ops._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: reports.append(title)
         window.run_command = fake_run
         try:
             ops._burn_file(window, image, address,
@@ -1363,7 +1381,7 @@ def check_verify_after_write(app):
         errors.append(f"a readback that turns to 0xCC filler was reported as {reports} "
                       f"(temp left {leftovers})")
     commands, reports, _, _ = run_burn(verify=False)
-    if commands != [["wl", "0x0"]] or reports:
+    if commands != [["wl", "0x0"]] or reports != ["write_done_title"]:
         errors.append(f"verify off: commands {commands}, reports {reports}")
     _, _, offered, _ = run_burn(verify=False, address="boot")
     if offered != [False]:
@@ -1384,6 +1402,10 @@ def check_chip_and_device_lock(app):
 
     for text, want in (("Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3576"),  # a real RK3576
                        ("Chip Info: 38 38 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3588"),
+                       # "330A" and "330C" are RK3368's and RK3399's numbers.
+                       ("Chip Info: 41 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3368"),
+                       ("Chip Info: 43 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3399"),
+                       ("0x330A", "RK3368"),
                        ("36 37 35 33 0 0", "RK3576"),
                        ("RK3399", "RK3399"),
                        ("", "Unknown Chip")):
@@ -1843,7 +1865,10 @@ def check_fetch_loader(app):
             errors.append(f"chip shown as {window.chip_info_label.text()!r} for Pid 0x350e")
         window.loader_path.setText("")
         window.fetch_loader_btn.click()
-        worker = window._loader_fetch_worker
+        worker = getattr(window, '_loader_fetch_worker', None)
+        if worker is None:
+            errors.append("Get Loader didn't start")
+            return
         worker.wait(10000)
         for _ in range(20):
             app.processEvents()
@@ -1859,6 +1884,260 @@ def check_fetch_loader(app):
         window.cleanup()
         window.deleteLater()
         app.processEvents()
+
+
+def check_rkfw_read_back(app):
+    """After a full flash, each partition is read back at its offset from
+    the parameter file and compared; filler is "couldn't verify", a real
+    difference is reported by name."""
+
+
+def check_reset_after_write(app):
+    """A whole image written at 0x0 ends with a Reset Board button that
+    runs rd; a write elsewhere doesn't ask."""
+
+
+def check_loader_before_write(app):
+    """Writing in Maskrom without a Loader loads the one in the Loader
+    field first, re-checks the storage size, then writes."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import utils
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    param = os.path.join(work, "parameter.txt")
+    with open(param, "w") as f:
+        f.write("FIRMWARE_VER: 1.0\nCMDLINE: console=ttyS0 mtdparts=rk29xxnand:"
+                "0x00002000@0x00004000(uboot),-@0x00008000(rootfs:grow)\n")
+    if utils.parameter_partitions(param) != {"uboot": (0x4000, 0x2000), "rootfs": (0x8000, None)}:
+        errors.append(f"parameter_partitions: {utils.parameter_partitions(param)}")
+    parts = {}
+    for name, size in (("uboot", 3000), ("rootfs", 5000), ("misc", 700)):
+        parts[name] = os.path.join(work, name + ".img")
+        with open(parts[name], "wb") as f:
+            f.write(os.urandom(size))
+
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "disk.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, offered = [], []
+    loader = os.path.join(work, "loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, shown = [], []
+
+    def run(readbacks):
+        def fake_run(cmd, key, callback=None):
+            ran.append((cmd[1], cmd[2], cmd[3]))
+            name = {hex(0x4000): "uboot", hex(0x8000): "rootfs"}[cmd[2]]
+            with open(cmd[-1], "wb") as f:
+                f.write(readbacks[name])
+            QTimer.singleShot(0, lambda: callback(True, ""))
+        ran.clear()
+        shown.clear()
+        window.run_command = fake_run
+        window.command_worker = None
+        window._rkfw_read_back = True
+        window._rkfw_written = [("uboot", parts["uboot"]), ("rootfs", parts["rootfs"]),
+                                ("misc", parts["misc"])]
+        window._rkfw_parameter = param
+        window._rkfw_flashing = True
+        tmp = tempfile.mkdtemp(dir=work)
+        ops._verify_rkfw_parts(window, tmp)
+        end = time.time() + 10
+        while window._rkfw_flashing and time.time() < end:
+            app.processEvents()
+            time.sleep(0.005)
+
+    def data(name, pad=0):
+        with open(parts[name], "rb") as f:
+            return f.read() + b"\0" * pad
+
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append((self.windowTitle(), self.text())) or 0
+    try:
+        # uboot matches (the read is rounded up to whole sectors); rootfs
+        # reads back only filler; misc isn't in the table.
+        rootfs = b"\xcc" * 5120     # past the Loader's read limit from its start
+        run({"uboot": data("uboot", 72), "rootfs": rootfs})
+        if ran != [("rl", hex(0x4000), hex(6)), ("rl", hex(0x8000), hex(10))]:
+            errors.append(f"read back with {ran}")
+        text = shown[-1][1] if shown else ""
+        if not ("1 partition(s)" in text and "misc" in text
+                and f"rootfs ({window.tr('rkfw_read_back_filler_all')})" in text):
+            errors.append(f"read-back report: {shown}")
+
+        # A real difference names the partition.
+        bad = bytearray(data("uboot"))
+        bad[100] ^= 0xFF
+        run({"uboot": bytes(bad), "rootfs": data("rootfs")})
+        want = window.tr("rkfw_read_back_mismatch_message").format("uboot")
+        if not shown or not shown[-1][1].startswith(want):
+            errors.append(f"mismatch report: {shown}")
+        if window._rkfw_flashing or getattr(window, '_rkfw_verifying', False):
+            errors.append("the flash stays busy after reading back")
+    finally:
+        QMessageBox.exec = real_exec
+
+
+    def fake_run(cmd, key, callback=None):
+        ran.append(cmd[1])
+        QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+    def fake_exec(self):
+        buttons = {b.text(): b for b in self.buttons()}
+        offered.append(window.tr("reset_board_btn") in buttons)
+        if window.tr("reset_board_btn") in buttons:
+            buttons[window.tr("reset_board_btn")].click()
+        return QMessageBox.StandardButton.Yes
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command, QMessageBox.exec = fake_run, fake_exec
+    window.command_worker = None
+    window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+    try:
+        for address in ("0x0", "0x8000"):
+            ran.clear()
+            offered.clear()
+            ops._burn_file(window, disk, address, lambda p, a=address: [ops.RKTOOL, "wl", a, p])
+            end = time.time() + 5
+            while time.time() < end and "wl" not in ran:
+                app.processEvents()
+                time.sleep(0.01)
+            for _ in range(30):
+                app.processEvents()
+                time.sleep(0.005)
+            # offered[0] is the confirmation; the rest come after the write.
+            if address == "0x0" and (ran != ["wl", "rd"] or offered[1:] != [True]):
+                errors.append(f"whole image: ran {ran}, reset offered {offered}")
+            if address != "0x0" and (ran != ["wl"] or any(offered)):
+                errors.append(f"write at {address}: ran {ran}, reset offered {offered}")
+    finally:
+        window.run_command, QMessageBox.exec = real
+
+
+    real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+            ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS)
+    answers = [True]
+    ops._board_answers = lambda: answers.pop(0) if len(answers) > 1 else answers[0]
+    ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS = 3, 10
+    window.run_command = fake_run
+    window.command_worker = None
+    QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
+
+    def write_once(capacity):
+        ran.clear()
+        window.current_device, window.device_mode = "DevNo=1\tMaskrom", "Maskrom"
+        window.loader_loaded = False
+        window.loader_path.setText(loader)
+        ops.get_flash_capacity_bytes = lambda gui: (capacity, "test")
+        ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+        end = time.time() + 10
+        while time.time() < end and not ("wl" in ran or any("too big" in t for t in shown)):
+            app.processEvents()
+            time.sleep(0.01)
+        for _ in range(20):
+            app.processEvents()
+
+    try:
+        write_once(1 << 30)
+        if ran != ["db", "wl"] or not window.loader_loaded:
+            errors.append(f"write in Maskrom ran {ran}, loader_loaded {window.loader_loaded}")
+        write_once(1024)
+        if ran != ["db"]:
+            errors.append(f"an image too big once the size was known still ran {ran}")
+        # Refused right after db, answering on the next try (as an RK3576
+        # does): written. Never answering: not written.
+        answers[:] = [False, True]
+        write_once(1 << 30)
+        if ran != ["db", "wl"]:
+            errors.append(f"a board answering on the second try: ran {ran}")
+        answers[:] = [False]
+        shown.clear()
+        write_once(1 << 30)
+        end = time.time() + 3
+        while time.time() < end and not shown:
+            app.processEvents()
+            time.sleep(0.01)
+        if ran != ["db"] or not any(window.tr("loader_no_answer") in t for t in shown):
+            errors.append(f"a board that never answers: ran {ran}, said {shown}")
+    finally:
+        (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+         ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS) = real
+
+
+def check_rfi_capacity(app):
+    """The pre-flight storage size comes from real rfi output, exactly."""
+    import subprocess as sp
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import flash_capacity_bytes
+
+    out = ("Flash Info:\n\tManufacturer: SAMSUNG, value=00\n\tFlash Size: 29824 MB\n"
+           "\tFlash Size: 61079552 Sectors\n\tBlock Size: 512 KB\n")
+    if flash_capacity_bytes(out) != 61079552 * 512:
+        errors.append(f"flash_capacity_bytes: {flash_capacity_bytes(out)}")
+    if flash_capacity_bytes("Flash Size: 29824 MB") != 29824 * 1024 ** 2:
+        errors.append("flash_capacity_bytes ignores the MB line")
+    if flash_capacity_bytes("Read Flash Info failed!") is not None:
+        errors.append("flash_capacity_bytes found a size in a failure")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window._cached_flash_info = None
+    calls = []
+    real_run = ops.subprocess.run
+    ops.subprocess.run = lambda cmd, *a, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0, out, "")
+    try:
+        first = ops.get_flash_capacity_bytes(window)[0]
+        second = ops.get_flash_capacity_bytes(window)[0]
+    finally:
+        ops.subprocess.run = real_run
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if (first, second, len(calls)) != (61079552 * 512, 61079552 * 512, 1):
+        errors.append(f"capacity {first}, then cached {second}, {len(calls)} rfi call(s)")
+
+
+def check_idb_command():
+    """A NEWIDB Loader goes into the boot area as a verified bootloader
+    image at sector 0x40 (ul writes it in a layout an RK3576 rejects); an
+    old-format Loader still uses ul."""
+    import importlib.util
+    import time as _time
+
+    from rkdeveloptool_gui import operations as ops
+
+    spec = importlib.util.spec_from_file_location(
+        "loader_tests", os.path.join(os.path.dirname(os.path.abspath(__file__)), "loader_merge.py"))
+    source = open(spec.origin).read().split("\ncheck_new()\n")[0]
+    scope = {"__name__": "loader_tests"}
+    exec(compile(source, spec.origin, "exec"), scope)
+    lm = scope["loader_merge"]
+    work = tempfile.mkdtemp(dir=_tmp)
+    new = os.path.join(work, "new.bin")
+    old = os.path.join(work, "old.bin")
+    with open(new, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["NEW_INI"]), scope["NEW_BLOBS"].__getitem__, _time.localtime()))
+    with open(old, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["OLD_INI"]), scope["OLD_BLOBS"].__getitem__, _time.localtime()))
+    cmd = ops.loader_to_flash_command(new, work)
+    if cmd[1:3] != ["wl", "0x40"] or not os.path.isfile(cmd[3]):
+        errors.append(f"NEWIDB Loader written with {cmd}")
+    if ops.loader_to_flash_command(old, work)[1:] != ["ul", old]:
+        errors.append("an old-format Loader isn't written with ul")
 
 
 def check_command_chain(app):
@@ -1895,6 +2174,391 @@ def check_command_chain(app):
         app.processEvents()
 
 
+def check_flash_options(app):
+    """The Parameter tab's options take effect: verify shares the burn
+    confirmation's setting, erase runs ef before a whole image, reset runs
+    rd after it, retries set how often a full-flash step is retried, and
+    the timeout reaches the command worker."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "disk.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    s = window.settings
+    try:
+        window.verify_after_burn.setChecked(True)
+        if s.get_str(app_settings.KEY_VERIFY_AFTER_WRITE) != "1":
+            errors.append("Verify After Burn isn't the burn confirmation's setting")
+        window.timeout_spinbox.setValue(45)
+        window.retry_count_spinbox.setValue(0)
+        if (s.get_int(app_settings.KEY_IDLE_TIMEOUT), s.get_int(app_settings.KEY_STEP_RETRIES)) != (45, 0):
+            errors.append("timeout/retries aren't saved")
+
+        ran = []
+
+        def fake_run(cmd, key, callback=None):
+            ran.append(cmd[1])
+            QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+        real = (window.run_command, QMessageBox.exec)
+        window.run_command = fake_run
+        QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
+        window.command_worker = None
+        window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+        try:
+            for erase, reset, want in ((True, True, ["ef", "wl", "rd"]), (False, False, ["wl"])):
+                window.verify_after_burn.setChecked(False)
+                window.erase_before_burn.setChecked(erase)
+                window.reset_after_burn.setChecked(reset)
+                ran.clear()
+                ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+                end = time.time() + 5
+                while time.time() < end and len(ran) < len(want):
+                    app.processEvents()
+                    time.sleep(0.01)
+                for _ in range(30):
+                    app.processEvents()
+                    time.sleep(0.005)
+                if ran != want:
+                    errors.append(f"erase={erase} reset={reset}: ran {ran}, want {want}")
+            # Retries 0: a failed full-flash step isn't tried again.
+            ran.clear()
+            window.run_command = lambda cmd, key, cb=None: ran.append(cmd[1]) or QTimer.singleShot(
+                0, lambda: cb(False, "boom"))
+            real_msg = ops._show_rkfw_message
+            ops._show_rkfw_message = lambda *a, **k: None
+            tmp = tempfile.mkdtemp(dir=work)
+            window._rkfw_flashing = True
+            ops._run_rkfw_steps(window, [([ops.RKTOOL, "gpt", "x"], "importing_gpt", "gpt")], 0, tmp)
+            end = time.time() + 5
+            while time.time() < end and window._rkfw_flashing:
+                app.processEvents()
+                time.sleep(0.01)
+            ops._show_rkfw_message = real_msg
+            if ran != ["gpt"]:
+                errors.append(f"retries 0 still retried: {ran}")
+        finally:
+            window.run_command, QMessageBox.exec = real
+            window.reset_after_burn.setChecked(False)
+            window.erase_before_burn.setChecked(False)
+            window.verify_after_burn.setChecked(False)
+
+        # The timeout reaches the worker.
+        window.command_worker = None
+        window.run_command([RKTOOL, "ld"], "reading_flash_info")
+        timed = window.command_worker.idle_timeout
+        window.command_worker.wait(5000)
+        app.processEvents()
+        if timed != 45:
+            errors.append(f"idle timeout {timed}, want 45")
+
+        # ef reports "total N, current M" (sectors): that is its progress.
+        from rkdeveloptool_gui.workers import CommandWorker
+        worker = CommandWorker(["ef"], "erase_flash", window.manager)
+        if worker._extract_progress("Erase Flash total 61079552, current 30539776") != 50:
+            errors.append("ef's progress lines aren't read as progress")
+    finally:
+        s.set(app_settings.KEY_IDLE_TIMEOUT, str(app_settings.DEFAULT_IDLE_TIMEOUT_S))
+        s.set(app_settings.KEY_STEP_RETRIES, str(app_settings.DEFAULT_STEP_RETRIES))
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_idle_timeout(app):
+    """A command that stops printing is stopped after the idle timeout."""
+    from rkdeveloptool_gui.workers import CommandWorker
+
+    hang = os.path.join(_tmp, "hang.sh")
+    with open(hang, "w") as f:
+        f.write("#!/bin/sh\necho start\nsleep 30\n")
+    os.chmod(hang, 0o755)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    worker = CommandWorker([hang], "reading_flash_info", window.manager)
+    worker.idle_timeout = 2
+    got = []
+    worker.finished_signal.connect(lambda ok, msg: got.append(ok))
+    started = time.time()
+    worker.start()
+    worker.wait(15000)
+    app.processEvents()
+    took = time.time() - started
+    if got != [False] or not worker.timed_out or took > 10:
+        errors.append(f"idle timeout: result {got}, timed_out {worker.timed_out}, {took:.1f}s")
+    window.cleanup()
+    window.deleteLater()
+    app.processEvents()
+
+
+def check_partition_erase(app):
+    """Erase in a partition row writes zeros over the start of that
+    partition with wl (rkdeveloptool's ef can't erase one partition), and
+    No, the default, does nothing."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.partitions = {"boot": {"address": "0x4000", "size": "0x2000"},
+                         "rootfs": {"address": "0x8000", "size": "unknown"}}
+    ops.populate_partition_table(window)
+    ran, answer, defaults = [], [QMessageBox.StandardButton.Yes], []
+
+    def fake_run(cmd, key, callback=None):
+        ran.append((cmd[1], cmd[2], os.path.getsize(cmd[3]), key))
+        QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = fake_run
+    QMessageBox.exec = lambda self: defaults.append(self.defaultButton() is self.button(
+        QMessageBox.StandardButton.No)) or answer[0]
+    try:
+        row_buttons = [b.text() for b in window.partition_table.cellWidget(0, 3).findChildren(
+            __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)]
+        if window.tr("action_erase") not in row_buttons:
+            errors.append(f"partition row buttons: {row_buttons}")
+        ops.erase_partition(window, "boot")
+        ops.erase_partition(window, "rootfs")
+        answer[0] = QMessageBox.StandardButton.No
+        ops.erase_partition(window, "boot")
+        for _ in range(20):
+            app.processEvents()
+        want = [("wl", "0x4000", 0x2000 * 512, "erase_partition"),
+                ("wl", "0x8000", ops.ERASE_PARTITION_BYTES, "erase_partition")]
+        if ran != want or defaults != [True, True, True]:
+            errors.append(f"partition erase ran {ran}, No default {defaults}")
+    finally:
+        window.run_command, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_dangerous_confirmations(app):
+    """Erasing the whole storage needs "I understand" ticked before Erase
+    can be clicked, Cancel is the default, and the command is a bare ef.
+    Changing storage asks first, No by default."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import ui_panels
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, seen = [], []
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = lambda cmd, key, cb=None: ran.append(cmd[1:])
+
+    def erase_dialog(tick):
+        def fake(self):
+            erase = next(b for b in self.buttons() if b.text() == window.tr("erase_all_btn"))
+            seen.append((erase.isEnabled(), self.defaultButton() is self.button(
+                QMessageBox.StandardButton.Cancel)))
+            if tick:
+                self.checkBox().setChecked(True)
+            erase.click()
+            return 0
+        return fake
+
+    def answer(button):
+        def fake(self):
+            seen.append(self.defaultButton() is self.button(QMessageBox.StandardButton.No))
+            return button
+        return fake
+
+    try:
+        QMessageBox.exec = erase_dialog(tick=False)
+        ops.erase_all_storage(window)
+        QMessageBox.exec = erase_dialog(tick=True)
+        ops.erase_all_storage(window)
+        if ran != [["ef"]] or seen != [(False, True), (False, True)]:
+            errors.append(f"erase all: ran {ran}, (Erase enabled, Cancel default) {seen}")
+        ran.clear()
+        seen.clear()
+        if window.change_storage_combo.count():
+            QMessageBox.exec = answer(QMessageBox.StandardButton.No)
+            ui_panels.change_storage(window)
+            QMessageBox.exec = answer(QMessageBox.StandardButton.Yes)
+            ui_panels.change_storage(window)
+            if [r[0] for r in ran] != ["cs"] or seen != [True, True]:
+                errors.append(f"change storage: ran {ran}, No default {seen}")
+    finally:
+        window.run_command, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_translations_and_sizes(app):
+    """Dialog titles and the update.img confirmation are translated, and
+    partition sizes read as sizes, not sector counts."""
+    from rkdeveloptool_gui import operations as ops
+
+    zh = TranslationManager(lang="zh", settings=AppSettings())
+    for key in ("Warning", "Information", "rkfw_model", "rkfw_partitions"):
+        if zh.tr(key) == key:
+            errors.append(f"{key!r} has no Chinese text")
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.partitions = {"boot": {"address": "0x4000", "size": "0x2000"},
+                             "rootfs": {"address": "0x8000", "size": "unknown"}}
+        ops.populate_partition_table(window)
+        sizes = [window.partition_table.item(r, 2).text() for r in range(2)]
+        if sizes != ["4.00 MB", window.tr("partition_to_end")]:
+            errors.append(f"partition sizes shown as {sizes}")
+        if window.partition_table.minimumWidth() >= 760:
+            errors.append("the partition table still forces its width")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_tooltips_colors_shortcuts(app):
+    """Buttons keep their own tooltip once a device connects; status colours
+    follow a light or dark palette; Ctrl+N, Ctrl+L and Esc are there."""
+    from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
+
+    from rkdeveloptool_gui.themes import status_color
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    real_palette = app.palette()
+    try:
+        window.current_device = None
+        window._update_action_states()
+        if window.erase_flash_btn.toolTip() != window.tr("connect_device_first"):
+            errors.append(f"disconnected tooltip: {window.erase_flash_btn.toolTip()!r}")
+        window.current_device = "dev"
+        window._update_action_states()
+        if window.erase_flash_btn.toolTip() != window.tr("tip_erase_all"):
+            errors.append(f"connected tooltip: {window.erase_flash_btn.toolTip()!r}")
+
+        light, dark = QPalette(), QPalette()
+        light.setColor(QPalette.ColorRole.Window, QColor("#f0f0f0"))
+        dark.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        app.setPalette(light)
+        on_light = status_color("ok")
+        app.setPalette(dark)
+        on_dark = status_color("ok")
+        for _ in range(5):
+            app.processEvents()
+        if on_light == on_dark or on_dark not in window.device_status_label.styleSheet():
+            errors.append(f"status colour {on_light} / {on_dark}: {window.device_status_label.styleSheet()!r}")
+
+        keys = {sc.key().toString(): sc for sc in window.findChildren(QShortcut)}
+        for want in ("Ctrl+1", "Ctrl+2", "Ctrl+L", "Esc"):
+            if QKeySequence(want).toString() not in keys:
+                errors.append(f"no {want} shortcut (have {sorted(keys)})")
+        if QKeySequence("Ctrl+2").toString() in keys:
+            keys[QKeySequence("Ctrl+2").toString()].activated.emit()
+            if window.tab_widget.currentIndex() != 1:
+                errors.append("Ctrl+2 didn't switch to the second tab")
+    finally:
+        app.setPalette(real_palette)
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_flash_history(app):
+    """Writes and full flashes are recorded with their result; the History
+    tab lists them and Flash Again puts the image back."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import history
+    from rkdeveloptool_gui import operations as ops
+
+    history.clear()
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "armbian.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    outcome, shown = [True], []
+
+    def fake_run(cmd, key, callback=None):
+        QTimer.singleShot(0, lambda: callback and callback(outcome[0], ""))
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = fake_run
+    QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
+    window.command_worker = None
+    window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+    try:
+        for ok in (True, False):
+            outcome[0] = ok
+            before = len(history.load())
+            ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+            end = time.time() + 5
+            while time.time() < end and len(history.load()) == before:
+                app.processEvents()
+                time.sleep(0.01)
+        window._rkfw_history = ("/fw/update.img", time.monotonic())
+        ops._record_rkfw(window, history.OK)
+        entries = history.load()
+        got = [(e["image"], e["kind"], e["result"]) for e in entries]
+        want = [("/fw/update.img", "update.img", "ok"), (disk, "image", "failed"),
+                (disk, "image", "ok")]
+        if got != want:
+            errors.append(f"history: {got}")
+        if window.history_table.rowCount() != 3 or \
+                window.history_table.item(1, 2).text() != "armbian.img":
+            errors.append("the History tab doesn't list the entries")
+
+        window.firmware_path.setText("")
+        window.history_table.selectRow(1)
+        window.flash_again()
+        if window.firmware_path.text() != disk or \
+                window.tab_widget.currentWidget() is not window.download_tab:
+            errors.append(f"Flash Again filled {window.firmware_path.text()!r}")
+        window.history_table.selectRow(0)       # /fw/update.img doesn't exist
+        shown.clear()
+        window.flash_again()
+        if not shown or window.firmware_path.text() != disk:
+            errors.append("Flash Again with a missing file didn't say so")
+        # Right-click: the menu, the details, deleting one entry.
+        menu = window.history_menu(1)
+        items = [a.text() for a in menu.actions() if a.text()] if menu else []
+        if items[:1] != [window.tr("history_details")] or window.tr("history_delete") not in items:
+            errors.append(f"history menu: {items}")
+        if window.history_menu(99) is not None:
+            errors.append("a menu for a row that isn't there")
+        details = window.history_details_text(history.load()[1])
+        if disk not in details or "0x0" not in details:
+            errors.append(f"history details: {details!r}")
+        window._delete_history(0)
+        if [e["image"] for e in history.load()] != [disk, disk]:
+            errors.append("deleting one history entry removed the wrong one")
+        window.clear_history()
+        if history.load() or window.history_table.rowCount():
+            errors.append("Clear History left entries")
+    finally:
+        window.run_command, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1921,6 +2585,21 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_flash_history(app)
+    check_tooltips_colors_shortcuts(app)
+    check_translations_and_sizes(app)
+    check_dangerous_confirmations(app)
+    # Reset After Burn defaults to on; the write tests below count commands
+    # without the reset, and check_flash_options covers it.
+    AppSettings().set(app_settings.KEY_RESET_AFTER_WRITE, "0")
+    check_flash_options(app)
+    check_idle_timeout(app)
+    check_partition_erase(app)
+    check_rkfw_read_back(app)
+    check_reset_after_write(app)
+    check_loader_before_write(app)
+    check_rfi_capacity(app)
+    check_idb_command()
     check_command_chain(app)
     check_production_line(app)
     check_production_line_real_commands(app)

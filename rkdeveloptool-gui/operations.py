@@ -8,10 +8,11 @@ import shutil
 import subprocess
 import tempfile
 import math
+import time
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox, QInputDialog, QApplication, QLineEdit, QCheckBox
 
-from . import loader_fetch, rkfw
+from . import history, loader_fetch, rkfw
 from . import settings as app_settings
 from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
@@ -24,7 +25,7 @@ from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
     DecompressWorker, CallWorker
 )
-from .ui_text_updates import populate_address_combo, populate_partition_combo
+from .ui_text_updates import populate_address_combo
 
 
 def _is_sector_zero(address):
@@ -75,6 +76,8 @@ def get_flash_capacity_bytes(gui):
     """
     # Try cached flash info first
     if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
+        if gui._cached_flash_info.get('bytes'):
+            return gui._cached_flash_info['bytes'], "cached"
         capacity_str = gui._cached_flash_info.get('capacity', '')
         if capacity_str:
             m = re.match(r'([0-9.]+)\s*(MB|GB)', capacity_str, re.I)
@@ -98,9 +101,7 @@ def get_flash_capacity_bytes(gui):
 
         bytes_size = flash_capacity_bytes(out)
         if bytes_size:
-            flash_info = parse_flash_info(out)
-            if flash_info:
-                gui._cached_flash_info = flash_info
+            gui._cached_flash_info = dict(parse_flash_info(out) or {}, bytes=bytes_size)
             return bytes_size, "detected"
 
         # Try to parse capacity
@@ -312,7 +313,6 @@ def read_partition_table(gui):
             if result.returncode == 0:
                 gui.partitions = parse_partition_info(result.stdout)
                 populate_partition_table(gui)
-                populate_partition_combo(gui)
                 populate_address_combo(gui)
                 gui.log_message(gui.tr('partition_read_ok'))
         except Exception:
@@ -328,7 +328,6 @@ def on_partition_ppt_finished(gui, out, code):
         if code == 0 and out:
             gui.partitions = parse_partition_info(out)
             populate_partition_table(gui)
-            populate_partition_combo(gui)
             populate_address_combo(gui)
             gui.log_message(gui.tr('partition_read_ok'))
             gui.statusBar().showMessage(gui.tr('partition_read_ok'))
@@ -350,6 +349,15 @@ def on_partition_ppt_finished(gui, out, code):
         gui._partition_refresh_lock = False
 
 
+def _partition_size_text(gui, size):
+    """'4.00 MB' for a partition size given in sectors ("0x2000"); the last
+    partition, whose size `ppt` doesn't give, runs to the end."""
+    try:
+        return format_file_size(int(size, 16) * SECTOR_SIZE)
+    except (TypeError, ValueError):
+        return gui.tr("partition_to_end")
+
+
 def populate_partition_table(gui):
     """Populate partition table widget"""
     gui.partition_table.setRowCount(0)
@@ -363,7 +371,7 @@ def populate_partition_table(gui):
 
     for row, (name, info) in enumerate(items):
         addr = info.get('address', '')
-        size = info.get('size', '')
+        size = _partition_size_text(gui, info.get('size', ''))
 
         from PySide6.QtWidgets import QTableWidgetItem, QWidget, QHBoxLayout, QPushButton
 
@@ -377,12 +385,15 @@ def populate_partition_table(gui):
 
         backup_btn = QPushButton(gui.tr('action_backup'))
         write_btn = QPushButton(gui.tr('action_write'))
+        erase_btn = QPushButton(gui.tr('action_erase'))
 
         backup_btn.clicked.connect(safe_slot(lambda checked=False, n=name: backup_partition_by_name(gui, n)))
         write_btn.clicked.connect(safe_slot(lambda checked=False, n=name: write_partition_by_name(gui, n)))
+        erase_btn.clicked.connect(safe_slot(lambda checked=False, n=name: erase_partition(gui, n)))
 
         action_layout.addWidget(backup_btn)
         action_layout.addWidget(write_btn)
+        action_layout.addWidget(erase_btn)
 
         gui.partition_table.setCellWidget(row, 3, action_widget)
 
@@ -470,9 +481,11 @@ def onekey_burn(gui):
     _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
-def _show_rkfw_message(gui, title_key, text, icon="Critical"):
+def _show_rkfw_message(gui, title_key, text, icon="Critical", offer_reset=False):
     """Show a QMessageBox for RKFW flashing errors/status with dynamic text
-    that gui.show_message()'s static-key-only signature can't express."""
+    that gui.show_message()'s static-key-only signature can't express.
+    offer_reset adds a button that resets the board (rd) so the new
+    firmware boots."""
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr(title_key))
@@ -484,7 +497,15 @@ def _show_rkfw_message(gui, title_key, text, icon="Critical"):
         msg.setIcon(QMessageBox.Icon.Warning)
     else:
         msg.setIcon(QMessageBox.Icon.Information)
+    reset = None
+    if offer_reset and getattr(gui, 'current_device', None):
+        reset = msg.addButton(gui.tr("reset_board_btn"), QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton(gui.tr("later_btn"), QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(reset)
     msg.exec()
+    if reset is not None and msg.clickedButton() is reset:
+        gui.log_message(f"[INFO] {gui.tr('rebooting')}")
+        _run_when_idle(gui, [RKTOOL, "rd"], "rebooting", lambda success, output: None)
 
 
 def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
@@ -492,7 +513,9 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     (update.img) flash - this rewrites the GPT and every partition.
 
     Also asks whether to CRC-verify the firmware package before unpacking
-    (default on). Returns (accepted, verify_crc)."""
+    (default on) and whether to read every partition back afterwards
+    (remembered with the single-image read-back choice). Returns
+    (accepted, verify_crc, read_back)."""
     version = rkaf_info.version
     version_str = f"{(version >> 24) & 0xFF}.{(version >> 16) & 0xFF}.{version & 0xFFFF}"
     file_size = format_file_size(os.path.getsize(firmware_path))
@@ -508,20 +531,29 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     msg.setText(
         f"{gui.tr('rkfw_confirm_intro')}\n\n"
         f"{gui.tr('file_name')}: {os.path.basename(firmware_path)} ({file_size})\n"
-        f"Model: {rkaf_info.model}  Manufacturer: {rkaf_info.manufacturer}  "
-        f"Version: {version_str}\n\n"
-        f"Partitions ({len(real_parts)}):\n{part_lines}\n\n"
+        f"{gui.tr('rkfw_model')}: {rkaf_info.model}  "
+        f"{gui.tr('rkfw_manufacturer')}: {rkaf_info.manufacturer}  "
+        f"{gui.tr('rkfw_version')}: {version_str}\n\n"
+        f"{gui.tr('rkfw_partitions').format(len(real_parts))}\n{part_lines}\n\n"
         f"{gui.tr('rkfw_confirm_warning')}\n\n"
         f"{gui.tr('rkfw_confirm_proceed')}"
     )
     verify_check = QCheckBox(gui.tr("rkfw_verify_crc_checkbox"))
     verify_check.setChecked(True)
     msg.setCheckBox(verify_check)
+    # QMessageBox holds one checkbox; the second goes into its grid below it.
+    read_back = QCheckBox(gui.tr("rkfw_read_back_checkbox"))
+    read_back.setChecked(gui.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, "0") == "1")
+    grid = msg.layout()
+    grid.addWidget(read_back, grid.rowCount(), 0, 1, grid.columnCount())
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     msg.setDefaultButton(QMessageBox.StandardButton.No)
     msg.setMinimumWidth(600)
     accepted = msg.exec() == QMessageBox.StandardButton.Yes
-    return accepted, verify_check.isChecked()
+    if accepted:
+        gui.settings.set(app_settings.KEY_VERIFY_AFTER_WRITE,
+                         "1" if read_back.isChecked() else "0")
+    return accepted, verify_check.isChecked(), read_back.isChecked()
 
 
 def _flash_rkfw_firmware(gui, firmware_path):
@@ -567,9 +599,12 @@ def _flash_rkfw_firmware(gui, firmware_path):
         gui.show_message("rkfw_requires_maskrom_title", "rkfw_requires_maskrom_message", "Warning")
         return
 
-    confirmed, verify_crc = _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts)
+    confirmed, verify_crc, read_back = _confirm_rkfw_flash(gui, firmware_path, rkaf_info,
+                                                           real_parts)
     if not confirmed:
         return
+    gui._rkfw_history = (firmware_path, time.monotonic())
+    gui._rkfw_read_back = read_back
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
     _set_rkfw_busy(gui, True)
@@ -642,20 +677,35 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     RK3576-手动刷固件指南.md: on a fresh Maskrom the chip refuses every
     "read flash info" request until a loader has been downloaded into RAM,
     so `gpt` must come *after* `db`. The loader is then persisted to the
-    idb area with `ul` (never `wlx bootloader`), and every remaining
+    idb area (never `wlx bootloader`): with `ul` for an old-format Loader,
+    as a verified bootloader image at sector 0x40 for a NEWIDB one (see
+    loader_to_flash_command). Every remaining
     archive partition is flashed by name - except `package-file`, which is
     tool metadata and not a real partition.
     """
     # RKAF entries that must not be written as GPT partitions:
     # - "package-file" is tool metadata consumed by Rockchip's own tools.
     # - "bootloader" is the MiniLoader/idb image; it goes to the idb area
-    #   above (via `ul`), not to a GPT partition named "bootloader".
+    #   above, not to a GPT partition named "bootloader".
     skip_names = {"package-file", "bootloader"}
 
-    steps = [
-        ([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")),
+    from .loader_merge import LoaderMergeError
+    try:
+        idb_cmd = loader_to_flash_command(paths['loader'], tmp_dir)
+    except (LoaderMergeError, OSError) as e:
+        # Nothing written yet; a board with a bootloader that doesn't
+        # verify would only come back in Maskrom.
+        gui.log_message(f"[ERROR] {e}")
+        _finish_rkfw_flow(gui, tmp_dir)
+        _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+        return
+
+    steps = [([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader"))]
+    if _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
+        steps.append(([RKTOOL, "ef"], "erase_flash", gui.tr("rkfw_step_erase")))
+    steps += [
         ([RKTOOL, "gpt", paths['parameter']], "importing_gpt", gui.tr("rkfw_step_gpt")),
-        ([RKTOOL, "ul", paths['loader']], "writing_idb", gui.tr("rkfw_step_idb")),
+        (idb_cmd, "writing_idb", gui.tr("rkfw_step_idb")),
     ]
     for name, part_path in paths['parts']:
         if name in skip_names:
@@ -664,6 +714,9 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
         steps.append(([RKTOOL, "wlx", name, part_path], "burning",
                       gui.tr("rkfw_step_partition").format(name)))
 
+    # What to read back afterwards: each partition written by name.
+    gui._rkfw_written = [(cmd[2], cmd[3]) for cmd, key, _ in steps if cmd[1] == "wlx"]
+    gui._rkfw_parameter = paths['parameter']
     gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
     # Weight each step by the file it writes (every step's last argument),
     # so the bar shows the whole flash rather than restarting per step.
@@ -672,6 +725,14 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     if hasattr(gui, 'begin_job'):
         gui.begin_job(sum(gui._rkfw_step_bytes))
     _run_rkfw_steps(gui, steps, 0, tmp_dir)
+
+
+def _record_rkfw(gui, result):
+    """Record the full flash that just ended (once)."""
+    entry = getattr(gui, '_rkfw_history', None)
+    gui._rkfw_history = None
+    if entry:
+        _record_flash(gui, entry[0], result, "update.img", "", entry[1])
 
 
 def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
@@ -683,18 +744,30 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     steps are retried a couple of times with a short pause instead of
     aborting the whole flash at the first hiccup.
     """
-    max_attempts = 2  # extra attempts after the first failure
+    # Extra attempts after the first failure (Parameter tab, Retries).
+    max_attempts = (gui.settings.get_int(app_settings.KEY_STEP_RETRIES,
+                                         app_settings.DEFAULT_STEP_RETRIES)
+                    if hasattr(gui, 'settings') else app_settings.DEFAULT_STEP_RETRIES)
 
     if index >= len(steps):
-        _finish_rkfw_flow(gui, tmp_dir)
+        _record_rkfw(gui, history.OK)
         gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
+        if getattr(gui, '_rkfw_read_back', False) and getattr(gui, '_rkfw_written', None):
+            _verify_rkfw_parts(gui, tmp_dir)
+            return
+        _finish_rkfw_flow(gui, tmp_dir)
+        # Reset After Burn resets it now; otherwise offer to.
+        reset = _reset_after_flash(gui)
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
-                            gui.tr("rkfw_flash_complete_message"), "Information")
+                            gui.tr("rkfw_flash_complete_reset" if reset
+                                   else "rkfw_flash_complete_message"), "Information",
+                            offer_reset=not reset)
         return
 
     if getattr(gui, '_cancel_requested', False):
         # Cancelled between steps (e.g. while the board re-enumerated).
         gui._cancel_requested = False
+        _record_rkfw(gui, history.CANCELLED)
         _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
         _show_rkfw_message(gui, "cancelled_partial_title",
@@ -710,12 +783,14 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     def on_step_done(success, output):
         if not success and getattr(gui, '_cancel_requested', False):
             # Cancelled mid-step: no retry; the window reports it.
+            _record_rkfw(gui, history.CANCELLED)
             _finish_rkfw_flow(gui, tmp_dir)
             return
         if not success and getattr(gui, '_lost_during_write', False):
             # The device went away mid-write; retrying can't help, and the
             # window explains how to recover once this returns.
             gui.log_message(f"[ERROR] {label}")
+            _record_rkfw(gui, history.FAILED)
             _finish_rkfw_flow(gui, tmp_dir)
             return
         if not success:
@@ -725,6 +800,7 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
                     lambda: _run_rkfw_steps(gui, steps, index, tmp_dir, attempts + 1)))
                 return
             gui.log_message(f"[ERROR] {label}")
+            _record_rkfw(gui, history.FAILED)
             _finish_rkfw_flow(gui, tmp_dir)
             text = gui.tr("rkfw_flash_failed_message")
             guidance = gui.explain_failure(output) if hasattr(gui, 'explain_failure') else None
@@ -751,6 +827,104 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
             lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir)))
 
     _run_when_idle(gui, cmd, description_key, on_step_done)
+
+
+def _verify_rkfw_parts(gui, tmp_dir):
+    """Read every partition the flash wrote back from the board and compare
+    it with the file written there, then report all of them at once."""
+    from .utils import compare_readback, parameter_partitions
+    layout = parameter_partitions(gui._rkfw_parameter) if gui._rkfw_parameter else {}
+    items = list(gui._rkfw_written)
+    sizes = [os.path.getsize(path) for _, path in items]
+    results = []        # (name, status, detail)
+    gui._rkfw_verifying = True
+    if hasattr(gui, 'begin_job'):
+        gui.begin_job(sum(sizes))
+
+    def report():
+        gui._rkfw_verifying = False
+        _finish_rkfw_flow(gui, tmp_dir)
+        bad = [n for n, status, _ in results if status == "mismatch"]
+        unsure = [f"{n} ({detail})" for n, status, detail in results
+                  if status not in ("ok", "mismatch")]
+        ok = sum(1 for _, status, _ in results if status == "ok")
+        if bad:
+            gui.log_message(f"[ERROR] {gui.tr('rkfw_read_back_mismatch_title')}: {', '.join(bad)}")
+            text = gui.tr("rkfw_read_back_mismatch_message").format(", ".join(bad))
+            if unsure:
+                text += "\n\n" + gui.tr("rkfw_read_back_unsure").format("\n".join(unsure))
+            _show_rkfw_message(gui, "rkfw_read_back_mismatch_title", text)
+            return
+        text = gui.tr("rkfw_read_back_ok").format(ok)
+        if unsure:
+            gui.log_message(f"[WARNING] {gui.tr('rkfw_read_back_unsure').format(', '.join(unsure))}")
+            text += "\n\n" + gui.tr("rkfw_read_back_unsure").format("\n".join(unsure))
+        gui.log_message(f"[OK] {gui.tr('rkfw_read_back_ok').format(ok)}")
+        # Nothing read back wrong: reset now (Reset After Burn) or offer to.
+        reset = _reset_after_flash(gui)
+        done = gui.tr("rkfw_flash_complete_reset" if reset else "rkfw_flash_complete_message")
+        _show_rkfw_message(gui, "rkfw_flash_complete_title", done + "\n\n" + text,
+                           "Warning" if unsure else "Information", offer_reset=not reset)
+
+    def check(index):
+        if getattr(gui, '_cancel_requested', False):
+            # Everything is written; only the check stops.
+            gui._cancel_requested = False
+            gui._rkfw_verifying = False
+            _finish_rkfw_flow(gui, tmp_dir)
+            gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
+            return
+        if index >= len(items):
+            report()
+            return
+        name, path = items[index]
+        size = sizes[index]
+        if name not in layout:
+            results.append((name, "skipped", gui.tr("rkfw_read_back_not_in_table")))
+            check(index + 1)
+            return
+        label = gui.tr("rkfw_step_read_back").format(name)
+        gui.log_message(f"[{index + 1}/{len(items)}] {label}")
+        if hasattr(gui, 'job_stage'):
+            gui.job_stage(f"[{index + 1}/{len(items)}] {label}", sum(sizes[:index]), size)
+        readback = os.path.join(tmp_dir, "readback.bin")
+
+        def read(success, output):
+            if not success:
+                if getattr(gui, '_cancel_requested', False):
+                    check(index)
+                    return
+                results.append((name, "unverified", gui.tr("rkfw_read_back_read_failed")))
+                QTimer.singleShot(0, safe_slot(lambda: check(index + 1)))
+                return
+            compare = CallWorker(lambda: compare_readback(readback, path, size))
+            gui._verify_hash_worker = compare
+
+            def compared(result):
+                gui._verify_hash_worker = None
+                status, offset = result if isinstance(result, tuple) else ("unverified", None)
+                detail = ""
+                if status == "unverified" and offset == 0:
+                    detail = gui.tr("rkfw_read_back_filler_all")
+                elif status == "unverified" and offset is not None:
+                    detail = gui.tr("rkfw_read_back_filler").format(format_file_size(offset))
+                elif status == "mismatch":
+                    detail = format_file_size(offset)
+                results.append((name, status, detail))
+                try:
+                    os.remove(readback)
+                except OSError:
+                    pass
+                check(index + 1)
+
+            compare.finished.connect(safe_slot(compared))
+            compare.start()
+
+        sectors = -(-size // SECTOR_SIZE)
+        _run_when_idle(gui, [RKTOOL, "rl", hex(layout[name][0]), hex(sectors), readback],
+                       "verifying", read)
+
+    check(0)
 
 
 def _run_when_idle(gui, cmd, description_key, callback, waited_ms=0):
@@ -838,6 +1012,99 @@ def loader_chip(gui):
     return chip_from_device(gui.current_device)
 
 
+def loader_plan(gui):
+    """How a write in Maskrom would get its Loader: ("file", path) for the
+    one in the Loader field, ("rkbin", chip) to build one, or None."""
+    path = gui.loader_path.text().strip() if hasattr(gui, 'loader_path') else ""
+    if path and os.path.isfile(path):
+        return "file", path
+    chip = loader_chip(gui)
+    return ("rkbin", chip) if chip else None
+
+
+# After db the board takes a moment before it answers: on an RK3576 the
+# first rfi (or a write) right after it is refused, the next one works.
+READY_ATTEMPTS = 8
+READY_INTERVAL_MS = 1000
+
+
+def _board_answers():
+    from . import utils
+    try:
+        with utils.DEVICE_LOCK:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "Flash" in (result.stdout or "")
+
+
+def _when_board_answers(gui, on_ready, on_fail, attempt=1):
+    """Call on_ready() once the board answers rfi after db, or on_fail()
+    (with an explanation) when it doesn't within READY_ATTEMPTS tries."""
+    probe = CallWorker(_board_answers)
+    gui._ready_worker = probe
+
+    def answered(ok):
+        gui._ready_worker = None
+        if ok is True:
+            on_ready()
+        elif attempt < READY_ATTEMPTS:
+            QTimer.singleShot(READY_INTERVAL_MS, safe_slot(
+                lambda: _when_board_answers(gui, on_ready, on_fail, attempt + 1)))
+        else:
+            gui.log_message(f"[ERROR] {gui.tr('loader_no_answer')}")
+            _show_rkfw_message(gui, "loader_no_answer_title", gui.tr("loader_no_answer"))
+            on_fail()
+
+    probe.finished.connect(safe_slot(answered))
+    probe.start()
+
+
+def _load_loader_then(gui, on_ready, on_fail):
+    """Load the Loader loader_plan() names (building it from rkbin first if
+    needed), then call on_ready(); on_fail() if that doesn't work. The
+    window explains a failed db as usual."""
+    plan = loader_plan(gui)
+    if plan is None:
+        on_fail()
+        return
+
+    def run_db(path):
+        gui.log_message(f"[INFO] {gui.tr('loader_before_write').format(os.path.basename(path))}")
+
+        def loaded(success, output):
+            if not success:
+                on_fail()
+                return
+            gui.loader_loaded = True
+            gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
+            _when_board_answers(gui, on_ready, on_fail)
+
+        _run_when_idle(gui, [RKTOOL, "db", path], "loading_loader", loaded)
+
+    if plan[0] == "file":
+        run_db(plan[1])
+        return
+    worker = loader_fetch.LoaderFetchWorker(plan[1], loader_cache_dir())
+    gui._loader_fetch_worker = worker
+    gui.log_message(f"[INFO] {gui.tr('fetch_loader_start').format(plan[1], loader_fetch.RKBIN_REPO)}")
+
+    def fetched(path, ini_name, sha):
+        gui.loader_path.setText(path)
+        gui.log_message(f"[OK] {gui.tr('fetch_loader_done').format(os.path.basename(path), ini_name)}")
+        run_db(path)
+
+    def failed(kind, error):
+        gui.log_message(f"[ERROR] {gui.tr('fetch_loader_failed_title')}: {error}")
+        _show_rkfw_message(gui, "fetch_loader_failed_title", gui.tr("fetch_loader_failed_title")
+                           + f"\n\n{error}")
+        on_fail()
+
+    worker.finished_ok.connect(safe_slot(fetched))
+    worker.failed.connect(safe_slot(failed))
+    worker.start()
+
+
 def loader_cache_dir():
     from PySide6.QtCore import QStandardPaths
     base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
@@ -891,13 +1158,43 @@ def fetch_loader(gui):
     update_fetch_loader_state(gui)
 
 
+def loader_to_flash_command(loader_path, tmp_dir):
+    """The command that writes a Loader into the flash's boot area: `ul`
+    for an old-format Loader, or `wl 0x40` with the bootloader image for a
+    NEWIDB one, which ul writes in a layout the boot ROM rejects. Raises
+    LoaderMergeError / OSError when the Loader can't be used."""
+    from . import loader_merge
+    with open(loader_path, "rb") as f:
+        idb = loader_merge.idblock_from_loader(f.read())
+    if idb is None:
+        return [RKTOOL, "ul", loader_path]
+    path = os.path.join(tmp_dir, "idblock.img")
+    with open(path, "wb") as f:
+        f.write(idb)
+    return [RKTOOL, "wl", hex(loader_merge.IDB_SECTOR), path]
+
+
 def _start_loader(gui, cmd_type, loader_path):
     """Run db/ul with the loader and record whether it actually loaded."""
-    gui.run_command([RKTOOL, cmd_type, loader_path], "loading_loader")
+    cmd = [RKTOOL, cmd_type, loader_path]
+    idb_dir = None
+    if cmd_type == "ul":
+        from .loader_merge import LoaderMergeError
+        idb_dir = tempfile.mkdtemp(prefix="rkdevtool_idb_")
+        try:
+            cmd = loader_to_flash_command(loader_path, idb_dir)
+        except (LoaderMergeError, OSError) as e:
+            shutil.rmtree(idb_dir, ignore_errors=True)
+            gui.log_message(f"[ERROR] {e}")
+            _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+            return
+    gui.run_command(cmd, "loading_loader")
 
     # Mark that we're attempting to load loader and wrap the finished signal
     if gui.command_worker:
         def on_loader_finished(success, error_msg):
+            if idb_dir:
+                shutil.rmtree(idb_dir, ignore_errors=True)
             if success:
                 gui.loader_loaded = True
                 gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
@@ -946,6 +1243,20 @@ _CHECK_MARKS = {PASS: "✓", WARN: "⚠", FAIL: "✗", UNKNOWN: "?"}
 SECTOR_SIZE = 512
 
 
+def _flag(gui, key, default=False):
+    settings = getattr(gui, 'settings', None)
+    return settings.get_flag(key, default) if settings is not None else default
+
+
+def _reset_after_flash(gui):
+    """Reset the board (rd) when the Parameter tab says so; True if it did."""
+    if not _flag(gui, app_settings.KEY_RESET_AFTER_WRITE, True):
+        return False
+    gui.log_message(f"[INFO] {gui.tr('rebooting')}")
+    _run_when_idle(gui, [RKTOOL, "rd"], "rebooting", lambda success, output: None)
+    return True
+
+
 def _sector_address(address):
     """An rkdeveloptool LBA ("0x0", "0x8000", "32768"), or None."""
     try:
@@ -977,12 +1288,20 @@ def preflight_checks(gui, file_path, address, capacity):
     else:
         checks.append((PASS, tr("pf_device").format(mode)))
         if 'Maskrom' in mode and not getattr(gui, 'loader_loaded', False):
-            checks.append((FAIL, tr("pf_need_loader")))
+            plan = loader_plan(gui)
+            if plan is None:
+                checks.append((FAIL, tr("pf_need_loader")))
+            elif plan[0] == "file":
+                checks.append((WARN, tr("pf_loader_first").format(os.path.basename(plan[1]))))
+            else:
+                checks.append((WARN, tr("pf_loader_first_rkbin").format(plan[1])))
         else:
             checks.append((PASS, tr("pf_loader_ready")))
 
     lba = _sector_address(address)
     size = os.path.getsize(file_path)
+    if lba == 0 and _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
+        checks.append((WARN, tr("pf_erase_first")))
     if lba == 0:
         kind = classify_image_file(file_path)
         if kind == 'loader':
@@ -1088,6 +1407,40 @@ def _burn_file(gui, file_path, address, make_cmd):
     lba = _sector_address(address)
 
     def start(path, cleanup):
+        if 'Maskrom' in (getattr(gui, 'device_mode', '') or '') and not gui.loader_loaded:
+            _load_loader_then(gui, lambda: check_size(path, cleanup), cleanup)
+            return
+        write(path, cleanup)
+
+    def check_size(path, cleanup):
+        # The confirmation couldn't read the storage size without a Loader.
+        if lba is None:
+            write(path, cleanup)
+            return
+        query = CallWorker(lambda: get_flash_capacity_bytes(gui)[0])
+        gui._capacity_worker = query
+
+        def got(capacity):
+            gui._capacity_worker = None
+            end = lba * SECTOR_SIZE + os.path.getsize(path)
+            if isinstance(capacity, int) and end > capacity:
+                cleanup()
+                text = gui.tr("pf_capacity_too_big").format(format_file_size(end),
+                                                            format_file_size(capacity))
+                gui.log_message(f"[ERROR] {text}")
+                _show_rkfw_message(gui, "pf_title", text)
+                return
+            write(path, cleanup)
+
+        query.finished.connect(safe_slot(got))
+        query.start()
+
+    def write(path, cleanup):
+        started = time.monotonic()
+
+        def record(result, note=""):
+            _record_flash(gui, file_path, result, "image", address, started, note)
+
         size = os.path.getsize(path)
         verify = (lba is not None and getattr(gui, '_verify_after_write', False)
                   and getattr(gui, '_last_burn_md5', ''))
@@ -1098,10 +1451,29 @@ def _burn_file(gui, file_path, address, make_cmd):
 
         def after_write(success, output):
             if success and verify:
-                _verify_written(gui, path, address, size, expected, cleanup)
+                _verify_written(gui, path, address, size, expected, cleanup, record)
+                return
+            cleanup()
+            if success:
+                record(history.OK)
             else:
-                cleanup()
+                record(history.CANCELLED if getattr(gui, '_cancel_requested', False)
+                       else history.FAILED)
+            if success and lba == 0:
+                # A whole image: the board boots it once reset, now (Reset
+                # After Burn) or when the user says so.
+                if not _reset_after_flash(gui):
+                    _show_rkfw_message(gui, "write_done_title",
+                                       gui.tr("write_done_message").format(os.path.basename(path)),
+                                       "Information", offer_reset=True)
 
+        if lba == 0 and _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
+            gui.log_message(f"[INFO] {gui.tr('erasing_before_write')}")
+            gui.run_command([RKTOOL, "ef"], "erase_flash",
+                            lambda success, output: _run_when_idle(
+                                gui, make_cmd(path), "burning", after_write)
+                            if success else cleanup())
+            return
         gui.run_command(make_cmd(path), "burning", after_write)
 
     def burn(path, cleanup):
@@ -1111,7 +1483,17 @@ def _burn_file(gui, file_path, address, make_cmd):
     _with_plain_image(gui, file_path, burn)
 
 
-def _verify_written(gui, path, address, size, expected_md5, cleanup):
+def _record_flash(gui, image, result, kind, address, started, note=""):
+    """Add a flash to the history and refresh the History tab."""
+    loader = gui.loader_path.text().strip() if hasattr(gui, 'loader_path') else ""
+    history.add(image, result, kind=kind, address=address,
+                loader=loader if loader and os.path.isfile(loader) else "",
+                chip=loader_chip(gui) or "", seconds=time.monotonic() - started, note=note)
+    if hasattr(gui, 'refresh_history'):
+        gui.refresh_history()
+
+
+def _verify_written(gui, path, address, size, expected_md5, cleanup, on_result=None):
     """Read back what was just written at address and compare its MD5 with
     the image's. The readback is rounded up to whole sectors, so only its
     first `size` bytes are hashed."""
@@ -1133,9 +1515,12 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
         gui.job_stage(gui.tr("stage_verifying").format(name), size, size)
     gui.log_message(f"[INFO] {gui.tr('stage_verifying').format(name)}")
 
+    on_result = on_result or (lambda result, note="": None)
+
     def after_read(success, output):
         if not success:  # the failure itself is explained by the window
             finish()
+            on_result(history.UNVERIFIED, gui.tr("history_read_back_failed"))
             return
         gui.progress_label.setText(gui.tr("verify_comparing"))
         worker = FileHashWorker(readback, length=size)
@@ -1145,9 +1530,13 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
             gui._verify_hash_worker = None
             if md5sum and md5sum == expected_md5:
                 finish()
+                on_result(history.OK, gui.tr("history_verified"))
+                whole = _sector_address(address) == 0
+                reset = whole and _reset_after_flash(gui)
                 gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
                 _show_rkfw_message(gui, "verify_ok_title",
-                                   gui.tr("verify_ok").format(name), "Information")
+                                   gui.tr("verify_ok").format(name), "Information",
+                                   offer_reset=whole and not reset)
                 return
             # A mismatch may only mean the loader can't read part of the
             # storage back; look for its filler before calling the write bad.
@@ -1160,11 +1549,13 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
                 finish()
                 if isinstance(filler_at, int):
                     where = format_file_size(filler_at)
+                    on_result(history.UNVERIFIED, where)
                     gui.log_message(f"[WARNING] {gui.tr('verify_unreliable_title')}: "
                                     f"filler from {where}")
                     _show_rkfw_message(gui, "verify_unreliable_title",
                                        gui.tr("verify_unreliable_message").format(where), "Warning")
                     return
+                on_result(history.MISMATCH)
                 gui.log_message(f"[ERROR] {gui.tr('verify_mismatch_title')}: "
                                 f"{md5sum or '?'} != {expected_md5}")
                 _show_rkfw_message(gui, "verify_mismatch_title",
@@ -1342,6 +1733,8 @@ MD5: {md5sum}
         if hasattr(gui, 'settings'):
             gui.settings.set(app_settings.KEY_VERIFY_AFTER_WRITE,
                              "1" if verify_box.isChecked() else "0")
+        if hasattr(gui, 'verify_after_burn'):   # the Parameter tab's copy
+            gui.verify_after_burn.setChecked(verify_box.isChecked())
     return not blocked and answer == QMessageBox.StandardButton.Yes
 
 
@@ -1690,113 +2083,83 @@ def test_device_connection(gui, test_count=10):
     run_single_test()
 
 
+# How much of a partition "Erase" clears: enough for the filesystem
+# headers at its start, so nothing mounts or boots from it. rkdeveloptool
+# has no per-partition erase (`ef` takes no arguments), so it is written
+# with zeros.
+ERASE_PARTITION_BYTES = 32 << 20
+
+
 def erase_partition(gui, partition_name):
-    """Erase a specific partition
-    
-    Args:
-        gui: The main GUI instance
-        partition_name: Name of the partition to erase
-    """
-    if not partition_name or partition_name.strip() == "":
-        gui.show_message("Warning", "Please select a partition to erase")
+    """Clear the start of a partition (see ERASE_PARTITION_BYTES), after
+    confirming with No as the default answer."""
+    info = (getattr(gui, 'partitions', None) or {}).get(partition_name)
+    start = _sector_address(info.get('address')) if info else None
+    if start is None:
         return
-    
-    # Double confirmation dialog
-    msg = QMessageBox()
+    size = info.get('size')
+    try:
+        length = min(ERASE_PARTITION_BYTES, int(size, 16) * SECTOR_SIZE)
+    except (TypeError, ValueError):
+        length = ERASE_PARTITION_BYTES      # the last partition: size unknown
+
+    msg = QMessageBox(gui)
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr("erase_partition_warning_title"))
     msg.setIcon(QMessageBox.Icon.Warning)
-    msg.setText(f"{gui.tr('erase_partition_warning_message')}\n\n"
-                f"Partition: {partition_name}\n\n"
-                f"This operation cannot be undone!")
+    msg.setText(gui.tr("erase_partition_message").format(partition_name,
+                                                         format_file_size(length)))
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-    msg.setMinimumWidth(500)
-    
+    msg.setDefaultButton(QMessageBox.StandardButton.No)
     if msg.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message(f"[ERROR] Partition erase cancelled by user")
         return
-    
+
+    tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_erase_")
+    zeros = os.path.join(tmp_dir, "zeros.bin")
+    with open(zeros, "wb") as f:
+        f.truncate(length)
+
     def on_finished(success, output):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         if success:
-            gui.log_message(f"[OK] Partition '{partition_name}' erased successfully")
-            gui.log_message(f"[INFO] Auto-refreshing partition table...")
-            # Auto-refresh partition table after successful erase
-            read_partition_table(gui)
-        else:
-            gui.log_message(f"[ERROR] Failed to erase partition: {output if output else 'Unknown error'}")
-    
-    gui.log_message(f"[INFO] Erasing partition '{partition_name}'...")
-    gui.run_command([RKTOOL, "ef", partition_name], f"erasing_partition_{partition_name}", on_finished)
+            gui.log_message(f"[OK] {gui.tr('erase_partition_done').format(partition_name)}")
+
+    gui.log_message(f"[INFO] {gui.tr('erase_partition_start').format(partition_name)}")
+    gui.run_command([RKTOOL, "wl", hex(start), zeros], "erase_partition", on_finished)
 
 
 def erase_all_storage(gui):
-    """Erase entire storage device - requires multiple confirmations
-    
-    Implements three-layer confirmation:
-    1. Initial warning dialog
-    2. Storage name verification input
-    3. Final confirmation
+    """Erase the whole storage with `ef` (the Firmware Download tab's Erase
+    Entire Flash and the danger zone's Erase All Storage both come here).
+
+    One confirmation, Cancel by default, whose Erase button only enables
+    once "I understand" is ticked. `ef` takes no arguments; "ef all" is
+    rejected by rkdeveloptool as invalid and erased nothing.
     """
-    current_storage = gui.change_storage_combo.currentText() if hasattr(gui, 'change_storage_combo') else "Storage"
-    
-    # Layer 1: Initial warning dialog
-    msg1 = QMessageBox()
-    style_messagebox(msg1)
-    msg1.setWindowTitle(gui.tr("erase_all_warning_title"))
-    msg1.setIcon(QMessageBox.Icon.Critical)
-    warning_text = gui.tr("erase_flash_warning_message")
-    # Replace {storage} placeholder if it exists
-    if "{storage}" in warning_text:
-        warning_text = warning_text.format(storage=current_storage)
-    msg1.setText(warning_text)
-    msg1.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-    msg1.setMinimumWidth(500)
-    
-    if msg1.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("[ERROR] Erase all storage cancelled by user")
+    storage = gui.change_storage_combo.currentText() if hasattr(gui, 'change_storage_combo') else ""
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("erase_all_warning_title"))
+    msg.setIcon(QMessageBox.Icon.Critical)
+    msg.setText(gui.tr("erase_all_message").format(storage or gui.tr("storage_type")))
+    understood = QCheckBox(gui.tr("erase_all_understood"))
+    msg.setCheckBox(understood)
+    erase = msg.addButton(gui.tr("erase_all_btn"), QMessageBox.ButtonRole.DestructiveRole)
+    cancel = msg.addButton(QMessageBox.StandardButton.Cancel)
+    msg.setDefaultButton(cancel)
+    erase.setEnabled(False)
+    understood.toggled.connect(erase.setEnabled)
+    msg.exec()
+    if msg.clickedButton() is not erase or not understood.isChecked():
         return
-    
-    # Layer 2: Verify storage name input
-    verification_prompt = gui.tr("erase_all_verification_title")
-    text, ok = QInputDialog.getText(
-        gui, 
-        gui.tr("erase_all_verification_title"),
-        f"{verification_prompt}:\n\n'{current_storage}'",
-        QLineEdit.EchoMode.Normal
-    )
-    
-    if not ok or text.strip() != current_storage:
-        gui.log_message("[ERROR] Verification failed - storage name does not match. Operation cancelled.")
-        return
-    
-    # Layer 3: Final confirmation
-    msg2 = QMessageBox()
-    style_messagebox(msg2)
-    msg2.setWindowTitle(gui.tr("erase_all_final_confirmation_title"))
-    msg2.setIcon(QMessageBox.Icon.Critical)
-    msg2.setText(
-        f"{gui.tr('erase_all_about_to_erase')}\n"
-        f"{current_storage}\n\n"
-        f"{gui.tr('erase_all_confirm_certain')}"
-    )
-    msg2.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-    msg2.setMinimumWidth(500)
-    
-    if msg2.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("[ERROR] Erase all storage cancelled at final confirmation")
-        return
-    
+
     def on_finished(success, output):
         if success:
-            gui.log_message(f"[OK] {current_storage} successfully erased")
-            gui.log_message(f"[INFO] Auto-refreshing partition table...")
-            # Auto-refresh partition table after successful erase
+            gui.log_message(f"[OK] {gui.tr('erase_all_done')}")
             read_partition_table(gui)
-        else:
-            gui.log_message(f"[ERROR] Failed to erase {current_storage}: {output if output else 'Unknown error'}")
-    
-    gui.log_message(f"[INFO] Erasing all data on {current_storage}... This may take a moment.")
-    gui.run_command([RKTOOL, "ef", "all"], "erasing_all_storage", on_finished)
+
+    gui.log_message(f"[INFO] {gui.tr('erase_all_start')}")
+    gui.run_command([RKTOOL, "ef"], "erasing_all_storage", on_finished)
 
 
 # ============================================================================
