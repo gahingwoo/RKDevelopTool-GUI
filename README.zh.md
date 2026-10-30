@@ -35,7 +35,15 @@ RKDevelopTool GUI 是 Rockchip rkdeveloptool 的图形界面，适用于 Linux �
 
 ---
 
-## 下载（推荐）
+## 一行命令安装（macOS 和 Linux）
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
+```
+
+它会下载适合这台电脑的最新版本，用 GitHub 公布的 SHA-256 校验后安装：macOS 上装到 `/Applications`（用这种方式不会出现「无法打开」的提示），Linux 上把 AppImage 放到 `~/.local/bin` 并加进应用菜单。想先看看脚本内容可以[打开 install.sh](install.sh)。
+
+## 下载
 
 每个 [GitHub Release](https://github.com/gahingwoo/RKDevelopTool-GUI/releases) 都附带预编译包，**已自带 `rkdeveloptool`**，无需另外安装。
 
@@ -49,9 +57,7 @@ RKDevelopTool GUI 是 Rockchip rkdeveloptool 的图形界面，适用于 Linux �
 
 点击右下角的「检查更新」即可检查新版本。应用也会自动检查，每天最多一次：只向 GitHub Releases API 发一个请求，不发送任何其他信息。可以在「设置」里关闭。
 
-> **macOS 提示：** 应用尚未做公证，首次打开 macOS 可能提示「无法打开」。
-> 右键应用 → **打开** → **打开**，或执行
-> `xattr -cr /Applications/RKDevelopTool-GUI.app`。
+> **macOS，用 DMG 第一次打开时：** 应用还没有做公证，macOS 会提示无法打开。macOS 15（Sequoia）及以后：打开**系统设置 → 隐私与安全性**，往下拉，点**仍要打开**（右键 → 打开在新系统上已经不管用了）。更早的版本：右键应用 → **打开** → **打开**。也可以执行 `xattr -cr /Applications/RKDevelopTool-GUI.app`。只需要第一次这样做，之后应用自己的更新不会再触发这个提示。
 
 ### Linux：USB 访问权限
 

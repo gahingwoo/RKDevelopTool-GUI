@@ -35,7 +35,19 @@ RKDevelopTool GUI is a graphical front-end for Rockchip's rkdeveloptool, for Lin
 
 ---
 
-## Download (recommended)
+## Install in one line (macOS and Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
+```
+
+It downloads the latest release for your machine, checks it against the
+SHA-256 checksum GitHub publishes, and installs it: the app into
+`/Applications` on macOS (no "cannot be opened" prompt this way), the AppImage
+into `~/.local/bin` with a menu entry on Linux. [Read the script](install.sh)
+first if you like.
+
+## Download
 
 Prebuilt packages are attached to every [GitHub Release](https://github.com/gahingwoo/RKDevelopTool-GUI/releases).
 They **bundle `rkdeveloptool`**, so there is nothing else to install.
@@ -52,9 +64,13 @@ To update, click "Check for updates" in the bottom-right corner. The app also
 checks by itself at most once a day: one request to the GitHub Releases API,
 and nothing else is sent. You can turn that off in Settings.
 
-> **macOS note:** the app is not notarized yet, so on first launch macOS may say
-> it "cannot be opened". Right-click the app → **Open** → **Open**, or run
-> `xattr -cr /Applications/RKDevelopTool-GUI.app`.
+> **macOS, first launch from the DMG:** the app isn't notarized yet, so macOS
+> says it can't be opened. On macOS 15 (Sequoia) and later, open **System
+> Settings → Privacy & Security**, scroll down and click **Open Anyway**
+> (right-click → Open no longer gets past this). On older versions,
+> right-click the app → **Open** → **Open**. Or run
+> `xattr -cr /Applications/RKDevelopTool-GUI.app`. This is only needed once:
+> the app's own updates don't trigger it.
 
 ### Linux: USB access
 
