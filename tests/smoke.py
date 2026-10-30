@@ -1687,13 +1687,6 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
-def check_flash_options(app):
-    """The Parameter tab's options take effect: verify shares the burn
-    confirmation's setting, erase runs ef before a whole image, reset runs
-    rd after it, retries set how often a full-flash step is retried, and
-    the timeout reaches the command worker."""
-
-
 def check_rkfw_read_back(app):
     """After a full flash, each partition is read back at its offset from
     the parameter file and compared; filler is "couldn't verify", a real
@@ -1735,156 +1728,6 @@ def check_loader_before_write(app):
     window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                           settings=AppSettings())
     window.stop_device_detection()
-    s = window.settings
-    try:
-        window.verify_after_burn.setChecked(True)
-        if s.get_str(app_settings.KEY_VERIFY_AFTER_WRITE) != "1":
-            errors.append("Verify After Burn isn't the burn confirmation's setting")
-        window.timeout_spinbox.setValue(45)
-        window.retry_count_spinbox.setValue(0)
-        if (s.get_int(app_settings.KEY_IDLE_TIMEOUT), s.get_int(app_settings.KEY_STEP_RETRIES)) != (45, 0):
-            errors.append("timeout/retries aren't saved")
-
-        ran = []
-
-        def fake_run(cmd, key, callback=None):
-            ran.append(cmd[1])
-            QTimer.singleShot(0, lambda: callback and callback(True, ""))
-
-        real = (window.run_command, QMessageBox.exec)
-        window.run_command = fake_run
-        QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
-        window.command_worker = None
-        window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
-        try:
-            for erase, reset, want in ((True, True, ["ef", "wl", "rd"]), (False, False, ["wl"])):
-                window.verify_after_burn.setChecked(False)
-                window.erase_before_burn.setChecked(erase)
-                window.reset_after_burn.setChecked(reset)
-                ran.clear()
-                ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
-                end = time.time() + 5
-                while time.time() < end and len(ran) < len(want):
-                    app.processEvents()
-                    time.sleep(0.01)
-                for _ in range(30):
-                    app.processEvents()
-                    time.sleep(0.005)
-                if ran != want:
-                    errors.append(f"erase={erase} reset={reset}: ran {ran}, want {want}")
-            # Retries 0: a failed full-flash step isn't tried again.
-            ran.clear()
-            window.run_command = lambda cmd, key, cb=None: ran.append(cmd[1]) or QTimer.singleShot(
-                0, lambda: cb(False, "boom"))
-            real_msg = ops._show_rkfw_message
-            ops._show_rkfw_message = lambda *a, **k: None
-            tmp = tempfile.mkdtemp(dir=work)
-            window._rkfw_flashing = True
-            ops._run_rkfw_steps(window, [([ops.RKTOOL, "gpt", "x"], "importing_gpt", "gpt")], 0, tmp)
-            end = time.time() + 5
-            while time.time() < end and window._rkfw_flashing:
-                app.processEvents()
-                time.sleep(0.01)
-            ops._show_rkfw_message = real_msg
-            if ran != ["gpt"]:
-                errors.append(f"retries 0 still retried: {ran}")
-        finally:
-            window.run_command, QMessageBox.exec = real
-            window.reset_after_burn.setChecked(False)
-            window.erase_before_burn.setChecked(False)
-            window.verify_after_burn.setChecked(False)
-
-        # The timeout reaches the worker.
-        window.command_worker = None
-        window.run_command([RKTOOL, "ld"], "reading_flash_info")
-        timed = window.command_worker.idle_timeout
-        window.command_worker.wait(5000)
-        app.processEvents()
-        if timed != 45:
-            errors.append(f"idle timeout {timed}, want 45")
-
-        # ef reports "total N, current M" (sectors): that is its progress.
-        from rkdeveloptool_gui.workers import CommandWorker
-        worker = CommandWorker(["ef"], "erase_flash", window.manager)
-        if worker._extract_progress("Erase Flash total 61079552, current 30539776") != 50:
-            errors.append("ef's progress lines aren't read as progress")
-    finally:
-        s.set(app_settings.KEY_IDLE_TIMEOUT, str(app_settings.DEFAULT_IDLE_TIMEOUT_S))
-        s.set(app_settings.KEY_STEP_RETRIES, str(app_settings.DEFAULT_STEP_RETRIES))
-        window.cleanup()
-        window.deleteLater()
-        app.processEvents()
-
-
-def check_idle_timeout(app):
-    """A command that stops printing is stopped after the idle timeout."""
-    from rkdeveloptool_gui.workers import CommandWorker
-
-    hang = os.path.join(_tmp, "hang.sh")
-    with open(hang, "w") as f:
-        f.write("#!/bin/sh\necho start\nsleep 30\n")
-    os.chmod(hang, 0o755)
-    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
-                          settings=AppSettings())
-    window.stop_device_detection()
-    worker = CommandWorker([hang], "reading_flash_info", window.manager)
-    worker.idle_timeout = 2
-    got = []
-    worker.finished_signal.connect(lambda ok, msg: got.append(ok))
-    started = time.time()
-    worker.start()
-    worker.wait(15000)
-    app.processEvents()
-    took = time.time() - started
-    if got != [False] or not worker.timed_out or took > 10:
-        errors.append(f"idle timeout: result {got}, timed_out {worker.timed_out}, {took:.1f}s")
-    window.cleanup()
-    window.deleteLater()
-    app.processEvents()
-
-
-def check_partition_erase(app):
-    """Erase in a partition row writes zeros over the start of that
-    partition with wl (rkdeveloptool's ef can't erase one partition), and
-    No, the default, does nothing."""
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QMessageBox
-
-    from rkdeveloptool_gui import operations as ops
-
-    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
-                          settings=AppSettings())
-    window.stop_device_detection()
-    window.partitions = {"boot": {"address": "0x4000", "size": "0x2000"},
-                         "rootfs": {"address": "0x8000", "size": "unknown"}}
-    ops.populate_partition_table(window)
-    ran, answer, defaults = [], [QMessageBox.StandardButton.Yes], []
-
-    def fake_run(cmd, key, callback=None):
-        ran.append((cmd[1], cmd[2], os.path.getsize(cmd[3]), key))
-        QTimer.singleShot(0, lambda: callback and callback(True, ""))
-
-    real = (window.run_command, QMessageBox.exec)
-    window.run_command = fake_run
-    QMessageBox.exec = lambda self: defaults.append(self.defaultButton() is self.button(
-        QMessageBox.StandardButton.No)) or answer[0]
-    try:
-        row_buttons = [b.text() for b in window.partition_table.cellWidget(0, 3).findChildren(
-            __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)]
-        if window.tr("action_erase") not in row_buttons:
-            errors.append(f"partition row buttons: {row_buttons}")
-        ops.erase_partition(window, "boot")
-        ops.erase_partition(window, "rootfs")
-        answer[0] = QMessageBox.StandardButton.No
-        ops.erase_partition(window, "boot")
-        for _ in range(20):
-            app.processEvents()
-        want = [("wl", "0x4000", 0x2000 * 512, "erase_partition"),
-                ("wl", "0x8000", ops.ERASE_PARTITION_BYTES, "erase_partition")]
-        if ran != want or defaults != [True, True, True]:
-            errors.append(f"partition erase ran {ran}, No default {defaults}")
-    finally:
-        window.run_command, QMessageBox.exec = real
     ran, offered = [], []
     loader = os.path.join(work, "loader.bin")
     with open(loader, "wb") as f:
@@ -2127,6 +1970,178 @@ def check_command_chain(app):
         if window._command_active:
             errors.append("the window stays busy after the chain finished")
     finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_flash_options(app):
+    """The Parameter tab's options take effect: verify shares the burn
+    confirmation's setting, erase runs ef before a whole image, reset runs
+    rd after it, retries set how often a full-flash step is retried, and
+    the timeout reaches the command worker."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "disk.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    s = window.settings
+    try:
+        window.verify_after_burn.setChecked(True)
+        if s.get_str(app_settings.KEY_VERIFY_AFTER_WRITE) != "1":
+            errors.append("Verify After Burn isn't the burn confirmation's setting")
+        window.timeout_spinbox.setValue(45)
+        window.retry_count_spinbox.setValue(0)
+        if (s.get_int(app_settings.KEY_IDLE_TIMEOUT), s.get_int(app_settings.KEY_STEP_RETRIES)) != (45, 0):
+            errors.append("timeout/retries aren't saved")
+
+        ran = []
+
+        def fake_run(cmd, key, callback=None):
+            ran.append(cmd[1])
+            QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+        real = (window.run_command, QMessageBox.exec)
+        window.run_command = fake_run
+        QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
+        window.command_worker = None
+        window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+        try:
+            for erase, reset, want in ((True, True, ["ef", "wl", "rd"]), (False, False, ["wl"])):
+                window.verify_after_burn.setChecked(False)
+                window.erase_before_burn.setChecked(erase)
+                window.reset_after_burn.setChecked(reset)
+                ran.clear()
+                ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+                end = time.time() + 5
+                while time.time() < end and len(ran) < len(want):
+                    app.processEvents()
+                    time.sleep(0.01)
+                for _ in range(30):
+                    app.processEvents()
+                    time.sleep(0.005)
+                if ran != want:
+                    errors.append(f"erase={erase} reset={reset}: ran {ran}, want {want}")
+            # Retries 0: a failed full-flash step isn't tried again.
+            ran.clear()
+            window.run_command = lambda cmd, key, cb=None: ran.append(cmd[1]) or QTimer.singleShot(
+                0, lambda: cb(False, "boom"))
+            real_msg = ops._show_rkfw_message
+            ops._show_rkfw_message = lambda *a, **k: None
+            tmp = tempfile.mkdtemp(dir=work)
+            window._rkfw_flashing = True
+            ops._run_rkfw_steps(window, [([ops.RKTOOL, "gpt", "x"], "importing_gpt", "gpt")], 0, tmp)
+            end = time.time() + 5
+            while time.time() < end and window._rkfw_flashing:
+                app.processEvents()
+                time.sleep(0.01)
+            ops._show_rkfw_message = real_msg
+            if ran != ["gpt"]:
+                errors.append(f"retries 0 still retried: {ran}")
+        finally:
+            window.run_command, QMessageBox.exec = real
+            window.reset_after_burn.setChecked(False)
+            window.erase_before_burn.setChecked(False)
+            window.verify_after_burn.setChecked(False)
+
+        # The timeout reaches the worker.
+        window.command_worker = None
+        window.run_command([RKTOOL, "ld"], "reading_flash_info")
+        timed = window.command_worker.idle_timeout
+        window.command_worker.wait(5000)
+        app.processEvents()
+        if timed != 45:
+            errors.append(f"idle timeout {timed}, want 45")
+
+        # ef reports "total N, current M" (sectors): that is its progress.
+        from rkdeveloptool_gui.workers import CommandWorker
+        worker = CommandWorker(["ef"], "erase_flash", window.manager)
+        if worker._extract_progress("Erase Flash total 61079552, current 30539776") != 50:
+            errors.append("ef's progress lines aren't read as progress")
+    finally:
+        s.set(app_settings.KEY_IDLE_TIMEOUT, str(app_settings.DEFAULT_IDLE_TIMEOUT_S))
+        s.set(app_settings.KEY_STEP_RETRIES, str(app_settings.DEFAULT_STEP_RETRIES))
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_idle_timeout(app):
+    """A command that stops printing is stopped after the idle timeout."""
+    from rkdeveloptool_gui.workers import CommandWorker
+
+    hang = os.path.join(_tmp, "hang.sh")
+    with open(hang, "w") as f:
+        f.write("#!/bin/sh\necho start\nsleep 30\n")
+    os.chmod(hang, 0o755)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    worker = CommandWorker([hang], "reading_flash_info", window.manager)
+    worker.idle_timeout = 2
+    got = []
+    worker.finished_signal.connect(lambda ok, msg: got.append(ok))
+    started = time.time()
+    worker.start()
+    worker.wait(15000)
+    app.processEvents()
+    took = time.time() - started
+    if got != [False] or not worker.timed_out or took > 10:
+        errors.append(f"idle timeout: result {got}, timed_out {worker.timed_out}, {took:.1f}s")
+    window.cleanup()
+    window.deleteLater()
+    app.processEvents()
+
+
+def check_partition_erase(app):
+    """Erase in a partition row writes zeros over the start of that
+    partition with wl (rkdeveloptool's ef can't erase one partition), and
+    No, the default, does nothing."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.partitions = {"boot": {"address": "0x4000", "size": "0x2000"},
+                         "rootfs": {"address": "0x8000", "size": "unknown"}}
+    ops.populate_partition_table(window)
+    ran, answer, defaults = [], [QMessageBox.StandardButton.Yes], []
+
+    def fake_run(cmd, key, callback=None):
+        ran.append((cmd[1], cmd[2], os.path.getsize(cmd[3]), key))
+        QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command = fake_run
+    QMessageBox.exec = lambda self: defaults.append(self.defaultButton() is self.button(
+        QMessageBox.StandardButton.No)) or answer[0]
+    try:
+        row_buttons = [b.text() for b in window.partition_table.cellWidget(0, 3).findChildren(
+            __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)]
+        if window.tr("action_erase") not in row_buttons:
+            errors.append(f"partition row buttons: {row_buttons}")
+        ops.erase_partition(window, "boot")
+        ops.erase_partition(window, "rootfs")
+        answer[0] = QMessageBox.StandardButton.No
+        ops.erase_partition(window, "boot")
+        for _ in range(20):
+            app.processEvents()
+        want = [("wl", "0x4000", 0x2000 * 512, "erase_partition"),
+                ("wl", "0x8000", ops.ERASE_PARTITION_BYTES, "erase_partition")]
+        if ran != want or defaults != [True, True, True]:
+            errors.append(f"partition erase ran {ran}, No default {defaults}")
+    finally:
+        window.run_command, QMessageBox.exec = real
         window.cleanup()
         window.deleteLater()
         app.processEvents()
