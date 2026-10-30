@@ -1837,14 +1837,84 @@ class RKDevToolGUI(QMainWindow):
         text = self.tr("update_found_message").format(release["version"], __version__)
         if not release.get("download"):
             text += "\n\n" + self.tr("update_no_package_hint")
+        install = updater.can_self_update(release)
         self._update_message(text, QMessageBox.Icon.Information,
                              download=release.get("download") or release["page"],
-                             page=release["page"], notes=release.get("notes"))
+                             page=release["page"], notes=release.get("notes"),
+                             install=release if install else None)
+
+    def install_update(self, release):
+        """Download, check and install an update, then offer to restart."""
+        from PySide6.QtWidgets import QProgressDialog
+        line = getattr(self, 'production', None)
+        if self._device_busy() or (line is not None and line.active) or \
+                getattr(self, '_rkfw_flashing', False):
+            self._update_message(self.tr("update_busy"), QMessageBox.Icon.Warning)
+            return
+        dest = os.path.join(operations.loader_cache_dir().rsplit(os.sep, 1)[0], "updates")
+        worker = updater.UpdateInstallWorker(release, dest)
+        self._update_install_worker = worker
+        # No parent, like the app's message boxes: it outlives nothing.
+        dialog = QProgressDialog(self.tr("update_downloading").format(release["version"]),
+                                 self.tr("cancel_btn"), 0, 100)
+        self._update_progress = dialog
+        dialog.setWindowTitle(self.tr("update_title"))
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.canceled.connect(worker.cancel)
+        worker.progress.connect(safe_slot(dialog.setValue))
+
+        def installing():
+            dialog.setLabelText(self.tr("update_installing"))
+            dialog.setCancelButton(None)        # too late to stop half-way
+
+        def done_with_dialog():
+            dialog.close()
+            dialog.deleteLater()
+            self._update_progress = None
+
+        def installed(restart):
+            done_with_dialog()
+            self.log_message(f"[OK] {self.tr('update_installed').format(release['version'])}")
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(self.tr("update_title"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(self.tr("update_installed_restart").format(release["version"]))
+            now = msg.addButton(self.tr("update_restart_now"), QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton(self.tr("later_btn"), QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() is now:
+                self.restart_into(restart)
+
+        def failed(error):
+            done_with_dialog()
+            if error == "cancelled":
+                return
+            self.log_message(f"[ERROR] {self.tr('update_install_failed')}: {error}")
+            self._update_message(self.tr("update_install_failed_message"), QMessageBox.Icon.Warning,
+                                 download=release.get("download"), page=release.get("page"),
+                                 details=error)
+
+        worker.installing.connect(safe_slot(installing))
+        worker.installed.connect(safe_slot(installed))
+        worker.failed.connect(safe_slot(failed))
+        worker.start()
+
+    def restart_into(self, command):
+        """Start the new version once this one has quit."""
+        from PySide6.QtCore import QProcess
+        import shlex
+        QProcess.startDetached("/bin/sh", ["-c", "sleep 1; exec " + " ".join(
+            shlex.quote(c) for c in command)])
+        self.close()
 
     def _update_message(self, text, icon, download=None, page=None, notes=None,
-                        details=None):
+                        details=None, install=None):
         """Update result dialog with an 'automatically check' checkbox."""
-        msg = QMessageBox(self)
+        msg = QMessageBox()
         style_messagebox(msg)
         msg.setWindowTitle(self.tr("update_title"))
         msg.setIcon(icon)
@@ -1854,7 +1924,11 @@ class RKDevToolGUI(QMainWindow):
         auto = QCheckBox(self.tr("update_auto_check"))
         auto.setChecked(self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") == "1")
         msg.setCheckBox(auto)
-        download_btn = page_btn = None
+        download_btn = page_btn = install_btn = None
+        if install:
+            install_btn = msg.addButton(self.tr("update_install"),
+                                        QMessageBox.ButtonRole.AcceptRole)
+            msg.setDefaultButton(install_btn)
         if download:
             download_btn = msg.addButton(self.tr("update_download"),
                                          QMessageBox.ButtonRole.AcceptRole)
@@ -1865,7 +1939,9 @@ class RKDevToolGUI(QMainWindow):
         msg.exec()
         self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if auto.isChecked() else "0")
         clicked = msg.clickedButton()
-        if download_btn is not None and clicked is download_btn:
+        if install_btn is not None and clicked is install_btn:
+            self.install_update(install)
+        elif download_btn is not None and clicked is download_btn:
             QDesktopServices.openUrl(QUrl(download))
         elif page_btn is not None and clicked is page_btn:
             QDesktopServices.openUrl(QUrl(page))

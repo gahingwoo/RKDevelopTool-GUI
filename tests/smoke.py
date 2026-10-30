@@ -2559,6 +2559,124 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_self_update(app):
+    """In-place updates: the download must match the release digest; an
+    AppImage is replaced atomically; deb/rpm go through pkexec and the
+    package manager; nothing installs without a digest or mid-flash; the
+    dialog's Download and Install ends in a restart."""
+    import hashlib
+    import http.server
+    import threading
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import updater
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    payload = os.urandom(300000)
+    with open(os.path.join(work, "new.AppImage"), "wb") as f:
+        f.write(payload)
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=work, **k)
+
+        def log_message(self, *a):
+            pass
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/new.AppImage"
+    good = {"url": url, "name": "RKDevelopTool-GUI-9.9.9-x86_64.AppImage", "size": len(payload),
+            "digest": "sha256:" + hashlib.sha256(payload).hexdigest()}
+    try:
+        got = updater.download(good, os.path.join(work, "dl"))
+        if open(got, "rb").read() != payload:
+            errors.append("the downloaded update differs from the file served")
+        try:
+            updater.download(dict(good, digest="sha256:" + "0" * 64), os.path.join(work, "bad"))
+            errors.append("a download with the wrong checksum was accepted")
+        except updater.UpdateError:
+            pass
+        if os.path.exists(os.path.join(work, "bad", good["name"])):
+            errors.append("a download with the wrong checksum was left behind")
+        if updater.can_self_update({"asset": dict(good, digest="")}, "appimage") or \
+                updater.can_self_update({"asset": good}, "pip") or \
+                not updater.can_self_update({"asset": good}, "appimage"):
+            errors.append("can_self_update picked the wrong cases")
+
+        # AppImage: the file at $APPIMAGE is replaced, executable.
+        target = os.path.join(work, "RKDevelopTool-GUI.AppImage")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        os.environ["APPIMAGE"] = target
+        restart = updater.install(got, "appimage")
+        if open(target, "rb").read() != payload or not os.access(target, os.X_OK) \
+                or restart != [target] or os.path.exists(target + ".new"):
+            errors.append("the AppImage wasn't replaced in place")
+    finally:
+        os.environ.pop("APPIMAGE", None)
+        server.shutdown()
+
+    # deb/rpm: pkexec runs the package manager on the downloaded file.
+    bindir = os.path.join(work, "bin")
+    os.makedirs(bindir)
+    calls = os.path.join(work, "calls")
+    for tool in ("pkexec", "apt-get", "dnf"):
+        with open(os.path.join(bindir, tool), "w") as f:
+            f.write(f'#!/bin/sh\necho "{tool} $*" >> {calls}\nexit 0\n')
+        os.chmod(os.path.join(bindir, tool), 0o755)
+    real_path = os.environ["PATH"]
+    os.environ["PATH"] = bindir + os.pathsep + real_path
+    try:
+        updater.install("/tmp/x.deb", "deb")
+        updater.install("/tmp/x.rpm", "rpm")
+    finally:
+        os.environ["PATH"] = real_path
+    with open(calls) as f:
+        lines = f.read().splitlines()
+    if lines != ["pkexec apt-get install -y /tmp/x.deb", "pkexec dnf install -y /tmp/x.rpm"]:
+        errors.append(f"package installs ran {lines}")
+
+    # The window: refused mid-flash; otherwise installed, then restarted.
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    shown, restarts = [], []
+    real = (QMessageBox.exec, updater.UpdateInstallWorker.start, window.restart_into)
+
+    def answer(self):
+        shown.append(self.text())
+        for b in self.buttons():
+            if b.text() == window.tr("update_restart_now"):
+                b.click()
+        return 0
+    QMessageBox.exec = answer
+    window.restart_into = lambda command: restarts.append(command)
+    try:
+        release = {"version": "9.9.9", "asset": good, "page": "p", "download": url}
+        window._command_active = True
+        window.install_update(release)
+        window._command_active = False
+        if not shown or shown[-1] != window.tr("update_busy"):
+            errors.append(f"an update started mid-flash: {shown}")
+
+        def fake_start(worker):
+            worker.progress.emit(50)
+            worker.installing.emit()
+            worker.installed.emit(["/new/app"])
+        updater.UpdateInstallWorker.start = fake_start
+        window.install_update(release)
+        for _ in range(10):
+            app.processEvents()
+        if restarts != [["/new/app"]]:
+            errors.append(f"after installing, restart got {restarts} (dialogs {shown})")
+    finally:
+        QMessageBox.exec, updater.UpdateInstallWorker.start, window.restart_into = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2585,6 +2703,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_self_update(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
