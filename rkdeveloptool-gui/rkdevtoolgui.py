@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info, chip_from_device,
     classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
@@ -1041,7 +1041,9 @@ class RKDevToolGUI(QMainWindow):
         if self.current_device:
             mode_text = self.tr(f"connected_{self.device_mode.lower()}")
             # Parse chip info to show readable chip name
-            chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
+            chip_text = (parse_chip_info(self.chip_info)
+                         if self.chip_info and self.chip_info != "unknown_chip"
+                         else chip_from_device(self.current_device) or self.tr('unknown_chip'))
             self.device_status_label.setText(mode_text)
             self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
@@ -1236,20 +1238,19 @@ class RKDevToolGUI(QMainWindow):
         # A full RKFW flash retries and reports its own failures (with this
         # guidance added); don't pop a dialog for each step.
         in_rkfw_flow = getattr(self, '_rkfw_flashing', False)
-        # Call callback if provided
-        if hasattr(self, '_command_callback') and self._command_callback:
+        # Take the callback before calling it: a callback that starts the
+        # next command registers that command's callback, which clearing it
+        # afterwards used to throw away (the chain then stopped silently).
+        callback = getattr(self, '_command_callback', None)
+        self._command_callback = None
+        if callback:
             try:
-                # Get the command output from the worker if it has output
-                output = ""
-                if hasattr(self.command_worker, 'output'):
-                    output = self.command_worker.output
-                self._command_callback(success, output)
+                callback(success, output)
             except Exception as e:
                 self.log_message(f"[ERROR] Callback error: {e}")
-            finally:
-                self._command_callback = None
-        self._command_active = False
-        self._update_poll_mode()
+        if self.command_worker is worker:   # the callback started nothing new
+            self._command_active = False
+            self._update_poll_mode()
         if getattr(self, '_cancel_requested', False) and not success:
             # Stopped by the user: not a failure to explain. A cancelled
             # write leaves the storage partly written; say so. (A full RKFW
