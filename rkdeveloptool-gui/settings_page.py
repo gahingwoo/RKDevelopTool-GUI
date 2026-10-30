@@ -344,6 +344,11 @@ class SettingsPage(QWidget):
         auto.toggled.connect(safe_slot(
             lambda on: self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if on else "0")))
         v.addWidget(auto)
+        notify_box = QCheckBox(self.tr("settings_notify"))
+        notify_box.setChecked(self.settings.get_flag(app_settings.KEY_NOTIFY, True))
+        notify_box.toggled.connect(safe_slot(
+            lambda on: self.settings.set(app_settings.KEY_NOTIFY, "1" if on else "0")))
+        v.addWidget(notify_box)
         self.version_line = QLabel()
         self._show_version_line()
         row = QHBoxLayout()

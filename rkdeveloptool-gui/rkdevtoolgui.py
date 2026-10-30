@@ -1239,6 +1239,8 @@ class RKDevToolGUI(QMainWindow):
                                + (f"  ({note})" if note else ""))
         self.line_results.insertItem(0, item)
         self.update_production_status()
+        from .notify import notify
+        notify(self, self.tr("line_group"), text)
 
     # Flash history
     def refresh_history(self):
@@ -1445,6 +1447,8 @@ class RKDevToolGUI(QMainWindow):
     def end_job(self):
         self._job = None
         self.log_widget.follow_log_progress = True
+        from .notify import set_progress
+        set_progress(None)
 
     def _on_command_progress(self, percent):
         job = getattr(self, '_job', None)
@@ -1466,6 +1470,8 @@ class RKDevToolGUI(QMainWindow):
         if eta is not None:
             parts.append(format_eta(self.tr, eta))
         self.progress_label.setText(" · ".join(parts))
+        from .notify import set_progress
+        set_progress(tracker.percent())
 
     def on_command_finished(self, success, error_msg):
         """Handle command completion"""
