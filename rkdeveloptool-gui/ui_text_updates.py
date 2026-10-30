@@ -240,12 +240,14 @@ def update_advanced_tab_texts(gui):
     gui.show_usb_info_btn.setText(gui.tr("show_usb_info_btn"))
 
     # Mass production
-    gui.mass_production_group.setTitle(gui.tr("mass_start_production"))
-    gui.mass_scan_btn.setText(gui.tr("mass_device_scan"))
+    gui.mass_production_group.setTitle(gui.tr("line_group"))
     gui.mass_firmware_label.setText(gui.tr("mass_firmware_select"))
     gui.mass_firmware_browse_btn.setText(gui.tr("browse_btn"))
-    gui.mass_start_btn.setText(gui.tr("mass_start_production"))
-    gui.mass_stop_btn.setText(gui.tr("mass_stop_production"))
+    gui.line_loader_note.setText(gui.tr("line_loader_note"))
+    gui.line_verify.setText(gui.tr("line_verify"))
+    gui.mass_start_btn.setText(gui.tr("line_start"))
+    gui.mass_stop_btn.setText(gui.tr("line_stop"))
+    gui.update_production_status()
 
 
 def update_misc_texts(gui):

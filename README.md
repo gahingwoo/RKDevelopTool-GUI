@@ -15,6 +15,8 @@ RKDevelopTool GUI is a graphical front-end for Rockchip's rkdeveloptool, for Lin
 - A check before every write: device connected, Loader loaded, the right kind of image for the address, and enough storage for it. A failed check stops the write.
 - Progress for the whole write with speed and time left, a Cancel button, and an optional read-back verification afterwards.
 - An `update.img` brings its own Loader. For other images in Maskrom mode, the app offers to load yours and picks the right way to do it.
+- No Loader for your chip? **Get Loader for This Chip** builds one from Rockchip's [rkbin](https://github.com/rockchip-linux/rkbin) repository.
+- A production line for flashing the same image onto many boards, one after another.
 
 **When something goes wrong**
 - Failures come with the likely cause and what to try, instead of an exit code.
@@ -148,12 +150,22 @@ Alternatively, you can install it via a [self-hosted package repository](https:/
    `.img.xz` all work.
 3. For anything other than an `update.img` (which brings its own Loader),
    choose the Loader for your chip, for example `rk3588_spl_loader_*.bin`, and
-   load it when the app asks, or with **Load Loader**.
+   load it when the app asks, or with **Load Loader**. If you don't have one,
+   **Get Loader for This Chip** downloads the parts from rkbin and builds it.
 4. Click **Start One-Click Burn**. Review the check results and confirm. For
    a raw or compressed image you can also tick "Read back and verify".
 5. Wait for it to finish. The bar covers the whole flash, and **Cancel**
    stops it, but a cancelled write has to be flashed again before the board
    boots.
+
+### Many boards
+
+rkdeveloptool works with one connected board at a time, so the production line
+on the **Advanced Tools** tab takes boards one after another. Choose the image,
+click **Start Line**, then plug in boards in Maskrom mode one at a time. Each
+board gets its Loader (the one on the Firmware Download tab, or one built from
+rkbin), a size check, the write, an optional read-back and a reset. When the
+line says so, unplug it and plug in the next. Results are listed per board.
 
 ### Partitions
 

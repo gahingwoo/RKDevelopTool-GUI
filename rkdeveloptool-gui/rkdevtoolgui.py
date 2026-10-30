@@ -45,6 +45,7 @@ from .i18n import TRANSLATIONS
 from .themes import ThemeManager, ThemeAutoManager, status_color
 from .operations import style_messagebox
 from . import operations
+from .production import ProductionLine
 from .log_widget import RealtimeLogWidget
 from . import settings as app_settings
 from . import updater
@@ -165,8 +166,7 @@ class RKDevToolGUI(QMainWindow):
         self.device_worker = None
         self.command_worker = None
         self.partition_worker = None
-        self.mass_workers = []
-        self.mass_production_active = False
+        self.production = ProductionLine(self)
         self._partition_refresh_lock = False
         self.loader_loaded = False  # Track if loader has been loaded
         self.maskrom_device_shown_hint = False  # Track if we've shown loader hint for current device
@@ -545,13 +545,15 @@ class RKDevToolGUI(QMainWindow):
         self.export_log_btn = advanced_widgets['export_log']
         self.show_usb_info_btn = advanced_widgets['usb_info']
         self.mass_production_group = advanced_widgets['mass_group']
-        self.mass_device_list = advanced_widgets['mass_list']
-        self.mass_scan_btn = advanced_widgets['mass_scan']
         self.mass_firmware_path = advanced_widgets['mass_firmware']
         self.mass_firmware_browse_btn = advanced_widgets['mass_browse']
         self.mass_start_btn = advanced_widgets['mass_start']
         self.mass_stop_btn = advanced_widgets['mass_stop']
-        self.mass_progress_label = advanced_widgets['mass_progress']
+        self.line_loader_note = advanced_widgets['line_loader_note']
+        self.line_verify = advanced_widgets['line_verify']
+        self.line_status = advanced_widgets['line_status']
+        self.line_counts = advanced_widgets['line_counts']
+        self.line_results = advanced_widgets['line_results']
         self.read_address_label = advanced_widgets.get('read_address_label')
         self.read_length_label = advanced_widgets.get('read_length_label')
         self.read_save_path_label = advanced_widgets.get('read_save_label')
@@ -857,10 +859,13 @@ class RKDevToolGUI(QMainWindow):
             detect_supported_storage_types(self)
             
             # Show dialog only once when device connects in Maskrom mode AND no chip info
-            if "Maskrom" in mode and not self.maskrom_device_shown_hint and self.loader_loaded == False:
+            # (the production line loads the Loader itself).
+            if ("Maskrom" in mode and not self.maskrom_device_shown_hint
+                    and not self.loader_loaded and not self.production.active):
                 self.maskrom_device_shown_hint = True  # Set immediately to prevent repeat
                 self._show_loader_hint()
         self.update_device_status()
+        self.production.device_changed()
 
     # Disconnect during a write
     # Commands that change what's on the storage: losing the device during
@@ -872,7 +877,9 @@ class RKDevToolGUI(QMainWindow):
     _ABSENT_POLLS_FOR_LOSS = 2
 
     def _device_busy(self):
-        return getattr(self, '_command_active', False) or getattr(self, '_rkfw_flashing', False)
+        line = getattr(self, 'production', None)
+        return (getattr(self, '_command_active', False) or getattr(self, '_rkfw_flashing', False)
+                or (line is not None and line.busy))
 
     def _update_cancel_button(self):
         """Show Cancel only while something is running that it can stop."""
@@ -969,6 +976,7 @@ class RKDevToolGUI(QMainWindow):
         self.maskrom_device_shown_hint = False
         self._cached_flash_info = None
         self.update_device_status()
+        self.production.device_changed()
 
     # Buttons / inputs that only make sense when a device is connected.
     # Used by _update_action_states to avoid the "click then get an error" trap.
@@ -1012,7 +1020,8 @@ class RKDevToolGUI(QMainWindow):
         # which would otherwise re-enable these mid-flash and let the user
         # start a second flash on top of the running one.
         flashing = (getattr(self, '_rkfw_flashing', False)
-                    or getattr(self, '_image_prep_busy', False))
+                    or getattr(self, '_image_prep_busy', False)
+                    or self.production.active)
 
         for attr in self._DEVICE_DEPENDENT_WIDGETS:
             if flashing and attr in self._FLASH_BUSY_WIDGETS:
@@ -1193,6 +1202,30 @@ class RKDevToolGUI(QMainWindow):
 
         self.command_worker.finished_signal.connect(safe_slot(self.on_command_finished))
         self.command_worker.start()
+
+    # Production line
+    def on_production_changed(self, status):
+        self._line_status = status
+        self.update_production_status()
+        self._update_action_states()
+
+    def update_production_status(self):
+        line = self.production
+        # Once stopped, the reason it stopped stays until the next start.
+        self.line_status.setText(getattr(self, '_line_status', '') or self.tr("line_idle"))
+        self.line_counts.setText(self.tr("line_counts").format(line.ok, line.failed))
+        self.mass_start_btn.setEnabled(not line.active)
+        self.mass_stop_btn.setEnabled(line.active)
+        self.mass_firmware_path.setEnabled(not line.active)
+        self.mass_firmware_browse_btn.setEnabled(not line.active)
+        self.line_verify.setEnabled(not line.active)
+
+    def on_production_board(self, success, text, note):
+        from PySide6.QtWidgets import QListWidgetItem
+        item = QListWidgetItem(f"{time.strftime('%H:%M:%S')}  {'✓' if success else '✗'}  {text}"
+                               + (f"  ({note})" if note else ""))
+        self.line_results.insertItem(0, item)
+        self.update_production_status()
 
     # Flash history
     def refresh_history(self):
@@ -1425,6 +1458,9 @@ class RKDevToolGUI(QMainWindow):
         # A full RKFW flash retries and reports its own failures (with this
         # guidance added); don't pop a dialog for each step.
         in_rkfw_flow = getattr(self, '_rkfw_flashing', False)
+        # The production line records each board's result instead of
+        # stopping for a dialog.
+        in_line = self.production.active
         # Take the callback before calling it: a callback that starts the
         # next command registers that command's callback, which clearing it
         # afterwards used to throw away (the chain then stopped silently).
@@ -1445,7 +1481,7 @@ class RKDevToolGUI(QMainWindow):
             self._cancel_requested = False
             self._lost_during_write = False
             self.log_message(f"[WARNING] {self.tr('cancelled_log')}")
-            if getattr(self, '_cancel_was_write', False):
+            if getattr(self, '_cancel_was_write', False) and not in_line:
                 QMessageBox.warning(self, self.tr("cancelled_partial_title"),
                                     self.tr("cancelled_partial_message"))
             return
@@ -1453,7 +1489,8 @@ class RKDevToolGUI(QMainWindow):
             # Lost mid-write: say what state the storage is in and how to
             # recover, instead of the generic write-failure explanation.
             self._lost_during_write = False
-            self._show_lost_during_write()
+            if not in_line:
+                self._show_lost_during_write()
             return
         guidance = None if success else self.explain_failure(output)
         if guidance:
@@ -1461,8 +1498,10 @@ class RKDevToolGUI(QMainWindow):
             self.log_message(f"[ERROR] {title}\n{body}")
         # If command failed and in Maskrom mode and no chip info, suggest loading Loader
         # (only show once per device connection via maskrom_device_shown_hint flag)
-        if (not success and "Maskrom" in self.device_mode and 
-            not self.loader_loaded and not self.maskrom_device_shown_hint):
+        if in_line:
+            pass
+        elif (not success and "Maskrom" in self.device_mode and
+              not self.loader_loaded and not self.maskrom_device_shown_hint):
             self.maskrom_device_shown_hint = True
             self._show_loader_hint(is_failure=True)
         elif guidance and not in_rkfw_flow:
@@ -1903,15 +1942,9 @@ class RKDevToolGUI(QMainWindow):
                 except Exception as e:
                     print(f"Failed to stop partition worker: {e}")
 
-            # Stop mass workers
-            if self.mass_workers:
-                for w in self.mass_workers:
-                    try:
-                        if hasattr(w, 'terminate_process'):
-                            w.terminate_process()
-                        w.wait(1000)
-                    except Exception as e:
-                        print(f"Failed to stop mass worker: {e}")
+            # The production line's own workers (hashing, Loader download).
+            self.production.state = 'idle'
+            self.production.wait(3000)
 
             # Stop command worker
             if self.command_worker:
@@ -1982,7 +2015,7 @@ class RKDevToolGUI(QMainWindow):
         """Handle window close event"""
         try:
             busy = (self.command_worker is not None and self.command_worker.isRunning()) or \
-                   any(w.isRunning() for w in self.mass_workers) or \
+                   self.production.active or \
                    (getattr(self, '_rkfw_worker', None) is not None and
                     self._rkfw_worker.isRunning()) or \
                    (getattr(self, '_decompress_worker', None) is not None and

@@ -1620,6 +1620,205 @@ def check_storage_not_switched(app):
         errors.append("find_readback_filler reported filler for a one-byte difference")
 
 
+def check_production_line(app):
+    """Boards go through one at a time: Loader, size check, write, read
+    back, reset, then wait for the next. A failure is recorded without a
+    dialog and the line moves on; two boards at once are refused."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import production
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image = os.path.join(work, "board.img")
+    data = b"\0" * 510 + b"\x55\xaa" + os.urandom(5000)
+    with open(image, "wb") as f:
+        f.write(data)
+    loader = os.path.join(work, "rk3576_loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.loader_path.setText(loader)
+    ran, answers, dialogs = [], {}, []
+
+    def fake_run(cmd, key, callback=None):
+        ran.append(cmd[1])
+        ok, out = answers.get(cmd[1], (True, ""))
+        if cmd[1] == "rl" and ok:
+            with open(cmd[-1], "wb") as f:
+                f.write(answers.get("readback", data))
+        window._command_active = True
+        window._update_poll_mode()
+
+        def finish():
+            window._command_active = False
+            window._update_poll_mode()
+            if callback:
+                callback(ok, out)
+        QTimer.singleShot(0, finish)
+
+    def pump(until, seconds=10):
+        end = time.time() + seconds
+        while not until() and time.time() < end:
+            app.processEvents()
+            time.sleep(0.005)
+        return until()
+
+    def plug(count=1):
+        window.on_device_found(
+            [f"DevNo={i + 1}\tVid=0x2207,Pid=0x350e,LocationID={101 + i}\tMaskrom"
+             for i in range(count)], "Maskrom", "Chip Info: 36 37 35 33 0 0 0 0")
+
+    rfi = "Flash Info:\n\tFlash Size: 29824 MB\n\tFlash Size: 61079552 Sectors\n"
+    real_run, real_exec, real_delay = window.run_command, QMessageBox.exec, production.AFTER_DB_MS
+    window.run_command = fake_run
+    window.command_worker = None
+    QMessageBox.exec = lambda self: dialogs.append(self.text()) or QMessageBox.StandardButton.Ok
+    production.AFTER_DB_MS = 0
+    line = window.production
+    try:
+        answers["rfi"] = (True, rfi)
+        line.start(image, verify=True)
+        if not pump(lambda: line.state == production.WAITING):
+            errors.append(f"line didn't get to waiting: {line.state}")
+        plug()
+        if not pump(lambda: line.state == production.UNPLUG):
+            errors.append(f"board 1 didn't finish: {line.state}, ran {ran}")
+        if ran != ["db", "rfi", "wl", "rl", "rd"] or (line.ok, line.failed) != (1, 0):
+            errors.append(f"board 1 ran {ran}, ok/failed {line.ok}/{line.failed}")
+        if window.line_results.count() != 1 or "✓" not in window.line_results.item(0).text():
+            errors.append("board 1 isn't listed as done")
+
+        # Unplugged: next board. Two at once are refused.
+        window.on_device_lost()
+        if line.state != production.WAITING:
+            errors.append(f"after unplugging, line is {line.state}")
+        ran.clear()
+        plug(2)
+        pump(lambda: False, 0.2)
+        if ran or line.state != production.WAITING or "2 devices" not in window.line_status.text():
+            errors.append(f"two boards: ran {ran}, {line.state}, {window.line_status.text()!r}")
+
+        # A write that fails: recorded with the explanation, no dialog.
+        window.on_device_lost()
+        ran.clear()
+        answers["wl"] = (False, "Write LBA failed!\n")
+        plug()
+        pump(lambda: line.state == production.UNPLUG)
+        if ran != ["db", "rfi", "wl"] or line.failed != 1 or dialogs:
+            errors.append(f"failed write ran {ran}, failed {line.failed}, dialogs {dialogs}")
+        if "✗" not in window.line_results.item(0).text():
+            errors.append("the failed board isn't listed as failed")
+
+        # No Loader set and no chip info: built for the chip its USB ID names.
+        window.on_device_lost()
+        ran.clear()
+        answers["wl"] = (True, "")
+        window.loader_path.setText("")
+        fetched = []
+        real_fetch = production.loader_fetch.LoaderFetchWorker
+
+        class FakeFetch(real_fetch):
+            def run(self):
+                fetched.append(self.chip)
+                self.finished_ok.emit(loader, "RK3576MINIALL.ini", "")
+        production.loader_fetch.LoaderFetchWorker = FakeFetch
+        try:
+            window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
+                                   "Maskrom", "unknown_chip")
+            pump(lambda: line.state == production.UNPLUG)
+        finally:
+            production.loader_fetch.LoaderFetchWorker = real_fetch
+            window.loader_path.setText(loader)
+        if fetched != ["RK3576"] or ran[:1] != ["db"] or line.ok != 2:
+            errors.append(f"Loader by USB ID: fetched {fetched}, ran {ran}, ok {line.ok}")
+
+        # A read-back that differs is a failure; an image too big is never written.
+        window.on_device_lost()
+        ran.clear()
+        answers["wl"] = (True, "")
+        answers["readback"] = data[:-1] + b"\x01"
+        plug()
+        pump(lambda: line.state == production.UNPLUG)
+        if ran != ["db", "rfi", "wl", "rl"] or line.failed != 2:
+            errors.append(f"bad read-back ran {ran}, failed {line.failed}")
+        window.on_device_lost()
+        ran.clear()
+        answers["rfi"] = (True, "Flash Size: 4 Sectors\n")
+        plug()
+        pump(lambda: line.state == production.UNPLUG)
+        if "wl" in ran or line.failed != 3:
+            errors.append(f"too-big image ran {ran}, failed {line.failed}")
+
+        line.stop()
+        if line.state != production.IDLE or not window.mass_start_btn.isEnabled():
+            errors.append(f"stop left the line {line.state}")
+        if dialogs:
+            errors.append(f"the line opened dialogs: {dialogs}")
+    finally:
+        window.run_command = real_run
+        QMessageBox.exec = real_exec
+        production.AFTER_DB_MS = real_delay
+        if line.active:
+            line.stop()
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_production_line_real_commands(app):
+    """The same line through the real CommandWorker, with the stub
+    answering like a board: every step runs, including the reset after a
+    write long enough for its worker to be gone."""
+    from rkdeveloptool_gui import production
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image = os.path.join(work, "board.img")
+    with open(image, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 4096)
+    loader = os.path.join(work, "loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+    calls = os.path.join(work, "calls")
+    with open(_stub) as f:
+        quiet = f.read()
+    with open(_stub, "w") as f:
+        f.write('#!/bin/sh\necho "$1" >> ' + calls + '\ncase "$1" in\n'
+                '  rfi) printf "Flash Size: 61079552 Sectors\\n" ;;\n'
+                '  wl) sleep 1; echo "Write LBA from file (100%)" ;;\n'
+                '  *) echo "OK" ;;\nesac\n')
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.loader_path.setText(loader)
+    real_delay, production.AFTER_DB_MS = production.AFTER_DB_MS, 0
+    line = window.production
+    try:
+        line.start(image, verify=False)
+        window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
+                               "Maskrom", "RK3576")
+        end = time.time() + 20
+        while line.state != production.UNPLUG and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        with open(calls) as f:
+            ran = [c for c in f.read().split() if c != "-v"]   # -v: version at start-up
+        if ran != ["db", "rfi", "wl", "rd"] or line.ok != 1:
+            errors.append(f"line with real commands ran {ran}, ok {line.ok}, state {line.state}")
+    finally:
+        production.AFTER_DB_MS = real_delay
+        with open(_stub, "w") as f:
+            f.write(quiet)
+        if line.active:
+            line.stop()
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_fetch_loader(app):
     """'Get Loader for This Chip' needs a recognised chip, builds the Loader
     from rkbin (a local copy here) and fills in the Loader field."""
@@ -2402,6 +2601,8 @@ def main():
     check_rfi_capacity(app)
     check_idb_command()
     check_command_chain(app)
+    check_production_line(app)
+    check_production_line_real_commands(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
