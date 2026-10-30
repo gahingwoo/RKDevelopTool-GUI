@@ -36,13 +36,13 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info, chip_from_device,
     classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
 from .widgets import AutoLoadCombo, CurrentPageTabWidget
 from .i18n import TRANSLATIONS
-from .themes import ThemeManager, ThemeAutoManager
+from .themes import ThemeManager, ThemeAutoManager, status_color
 from .operations import style_messagebox
 from . import operations
 from .log_widget import RealtimeLogWidget
@@ -257,6 +257,7 @@ class RKDevToolGUI(QMainWindow):
         self.restore_settings()
         self.apply_fonts()
         self._disable_text_drops()
+        self._install_shortcuts()
 
         # Start device detection
         self.start_device_detection()
@@ -469,18 +470,9 @@ class RKDevToolGUI(QMainWindow):
         self.partition_list_group = partition_widgets['list_group']
         self.partition_table = partition_widgets['table']
         self.refresh_partitions_btn = partition_widgets['refresh_btn']
-        self.partition_ops_group = partition_widgets['ops_group']
-        self.partition_combo = partition_widgets['combo']
-        self.partition_file_path = partition_widgets['file_path']
-        self.partition_file_browse_btn = partition_widgets['file_browse']
-        self.burn_partition_btn = partition_widgets['burn_btn']
-        self.backup_partition_btn = partition_widgets['backup_btn']
-        self.erase_partition_btn = partition_widgets['erase_partition_btn']
         self.erase_all_btn = partition_widgets['erase_all_btn']
         self.manual_address_enable = partition_widgets['manual_enable']
         self.manual_address = partition_widgets['manual_address']
-        self.select_partition_label = partition_widgets.get('select_label')
-        self.partition_file_label = partition_widgets.get('file_label')
         self.danger_group = partition_widgets.get('danger_group')
         self.danger_label = partition_widgets.get('danger_label')
 
@@ -493,6 +485,7 @@ class RKDevToolGUI(QMainWindow):
         self.advanced_params_group = param_widgets['advanced_group']
         self.timeout_spinbox = param_widgets['timeout']
         self.retry_count_spinbox = param_widgets['retry']
+        self._bind_flash_options()
         self.device_info_group = param_widgets['info_group']
         self.device_info_text = param_widgets['info_text']
         self.get_device_info_btn = param_widgets['info_btn']
@@ -872,7 +865,7 @@ class RKDevToolGUI(QMainWindow):
     # Disconnect during a write
     # Commands that change what's on the storage: losing the device during
     # one can leave it partly written.
-    _WRITE_KEYS = {"burning", "erase_flash", "erasing_all_storage", "importing_gpt",
+    _WRITE_KEYS = {"burning", "erase_flash", "erase_partition", "erasing_all_storage", "importing_gpt",
                    "writing_idb"}
     # Polls (2 s apart) without the device before it counts as gone: a full
     # RKFW flash makes the board re-enumerate after db and ul.
@@ -897,8 +890,10 @@ class RKDevToolGUI(QMainWindow):
                           and getattr(worker, 'description_key', '') in self._WRITE_KEYS)
         prep = getattr(self, '_rkfw_worker', None)
         preparing = prep is not None and prep.isRunning()
-        # A full RKFW flash writes from its first gpt step until it ends.
-        return command_writes or (getattr(self, '_rkfw_flashing', False) and not preparing)
+        # A full RKFW flash writes from its first gpt step until its
+        # read-back (if any) starts.
+        return command_writes or (getattr(self, '_rkfw_flashing', False) and not preparing
+                                  and not getattr(self, '_rkfw_verifying', False))
 
     def cancel_current(self):
         """Stop the running command, flash, or image preparation."""
@@ -984,8 +979,7 @@ class RKDevToolGUI(QMainWindow):
         'read_flash_id_btn', 'read_flash_info_btn',
         'onekey_burn_btn', 'load_loader_btn', 'burn_image_btn',
         'change_storage_btn', 'erase_flash_btn', 'test_device_btn',
-        'refresh_partitions_btn', 'burn_partition_btn', 'backup_partition_btn',
-        'erase_partition_btn', 'erase_all_btn',
+        'refresh_partitions_btn', 'erase_all_btn',
         'get_device_info_btn', 'get_security_info_btn',
         'gpt_btn', 'gpt_export_btn', 'prm_btn',
         'read_flash_btn', 'verify_btn',
@@ -998,8 +992,7 @@ class RKDevToolGUI(QMainWindow):
     # applied on top of the list above rather than as a subset of it.
     _FLASH_BUSY_WIDGETS = frozenset({
         'onekey_burn_btn', 'burn_image_btn', 'home_flash_card',
-        'burn_partition_btn', 'erase_flash_btn', 'erase_all_btn',
-        'erase_partition_btn', 'load_loader_btn',
+        'erase_flash_btn', 'erase_all_btn', 'load_loader_btn',
         'enter_maskrom_btn', 'home_maskrom_card', 'enter_loader_btn',
         'reset_device_btn',
     })
@@ -1028,7 +1021,8 @@ class RKDevToolGUI(QMainWindow):
             if widget is None:
                 continue
             widget.setEnabled(connected)
-            widget.setToolTip(hint)
+            # Disconnected: say why it's disabled; connected: its own tip.
+            widget.setToolTip(hint or widget.property("baseTip") or "")
 
         for attr in self._FLASH_BUSY_WIDGETS:
             widget = getattr(self, attr, None)
@@ -1048,9 +1042,12 @@ class RKDevToolGUI(QMainWindow):
         if self.current_device:
             mode_text = self.tr(f"connected_{self.device_mode.lower()}")
             # Parse chip info to show readable chip name
-            chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
+            chip_text = (parse_chip_info(self.chip_info)
+                         if self.chip_info and self.chip_info != "unknown_chip"
+                         else chip_from_device(self.current_device) or self.tr('unknown_chip'))
             self.device_status_label.setText(mode_text)
-            self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
+            self.device_status_label.setStyleSheet(
+                f"QLabel {{ color: {status_color('ok')}; padding: 5px; font-weight: bold; }}")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
             self.statusBar().showMessage(f"{self.tr('ready_status')}{self.tr('status_line_delimiter')}{mode_text}")
             self.connection_status.setText(f"{self.tr('connected')}")
@@ -1064,12 +1061,40 @@ class RKDevToolGUI(QMainWindow):
             self.connection_status.setText(f"{self.tr('not_connected')}")
             self._update_home_banner(False, f"{self.tr('home_banner_disconnected')}")
 
+    def _install_shortcuts(self):
+        """Ctrl+1..9 (Cmd on macOS) switch tabs, Ctrl+L goes to the command
+        bar, Esc cancels what is running."""
+        for i in range(min(9, self.tab_widget.count())):
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self,
+                      activated=safe_slot(lambda i=i: self.tab_widget.setCurrentIndex(i)))
+
+        def focus_command():
+            self.equiv_command_field.setFocus()
+            self.equiv_command_field.selectAll()
+
+        QShortcut(QKeySequence("Ctrl+L"), self, activated=safe_slot(focus_command))
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=safe_slot(self.cancel_current))
+
+    def apply_status_colors(self):
+        """Re-colour the status texts for the current light or dark palette."""
+        if getattr(self, 'danger_label', None) is not None:
+            self.danger_label.setStyleSheet(
+                f"QLabel {{ color: {status_color('danger')}; font-weight: bold; padding: 5px; }}")
+        if hasattr(self, 'device_status_label'):
+            self.update_device_status()
+
+    def changeEvent(self, event):
+        # A theme switch (by the app or the system) changes the palette.
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            QTimer.singleShot(0, safe_slot(self.apply_status_colors))
+        super().changeEvent(event)
+
     def _update_home_banner(self, connected, text):
         """Update the home tab connection banner (plain text, native look)."""
         banner = getattr(self, 'home_status_banner', None)
         if banner is None:
             return
-        color = "#28a745" if connected else "#888888"
+        color = status_color("ok" if connected else "muted")
         banner.setStyleSheet(f"QLabel {{ padding: 4px 2px; font-weight: bold; color: {color}; }}")
         banner.setText(text)
 
@@ -1137,6 +1162,8 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.setText(' '.join(str(c) for c in cmd))
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
+        self.command_worker.idle_timeout = self.settings.get_int(
+            app_settings.KEY_IDLE_TIMEOUT, app_settings.DEFAULT_IDLE_TIMEOUT_S)
         self._command_active = True
         self._cancel_requested = False
         self._lost_during_write = False
@@ -1298,6 +1325,30 @@ class RKDevToolGUI(QMainWindow):
             history.clear()
             self.refresh_history()
 
+    def _bind_flash_options(self):
+        """Load the Parameter tab's flash options from the settings and save
+        every change. Verify after burn is the same setting the burn
+        confirmation offers."""
+        s = self.settings
+        pairs = (
+            (self.verify_after_burn, app_settings.KEY_VERIFY_AFTER_WRITE, False),
+            (self.erase_before_burn, app_settings.KEY_ERASE_BEFORE_WRITE, False),
+            (self.reset_after_burn, app_settings.KEY_RESET_AFTER_WRITE, True),
+        )
+        for box, key, default in pairs:
+            box.setChecked(s.get_flag(key, default))
+            box.toggled.connect(safe_slot(
+                lambda on, k=key: s.set(k, "1" if on else "0")))
+        self.timeout_spinbox.setRange(10, 600)
+        self.timeout_spinbox.setValue(s.get_int(app_settings.KEY_IDLE_TIMEOUT,
+                                                app_settings.DEFAULT_IDLE_TIMEOUT_S))
+        self.timeout_spinbox.valueChanged.connect(safe_slot(
+            lambda v: s.set(app_settings.KEY_IDLE_TIMEOUT, str(v))))
+        self.retry_count_spinbox.setValue(s.get_int(app_settings.KEY_STEP_RETRIES,
+                                                    app_settings.DEFAULT_STEP_RETRIES))
+        self.retry_count_spinbox.valueChanged.connect(safe_slot(
+            lambda v: s.set(app_settings.KEY_STEP_RETRIES, str(v))))
+
     def explain_failure(self, output):
         """(title, body) with the likely cause of an rkdeveloptool failure
         and what to try, or None when the output isn't recognised."""
@@ -1374,20 +1425,19 @@ class RKDevToolGUI(QMainWindow):
         # A full RKFW flash retries and reports its own failures (with this
         # guidance added); don't pop a dialog for each step.
         in_rkfw_flow = getattr(self, '_rkfw_flashing', False)
-        # Call callback if provided
-        if hasattr(self, '_command_callback') and self._command_callback:
+        # Take the callback before calling it: a callback that starts the
+        # next command registers that command's callback, which clearing it
+        # afterwards used to throw away (the chain then stopped silently).
+        callback = getattr(self, '_command_callback', None)
+        self._command_callback = None
+        if callback:
             try:
-                # Get the command output from the worker if it has output
-                output = ""
-                if hasattr(self.command_worker, 'output'):
-                    output = self.command_worker.output
-                self._command_callback(success, output)
+                callback(success, output)
             except Exception as e:
                 self.log_message(f"[ERROR] Callback error: {e}")
-            finally:
-                self._command_callback = None
-        self._command_active = False
-        self._update_poll_mode()
+        if self.command_worker is worker:   # the callback started nothing new
+            self._command_active = False
+            self._update_poll_mode()
         if getattr(self, '_cancel_requested', False) and not success:
             # Stopped by the user: not a failure to explain. A cancelled
             # write leaves the storage partly written; say so. (A full RKFW
