@@ -395,6 +395,7 @@ class RKDevToolGUI(QMainWindow):
         self.enter_maskrom_btn = mode_widgets['maskrom']
         self.enter_loader_btn = mode_widgets['loader']
         self.reset_device_btn = mode_widgets['reset']
+        self.maskrom_help_btn = mode_widgets['help']
 
         # Quick actions group
         self.quick_group, quick_widgets = create_quick_panel(self)
@@ -1118,7 +1119,11 @@ class RKDevToolGUI(QMainWindow):
             return
         color = status_color("ok" if connected else "muted")
         banner.setStyleSheet(f"QLabel {{ padding: 4px 2px; font-weight: bold; color: {color}; }}")
-        banner.setText(text)
+        import html
+        if connected:
+            banner.setText(html.escape(text))
+        else:
+            banner.setText(f'{html.escape(text)}&nbsp;&nbsp;<a href="maskrom">{html.escape(self.tr("maskrom_help_link"))}</a>')
 
     # Utility methods
     def log_message(self, message):
