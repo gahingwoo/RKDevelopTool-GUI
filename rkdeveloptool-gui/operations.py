@@ -634,20 +634,33 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     RK3576-手动刷固件指南.md: on a fresh Maskrom the chip refuses every
     "read flash info" request until a loader has been downloaded into RAM,
     so `gpt` must come *after* `db`. The loader is then persisted to the
-    idb area with `ul` (never `wlx bootloader`), and every remaining
+    idb area (never `wlx bootloader`): with `ul` for an old-format Loader,
+    as a verified bootloader image at sector 0x40 for a NEWIDB one (see
+    loader_to_flash_command). Every remaining
     archive partition is flashed by name - except `package-file`, which is
     tool metadata and not a real partition.
     """
     # RKAF entries that must not be written as GPT partitions:
     # - "package-file" is tool metadata consumed by Rockchip's own tools.
     # - "bootloader" is the MiniLoader/idb image; it goes to the idb area
-    #   above (via `ul`), not to a GPT partition named "bootloader".
+    #   above, not to a GPT partition named "bootloader".
     skip_names = {"package-file", "bootloader"}
+
+    from .loader_merge import LoaderMergeError
+    try:
+        idb_cmd = loader_to_flash_command(paths['loader'], tmp_dir)
+    except (LoaderMergeError, OSError) as e:
+        # Nothing written yet; a board with a bootloader that doesn't
+        # verify would only come back in Maskrom.
+        gui.log_message(f"[ERROR] {e}")
+        _finish_rkfw_flow(gui, tmp_dir)
+        _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+        return
 
     steps = [
         ([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")),
         ([RKTOOL, "gpt", paths['parameter']], "importing_gpt", gui.tr("rkfw_step_gpt")),
-        ([RKTOOL, "ul", paths['loader']], "writing_idb", gui.tr("rkfw_step_idb")),
+        (idb_cmd, "writing_idb", gui.tr("rkfw_step_idb")),
     ]
     for name, part_path in paths['parts']:
         if name in skip_names:
@@ -883,13 +896,43 @@ def fetch_loader(gui):
     update_fetch_loader_state(gui)
 
 
+def loader_to_flash_command(loader_path, tmp_dir):
+    """The command that writes a Loader into the flash's boot area: `ul`
+    for an old-format Loader, or `wl 0x40` with the bootloader image for a
+    NEWIDB one, which ul writes in a layout the boot ROM rejects. Raises
+    LoaderMergeError / OSError when the Loader can't be used."""
+    from . import loader_merge
+    with open(loader_path, "rb") as f:
+        idb = loader_merge.idblock_from_loader(f.read())
+    if idb is None:
+        return [RKTOOL, "ul", loader_path]
+    path = os.path.join(tmp_dir, "idblock.img")
+    with open(path, "wb") as f:
+        f.write(idb)
+    return [RKTOOL, "wl", hex(loader_merge.IDB_SECTOR), path]
+
+
 def _start_loader(gui, cmd_type, loader_path):
     """Run db/ul with the loader and record whether it actually loaded."""
-    gui.run_command([RKTOOL, cmd_type, loader_path], "loading_loader")
+    cmd = [RKTOOL, cmd_type, loader_path]
+    idb_dir = None
+    if cmd_type == "ul":
+        from .loader_merge import LoaderMergeError
+        idb_dir = tempfile.mkdtemp(prefix="rkdevtool_idb_")
+        try:
+            cmd = loader_to_flash_command(loader_path, idb_dir)
+        except (LoaderMergeError, OSError) as e:
+            shutil.rmtree(idb_dir, ignore_errors=True)
+            gui.log_message(f"[ERROR] {e}")
+            _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+            return
+    gui.run_command(cmd, "loading_loader")
 
     # Mark that we're attempting to load loader and wrap the finished signal
     if gui.command_worker:
         def on_loader_finished(success, error_msg):
+            if idb_dir:
+                shutil.rmtree(idb_dir, ignore_errors=True)
             if success:
                 gui.loader_loaded = True
                 gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
