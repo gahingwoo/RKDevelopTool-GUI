@@ -12,8 +12,8 @@ flashes it; it never presses anything.
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
-    QAbstractButton, QFrame, QGroupBox, QLineEdit, QListWidget, QListWidgetItem, QScrollArea,
-    QVBoxLayout, QWidget,
+    QAbstractButton, QApplication, QFrame, QGraphicsDropShadowEffect, QGroupBox, QLineEdit,
+    QListWidget, QListWidgetItem, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from .i18n import TRANSLATIONS
@@ -200,16 +200,28 @@ def reveal(gui, entry):
 
 
 class SearchPalette(QFrame):
-    """The search window: opened with Ctrl/Cmd+K or the status-bar button,
+    """The search box: opened with Ctrl/Cmd+K or the status-bar button,
     over the top of the window, with the results listed under the field.
-    Enter or a click opens a result; Escape or a click elsewhere closes it."""
+    Enter or a click opens a result; Escape, a click elsewhere or moving
+    the focus away closes it.
+
+    It's a panel inside the main window, not a popup window of its own:
+    macOS gives a Qt.Popup window no input method, so Chinese (pinyin)
+    couldn't be typed into it."""
 
     WIDTH = 520
 
     def __init__(self, gui):
-        super().__init__(gui, Qt.WindowType.Popup)
+        super().__init__(gui)
         self.gui = gui
+        self.hide()
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setAutoFillBackground(True)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 120))
+        self.setGraphicsEffect(shadow)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         self.field = QLineEdit()
@@ -223,20 +235,40 @@ class SearchPalette(QFrame):
         self.field.textChanged.connect(self._update)
         self.field.returnPressed.connect(lambda: self._open(self.results.currentItem()))
         self.field.installEventFilter(self)
+        QApplication.instance().focusChanged.connect(self._focus_changed)
         self._index = None
 
     def open(self):
         self._index = None              # the window may have changed
         self.field.clear()
         self._update("")
-        top_left = self.gui.mapToGlobal(QPoint((self.gui.width() - self.WIDTH) // 2, 60))
-        self.move(top_left)
+        self.move((self.gui.width() - self.WIDTH) // 2, 60)
+        # Watch clicks elsewhere only while open: an application-wide
+        # filter sees every event.
+        QApplication.instance().installEventFilter(self)
         self.show()
-        self.activateWindow()
+        self.raise_()
         self.field.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
+    def hideEvent(self, event):
+        QApplication.instance().removeEventFilter(self)
+        super().hideEvent(event)
+
+    def _focus_changed(self, _old, new):
+        if self.isVisible() and (new is None or not self.isAncestorOf(new)):
+            self.hide()
+
     def eventFilter(self, obj, event):
-        if obj is self.field and event.type() == QEvent.Type.KeyPress:
+        kind = event.type()
+        if kind == QEvent.Type.MouseButtonPress and self.isVisible() and isinstance(obj, QWidget) \
+                and obj.window() is self.gui and obj is not self and not self.isAncestorOf(obj):
+            self.hide()                 # a click elsewhere in the window
+            return False
+        if obj is self.field and kind == QEvent.Type.ShortcutOverride \
+                and event.key() == Qt.Key.Key_Escape:
+            event.accept()              # Escape closes search, not the window's Cancel
+            return True
+        if obj is self.field and kind == QEvent.Type.KeyPress:
             key = event.key()
             if key in (Qt.Key.Key_Down, Qt.Key.Key_Up) and self.results.count():
                 row = self.results.currentRow() + (1 if key == Qt.Key.Key_Down else -1)

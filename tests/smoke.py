@@ -2821,6 +2821,19 @@ def check_search(app):
         app.processEvents()
         if not palette.isVisible() or palette.field.text():
             errors.append("the search button didn't open an empty search")
+        # Chinese is typed through the input method; a Qt.Popup window got
+        # none on macOS. The panel's field takes a composed string.
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QInputMethodEvent
+        if not palette.field.testAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled) \
+                or palette.isWindow():
+            errors.append("the search field can't take input-method text")
+        QApplication.sendEvent(palette.field, QInputMethodEvent("bei", []))
+        commit = QInputMethodEvent()
+        commit.setCommitString("备份")
+        QApplication.sendEvent(palette.field, commit)
+        if palette.field.text() != "备份":
+            errors.append(f"pinyin into search gave {palette.field.text()!r}")
         palette.field.setText(erase)
         app.processEvents()
         if palette.results.count() == 0:
