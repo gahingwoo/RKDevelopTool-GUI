@@ -1805,7 +1805,9 @@ def check_production_line_real_commands(app):
             app.processEvents()
             time.sleep(0.01)
         with open(calls) as f:
-            ran = [c for c in f.read().split() if c != "-v"]   # -v: version at start-up
+            # -v (version at start-up) and a device poll (ld, rci) that may
+            # slip in before detection stops aren't the line's.
+            ran = [c for c in f.read().split() if c not in ("-v", "ld", "rci")]
         if ran != ["db", "rfi", "wl", "rd"] or line.ok != 1:
             errors.append(f"line with real commands ran {ran}, ok {line.ok}, state {line.state}")
     finally:
@@ -2559,6 +2561,60 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_report_issue(app):
+    """Report a Problem: home paths hidden, the URL fits GitHub's limit and
+    fills the form's fields, and the failure dialog's button opens it."""
+    from urllib.parse import parse_qs, urlparse
+
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    from rkdeveloptool_gui import feedback
+
+    home = os.path.expanduser("~")
+    if home in feedback.redact(f"wl 0x0 {home}/Downloads/a.img"):
+        errors.append("redact left the home directory in")
+    long_log = "\n".join(f"Write LBA from file ({i % 100}%) {'x' * 60}" for i in range(500))
+    url = feedback.issue_url("t", {"chip": "RK3576", "log": long_log, "what-happened": "boom"})
+    query = parse_qs(urlparse(url).query)
+    if len(url) > feedback.MAX_URL or query.get("template") != ["bug_report.yml"] \
+            or query.get("chip") != ["RK3576"] or not query.get("log"):
+        errors.append(f"issue URL: {len(url)} chars, {sorted(query)}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    opened, reports = [], []
+    real = (feedback.QDesktopServices.openUrl, QDialog.exec, feedback.report_problem, QMessageBox.exec)
+    feedback.QDesktopServices.openUrl = lambda url: opened.append(url.toString())
+    QDialog.exec = lambda self: QDialog.DialogCode.Accepted
+    try:
+        window.log_message("[ERROR] Write LBA failed!")
+        feedback.report_problem(window, "Write failed", "it failed")
+        q = parse_qs(urlparse(opened[0]).query) if opened else {}
+        if q.get("title") != ["Write failed"] or "Write LBA failed" not in q.get("log", [""])[0] \
+                or q.get("app-version") != [__import__("rkdeveloptool_gui").__version__]:
+            errors.append(f"report opened {opened}")
+
+        # The failure dialog's button.
+        feedback.report_problem = lambda gui, title="", problem="", log=None: reports.append(title)
+
+        def click_report(self):
+            for b in self.buttons():
+                if b.text() == window.tr("report_button"):
+                    b.click()
+            return 0
+        QMessageBox.exec = click_report
+        window._show_failure_guidance("burning", "The device refused the write", "Try again", "out")
+        if not reports or "The device refused the write" not in reports[0]:
+            errors.append(f"failure dialog's report button gave {reports}")
+    finally:
+        (feedback.QDesktopServices.openUrl, QDialog.exec, feedback.report_problem,
+         QMessageBox.exec) = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_self_update(app):
     """In-place updates: the download must match the release digest; an
     AppImage is replaced atomically; deb/rpm go through pkexec and the
@@ -2704,6 +2760,7 @@ def main():
 
     check_translations()
     check_self_update(app)
+    check_report_issue(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
