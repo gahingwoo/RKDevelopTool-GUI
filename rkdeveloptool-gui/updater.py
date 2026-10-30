@@ -64,6 +64,12 @@ def install_kind():
 def pick_asset(assets, kind=None, machine=None):
     """The download URL for this platform from a release's asset list, or
     None when there is no matching package (the release page is used then)."""
+    asset = pick_asset_info(assets, kind, machine)
+    return asset["url"] if asset else None
+
+
+def pick_asset_info(assets, kind=None, machine=None):
+    """{url, name, size, digest} of this platform's package, or None."""
     kind = kind or install_kind()
     machine = (machine or platform.machine()).lower()
     arm = machine in ("arm64", "aarch64")
@@ -79,7 +85,8 @@ def pick_asset(assets, kind=None, machine=None):
     for asset in assets or []:
         name = asset.get("name", "")
         if re.search(pattern, name):
-            return asset.get("browser_download_url")
+            return {"url": asset.get("browser_download_url"), "name": name,
+                    "size": asset.get("size") or 0, "digest": asset.get("digest") or ""}
     return None
 
 
@@ -162,6 +169,7 @@ def fetch_latest(url=None):
         "version": version,
         "page": data.get("html_url") or RELEASES_PAGE,
         "download": pick_asset(data.get("assets")),
+        "asset": pick_asset_info(data.get("assets")),
         "notes": (data.get("body") or "").strip(),
     }
 
@@ -190,3 +198,182 @@ class UpdateCheckWorker(QThread):
             self.available.emit(release)
         else:
             self.up_to_date.emit(release["version"])
+
+
+# Installing an update in place
+#
+# Only for copies installed from a package this app knows how to replace:
+# the AppImage file itself, the .app from the DMG, or the deb/rpm through
+# the system's package manager. The download must match the SHA-256 digest
+# GitHub publishes for the release asset; without one nothing is installed.
+SELF_UPDATE_KINDS = ("appimage", "dmg", "deb", "rpm")
+# Lets tests point the DMG install at a copy of the app elsewhere.
+APP_PATH_ENV = "RKDEVELOPTOOL_GUI_APP_PATH"
+
+
+class UpdateError(Exception):
+    """An update couldn't be downloaded, checked or installed."""
+
+
+def can_self_update(release, kind=None):
+    asset = (release or {}).get("asset") or {}
+    return (kind or install_kind()) in SELF_UPDATE_KINDS and bool(asset.get("url")) \
+        and str(asset.get("digest", "")).startswith("sha256:")
+
+
+def download(asset, dest_dir, progress=None, cancelled=lambda: False):
+    """Download a release asset into dest_dir, checking its SHA-256."""
+    import hashlib
+    want = str(asset.get("digest", ""))
+    if not want.startswith("sha256:"):
+        raise UpdateError("the release doesn't publish a checksum for this package")
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, os.path.basename(asset["name"]))
+    request = urllib.request.Request(asset["url"], headers={
+        "User-Agent": f"RKDevelopTool-GUI/{__version__}"})
+    digest = hashlib.sha256()
+    done, total = 0, int(asset.get("size") or 0)
+    with _open(request) as response, open(path + ".part", "wb") as f:
+        while True:
+            if cancelled():
+                raise UpdateError("cancelled")
+            chunk = response.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+            digest.update(chunk)
+            done += len(chunk)
+            if progress and total:
+                progress(min(done * 100 // total, 100))
+    if digest.hexdigest() != want.split(":", 1)[1].lower():
+        os.remove(path + ".part")
+        raise UpdateError("the download doesn't match the release's checksum")
+    os.replace(path + ".part", path)
+    return path
+
+
+def app_bundle_path():
+    """The .app this copy runs from (macOS), or None."""
+    override = os.environ.get(APP_PATH_ENV)
+    if override:
+        return override
+    path = os.path.abspath(sys.executable)
+    while path and path != "/":
+        if path.endswith(".app"):
+            return path
+        path = os.path.dirname(path)
+    return None
+
+
+def _run(cmd, **kwargs):
+    import subprocess
+    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    if result.returncode != 0:
+        raise UpdateError((result.stderr or result.stdout or f"{cmd[0]} failed").strip()[-400:])
+    return result.stdout
+
+
+def _install_appimage(path):
+    target = os.environ.get("APPIMAGE")
+    if not target:
+        raise UpdateError("not running from an AppImage")
+    staged = target + ".new"
+    shutil.copyfile(path, staged)
+    os.chmod(staged, 0o755)
+    os.replace(staged, target)      # atomic; the running copy keeps its inode
+    return [target]
+
+
+def _install_dmg(path):
+    import shlex
+    import tempfile
+    target = app_bundle_path()
+    if not target:
+        raise UpdateError("not running from an .app")
+    mount = tempfile.mkdtemp(prefix="rkdevtool_update_")
+    _run(["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount, path])
+    try:
+        apps = [n for n in os.listdir(mount) if n.endswith(".app")]
+        if not apps:
+            raise UpdateError("the disk image has no .app")
+        source = os.path.join(mount, apps[0])
+        parent, name = os.path.split(target)
+        staged, old = os.path.join(parent, f".{name}.new"), os.path.join(parent, f".{name}.old")
+        script = (f"rm -rf {shlex.quote(staged)} {shlex.quote(old)} && "
+                  f"ditto {shlex.quote(source)} {shlex.quote(staged)} && "
+                  f"mv {shlex.quote(target)} {shlex.quote(old)} && "
+                  f"mv {shlex.quote(staged)} {shlex.quote(target)} && "
+                  f"rm -rf {shlex.quote(old)} && "
+                  f"(xattr -dr com.apple.quarantine {shlex.quote(target)} || true)")
+        if os.access(parent, os.W_OK) and os.access(target, os.W_OK):
+            _run(["/bin/sh", "-c", script])
+        else:
+            # macOS's own administrator prompt does the copy.
+            _run(["osascript", "-e",
+                  f"do shell script {json.dumps(script)} with administrator privileges"])
+    finally:
+        _run(["hdiutil", "detach", "-quiet", mount])
+        shutil.rmtree(mount, ignore_errors=True)
+    return ["open", "-n", target]
+
+
+def _install_package(path, kind):
+    """deb/rpm through the package manager, with the system's own
+    authentication dialog (pkexec)."""
+    if not shutil.which("pkexec"):
+        raise UpdateError(f"pkexec isn't available; install {path} with your package manager")
+    if kind == "deb":
+        cmd = (["apt-get", "install", "-y", path] if shutil.which("apt-get")
+               else ["dpkg", "-i", path])
+    elif shutil.which("dnf"):
+        cmd = ["dnf", "install", "-y", path]
+    elif shutil.which("zypper"):
+        cmd = ["zypper", "--non-interactive", "install", "--allow-unsigned-rpm", path]
+    else:
+        cmd = ["rpm", "-U", path]
+    _run(["pkexec"] + cmd)
+    return [os.path.abspath(sys.argv[0])]
+
+
+def install(path, kind=None):
+    """Install a downloaded package over this copy; return the command that
+    starts the new version."""
+    kind = kind or install_kind()
+    if kind == "appimage":
+        return _install_appimage(path)
+    if kind == "dmg":
+        return _install_dmg(path)
+    if kind in ("deb", "rpm"):
+        return _install_package(path, kind)
+    raise UpdateError(f"can't update a {kind} install in place")
+
+
+class UpdateInstallWorker(QThread):
+    """Download, check and install an update off the GUI thread.
+
+    Emits progress(int) while downloading, then installed(list) with the
+    command that starts the new version, or failed(str).
+    """
+
+    progress = Signal(int)
+    installing = Signal()
+    installed = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, release, dest_dir, parent=None):
+        super().__init__(parent)
+        self.release = release
+        self.dest_dir = dest_dir
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            path = download(self.release["asset"], self.dest_dir, self.progress.emit,
+                            lambda: self._cancel)
+            self.installing.emit()
+            self.installed.emit(install(path))
+        except Exception as e:  # network, checksum, installer: all mean "not installed"
+            self.failed.emit(str(e))

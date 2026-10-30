@@ -48,6 +48,11 @@ jobs:
           [ "$SRC_APP" = "$APP" ] || mv "$SRC_APP" "$APP"
           cp dist/rkdeveloptool "$APP/Contents/MacOS/rkdeveloptool"
           chmod +x "$APP/Contents/MacOS/rkdeveloptool"
+          # Adding a file breaks the bundle's ad-hoc seal; sign it again so
+          # codesign --verify passes (and the in-app updater installs a
+          # valid bundle).
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
 
       # Developer ID + hardened runtime when the signing secrets are set,
       # ad hoc otherwise (adding rkdeveloptool broke Nuitka's seal).
@@ -62,11 +67,9 @@ jobs:
 
       - name: Create DMG
         run: |
-          DMG="dist/RKDevelopTool-GUI-arm64.dmg"
-          create-dmg --volname "RKDevelopTool-GUI" --no-internet-enable \
-            "$DMG" "dist/RKDevelopTool-GUI.app" \
-          || hdiutil create -volname "RKDevelopTool-GUI" \
-               -srcfolder "dist/RKDevelopTool-GUI.app" -ov -format UDZO "$DMG"
+          # The app, an Applications link to drop it on, a background with
+          # first-launch instructions, and a note about Gatekeeper.
+          bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-arm64.dmg
 
       # Notarized and stapled when the signing secrets are set; skipped otherwise.
       - name: Notarize the DMG
@@ -324,6 +327,11 @@ jobs:
           [ "$SRC_APP" = "$APP" ] || mv "$SRC_APP" "$APP"
           cp dist/rkdeveloptool "$APP/Contents/MacOS/rkdeveloptool"
           chmod +x "$APP/Contents/MacOS/rkdeveloptool"
+          # Adding a file breaks the bundle's ad-hoc seal; sign it again so
+          # codesign --verify passes (and the in-app updater installs a
+          # valid bundle).
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
 
       # Developer ID + hardened runtime when the signing secrets are set,
       # ad hoc otherwise (adding rkdeveloptool broke Nuitka's seal).
@@ -343,11 +351,9 @@ jobs:
 
       - name: Create DMG
         run: |
-          DMG="dist/RKDevelopTool-GUI-x86_64.dmg"
-          create-dmg --volname "RKDevelopTool-GUI" --no-internet-enable \
-            "$DMG" "dist/RKDevelopTool-GUI.app" \
-          || hdiutil create -volname "RKDevelopTool-GUI" \
-               -srcfolder "dist/RKDevelopTool-GUI.app" -ov -format UDZO "$DMG"
+          # The app, an Applications link to drop it on, a background with
+          # first-launch instructions, and a note about Gatekeeper.
+          bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-x86_64.dmg
 
       # Notarized and stapled when the signing secrets are set; skipped otherwise.
       - name: Notarize the DMG
