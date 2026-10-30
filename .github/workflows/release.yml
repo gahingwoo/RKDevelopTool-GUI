@@ -51,11 +51,9 @@ jobs:
 
       - name: Create DMG
         run: |
-          DMG="dist/RKDevelopTool-GUI-arm64.dmg"
-          create-dmg --volname "RKDevelopTool-GUI" --no-internet-enable \
-            "$DMG" "dist/RKDevelopTool-GUI.app" \
-          || hdiutil create -volname "RKDevelopTool-GUI" \
-               -srcfolder "dist/RKDevelopTool-GUI.app" -ov -format UDZO "$DMG"
+          # The app, an Applications link to drop it on, a background with
+          # first-launch instructions, and a note about Gatekeeper.
+          bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-arm64.dmg
 
       - uses: actions/upload-artifact@v4
         with:
@@ -311,11 +309,9 @@ jobs:
 
       - name: Create DMG
         run: |
-          DMG="dist/RKDevelopTool-GUI-x86_64.dmg"
-          create-dmg --volname "RKDevelopTool-GUI" --no-internet-enable \
-            "$DMG" "dist/RKDevelopTool-GUI.app" \
-          || hdiutil create -volname "RKDevelopTool-GUI" \
-               -srcfolder "dist/RKDevelopTool-GUI.app" -ov -format UDZO "$DMG"
+          # The app, an Applications link to drop it on, a background with
+          # first-launch instructions, and a note about Gatekeeper.
+          bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-x86_64.dmg
 
       - uses: actions/upload-artifact@v4
         with:
