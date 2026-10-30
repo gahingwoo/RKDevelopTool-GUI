@@ -382,8 +382,9 @@ class ThemeAutoManager:
         except Exception:
             return "light"
     
-    def apply_system_theme(self):
-        """Apply system theme to the application"""
+    def apply_system_theme(self, force=False):
+        """Apply the system theme when it has changed (or when forced: on
+        start-up, and when the user picks Auto)."""
         if not self.enable_auto:
             return
         
@@ -392,6 +393,13 @@ class ThemeAutoManager:
             return
         
         theme = self.get_system_theme()
+        # The poll runs every 2 s. Applying a theme restyles and relays out
+        # every widget in the app, so doing it each time kept the window
+        # busy for nothing, and on a slow machine (CI's macOS runner) the
+        # next poll came before the last one finished and it never idled.
+        if theme == getattr(self, "_applied", None) and not force:
+            return
+        self._applied = theme
 
         # Leave the picker on "Auto". Moving it to Dark/Light hid that auto
         # mode was on, and picking that same theme afterwards changed nothing,
