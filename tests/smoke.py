@@ -1695,7 +1695,11 @@ def check_loader_before_write(app):
         ran.append(cmd[1])
         QTimer.singleShot(0, lambda: callback and callback(True, ""))
 
-    real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes)
+    real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+            ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS)
+    answers = [True]
+    ops._board_answers = lambda: answers.pop(0) if len(answers) > 1 else answers[0]
+    ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS = 3, 10
     window.run_command = fake_run
     window.command_worker = None
     QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
@@ -1721,8 +1725,24 @@ def check_loader_before_write(app):
         write_once(1024)
         if ran != ["db"]:
             errors.append(f"an image too big once the size was known still ran {ran}")
+        # Refused right after db, answering on the next try (as an RK3576
+        # does): written. Never answering: not written.
+        answers[:] = [False, True]
+        write_once(1 << 30)
+        if ran != ["db", "wl"]:
+            errors.append(f"a board answering on the second try: ran {ran}")
+        answers[:] = [False]
+        shown.clear()
+        write_once(1 << 30)
+        end = time.time() + 3
+        while time.time() < end and not shown:
+            app.processEvents()
+            time.sleep(0.01)
+        if ran != ["db"] or not any(window.tr("loader_no_answer") in t for t in shown):
+            errors.append(f"a board that never answers: ran {ran}, said {shown}")
     finally:
-        window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes = real
+        (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+         ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS) = real
         window.cleanup()
         window.deleteLater()
         app.processEvents()

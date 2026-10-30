@@ -836,6 +836,44 @@ def loader_plan(gui):
     return ("rkbin", chip) if chip else None
 
 
+# After db the board takes a moment before it answers: on an RK3576 the
+# first rfi (or a write) right after it is refused, the next one works.
+READY_ATTEMPTS = 8
+READY_INTERVAL_MS = 1000
+
+
+def _board_answers():
+    from . import utils
+    try:
+        with utils.DEVICE_LOCK:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "Flash" in (result.stdout or "")
+
+
+def _when_board_answers(gui, on_ready, on_fail, attempt=1):
+    """Call on_ready() once the board answers rfi after db, or on_fail()
+    (with an explanation) when it doesn't within READY_ATTEMPTS tries."""
+    probe = CallWorker(_board_answers)
+    gui._ready_worker = probe
+
+    def answered(ok):
+        gui._ready_worker = None
+        if ok is True:
+            on_ready()
+        elif attempt < READY_ATTEMPTS:
+            QTimer.singleShot(READY_INTERVAL_MS, safe_slot(
+                lambda: _when_board_answers(gui, on_ready, on_fail, attempt + 1)))
+        else:
+            gui.log_message(f"[ERROR] {gui.tr('loader_no_answer')}")
+            _show_rkfw_message(gui, "loader_no_answer_title", gui.tr("loader_no_answer"))
+            on_fail()
+
+    probe.finished.connect(safe_slot(answered))
+    probe.start()
+
+
 def _load_loader_then(gui, on_ready, on_fail):
     """Load the Loader loader_plan() names (building it from rkbin first if
     needed), then call on_ready(); on_fail() if that doesn't work. The
@@ -854,8 +892,7 @@ def _load_loader_then(gui, on_ready, on_fail):
                 return
             gui.loader_loaded = True
             gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
-            # The board answers again after a moment.
-            QTimer.singleShot(1500, safe_slot(on_ready))
+            _when_board_answers(gui, on_ready, on_fail)
 
         _run_when_idle(gui, [RKTOOL, "db", path], "loading_loader", loaded)
 
