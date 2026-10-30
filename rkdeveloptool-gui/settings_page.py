@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from . import settings as app_settings
 from . import utils
+from . import wizard
 from .utils import safe_slot
 
 UNPACK_BESIDE, UNPACK_TEMP, UNPACK_CUSTOM = "beside", "temp", "custom"
@@ -143,6 +144,9 @@ class SettingsPage(QWidget):
         form.addRow(self.tr("settings_ui_font"), self.ui_font)
         form.addRow(self.tr("settings_log_font"), self.log_font)
         form.addRow("", reset)
+        guide = QPushButton(self.tr("wizard_reopen"))
+        guide.clicked.connect(safe_slot(lambda: wizard.show(self.gui)))
+        form.addRow("", guide)
         return box
 
     def _font_spin(self, key, default):
@@ -326,8 +330,11 @@ class SettingsPage(QWidget):
         save.clicked.connect(safe_slot(lambda: save_log(self.gui)))
         export = QPushButton(self.tr("settings_export_diagnostics"))
         export.clicked.connect(safe_slot(lambda: export_system_log(self.gui)))
+        report = QPushButton(self.tr("report_button_long"))
+        report.clicked.connect(safe_slot(self.gui.report_problem))
         row.addWidget(save)
         row.addWidget(export)
+        row.addWidget(report)
         row.addStretch(1)
         v.addLayout(row)
         return box
@@ -341,6 +348,11 @@ class SettingsPage(QWidget):
         auto.toggled.connect(safe_slot(
             lambda on: self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if on else "0")))
         v.addWidget(auto)
+        notify_box = QCheckBox(self.tr("settings_notify"))
+        notify_box.setChecked(self.settings.get_flag(app_settings.KEY_NOTIFY, True))
+        notify_box.toggled.connect(safe_slot(
+            lambda on: self.settings.set(app_settings.KEY_NOTIFY, "1" if on else "0")))
+        v.addWidget(notify_box)
         self.version_line = QLabel()
         self._show_version_line()
         row = QHBoxLayout()

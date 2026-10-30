@@ -481,11 +481,23 @@ def onekey_burn(gui):
     _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
+# The messages that end something long; worth a notification.
+_NOTIFY_TITLES = {
+    "rkfw_flash_complete_title", "rkfw_flash_failed_title", "write_done_title",
+    "verify_ok_title", "verify_mismatch_title", "verify_unreliable_title",
+    "rkfw_read_back_mismatch_title",
+}
+
+
 def _show_rkfw_message(gui, title_key, text, icon="Critical", offer_reset=False):
     """Show a QMessageBox for RKFW flashing errors/status with dynamic text
     that gui.show_message()'s static-key-only signature can't express.
     offer_reset adds a button that resets the board (rd) so the new
-    firmware boots."""
+    firmware boots. The end of a flash or a check also goes out as a
+    desktop notification when the app is in the background."""
+    if title_key in _NOTIFY_TITLES:
+        from .notify import notify
+        notify(gui, gui.tr(title_key), text)
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr(title_key))
@@ -607,6 +619,10 @@ def _flash_rkfw_firmware(gui, firmware_path):
     gui._rkfw_read_back = read_back
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
+    # Unpacking writes about the whole archive out again.
+    if not _enough_space(gui, tmp_dir, rkfw_info.fw_size + rkfw_info.boot_size, True):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
     _set_rkfw_busy(gui, True)
     gui.progress_bar.setValue(0)
     gui.progress_label.setText(gui.tr("preparing_firmware"))
@@ -700,7 +716,14 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
         _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
         return
 
-    steps = [([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader"))]
+    steps = []
+    if getattr(gui, 'loader_loaded', False):
+        # A Loader already runs (loaded on connect): a second db is refused
+        # and would fail the flash. The image's own Loader still goes into
+        # the idb below.
+        gui.log_message(f"[INFO] {gui.tr('rkfw_loader_running')}")
+    else:
+        steps.append(([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")))
     if _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
         steps.append(([RKTOOL, "ef"], "erase_flash", gui.tr("rkfw_step_erase")))
     steps += [
@@ -1476,6 +1499,10 @@ def _burn_file(gui, file_path, address, make_cmd):
                     _show_rkfw_message(gui, "write_done_title",
                                        gui.tr("write_done_message").format(os.path.basename(path)),
                                        "Information", offer_reset=True)
+                else:
+                    from .notify import notify
+                    notify(gui, gui.tr("write_done_title"),
+                           gui.tr("notify_written_resetting").format(os.path.basename(path)))
 
         if lba == 0 and _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
             gui.log_message(f"[INFO] {gui.tr('erasing_before_write')}")
@@ -1606,6 +1633,11 @@ def _with_plain_image(gui, file_path, on_ready):
         return
 
     tmp_dir = _make_unpack_dir(gui, file_path)
+    from .utils import uncompressed_size
+    needed, exact = uncompressed_size(file_path, kind)
+    if not _enough_space(gui, tmp_dir, needed, exact):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
     dest = os.path.join(tmp_dir, decompressed_name(file_path))
 
     def cleanup():
@@ -1657,6 +1689,29 @@ def _with_plain_image(gui, file_path, on_ready):
     worker.finished.connect(safe_slot(done))
     worker.failed.connect(safe_slot(failed))
     worker.start()
+
+
+# Room left over on top of what an unpacked image takes.
+SPACE_MARGIN = 64 << 20
+
+
+def _enough_space(gui, directory, needed, exact):
+    """Whether `directory` has room for `needed` bytes; if not, say how much
+    is missing and where to change it. `exact` False means `needed` is only
+    a lower bound (gzip, bzip2): the message says "at least"."""
+    try:
+        free = shutil.disk_usage(directory).free
+    except OSError:
+        return True
+    if free >= needed + SPACE_MARGIN:
+        return True
+    size = format_file_size(needed)
+    text = gui.tr("space_short_message").format(
+        size if exact else gui.tr("space_at_least").format(size),
+        os.path.dirname(directory), format_file_size(free))     # the folder, not our temp dir
+    gui.log_message(f"[ERROR] {gui.tr('space_short_title')}: {text}")
+    _show_rkfw_message(gui, "space_short_title", text)
+    return False
 
 
 def _make_unpack_dir(gui, file_path):

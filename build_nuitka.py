@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 import os
+import re
 import sys
 import subprocess
 import platform
 import shutil
 from pathlib import Path
 
+
+
+def _app_version():
+    """__version__ from the package, read as text (it isn't importable here)."""
+    init = Path(__file__).parent / "rkdeveloptool-gui" / "__init__.py"
+    return re.search(r'__version__\s*=\s*"([^"]+)"', init.read_text()).group(1)
 
 def find_rkdeveloptool():
     """Find rkdeveloptool absolute path on the system"""
@@ -144,6 +151,8 @@ def build_with_nuitka():
                 "--standalone",
                 "--macos-create-app-bundle",
                 "--macos-app-name=RKDevelopTool-GUI",
+                # Without it Info.plist says 1.0.
+                f"--macos-app-version={_app_version()}",
                 # Generated from packaging/icon/rkdeveloptool-gui.svg by
                 # packaging/icon/render.py.
                 "--macos-app-icon=packaging/icon/rkdeveloptool-gui.icns",

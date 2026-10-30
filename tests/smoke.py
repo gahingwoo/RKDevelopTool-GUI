@@ -41,6 +41,8 @@ os.environ["HOME"] = _tmp
 # No network in CI: the startup update check reads this (missing) file and
 # fails quietly; check_updates() points it at real JSON.
 os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + os.path.join(_tmp, "none.json")
+# Test windows come and go; check_first_run_wizard opens the wizard itself.
+os.environ["RKDEVELOPTOOL_GUI_NO_WIZARD"] = "1"
 
 errors = []
 
@@ -2143,6 +2145,36 @@ def check_idb_command():
         errors.append("an old-format Loader isn't written with ul")
 
 
+def check_rkfw_loader_once(app):
+    """A Loader loaded on connect isn't downloaded again by a full flash
+    (a second db is refused and failed the flash on an RK3576)."""
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    paths = {"loader": os.path.join(work, "loader.bin"), "parameter": os.path.join(work, "parameter.txt"),
+             "parts": [("uboot", os.path.join(work, "uboot.img"))]}
+    for p in (paths["loader"], paths["parameter"], paths["parts"][0][1]):
+        open(p, "wb").close()
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()), settings=AppSettings())
+    window.stop_device_detection()
+    ran = []
+    real = (ops.loader_to_flash_command, ops._run_rkfw_steps)
+    ops.loader_to_flash_command = lambda loader, tmp: [ops.RKTOOL, "ul", loader]
+    ops._run_rkfw_steps = lambda gui, steps, index, tmp: ran.append(
+        ["backup" if c is ops.BACKUP_STEP else c[1] for c, _, _ in steps])
+    try:
+        for loaded in (False, True):
+            window.loader_loaded = loaded
+            ops._start_rkfw_steps(window, paths, work)
+        if ran != [["db", "backup", "gpt", "ul", "wlx"], ["backup", "gpt", "ul", "wlx"]]:
+            errors.append(f"full flash steps with and without a running Loader: {ran}")
+    finally:
+        ops.loader_to_flash_command, ops._run_rkfw_steps = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_command_chain(app):
     """A callback that starts the next command right away (its worker
     already gone) keeps that command's callback, and the window stays busy
@@ -2562,6 +2594,401 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_report_issue(app):
+    """Report a Problem: home paths hidden, the URL fits GitHub's limit and
+    fills the form's fields, and the failure dialog's button opens it."""
+    from urllib.parse import parse_qs, urlparse
+
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    from rkdeveloptool_gui import feedback
+
+    home = os.path.expanduser("~")
+    if home in feedback.redact(f"wl 0x0 {home}/Downloads/a.img"):
+        errors.append("redact left the home directory in")
+    long_log = "\n".join(f"Write LBA from file ({i % 100}%) {'x' * 60}" for i in range(500))
+    url = feedback.issue_url("t", {"chip": "RK3576", "log": long_log, "what-happened": "boom"})
+    query = parse_qs(urlparse(url).query)
+    if len(url) > feedback.MAX_URL or query.get("template") != ["bug_report.yml"] \
+            or query.get("chip") != ["RK3576"] or not query.get("log"):
+        errors.append(f"issue URL: {len(url)} chars, {sorted(query)}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    opened, reports = [], []
+    real = (feedback.QDesktopServices.openUrl, QDialog.exec, feedback.report_problem, QMessageBox.exec)
+    feedback.QDesktopServices.openUrl = lambda url: opened.append(url.toString())
+    QDialog.exec = lambda self: QDialog.DialogCode.Accepted
+    try:
+        window.log_message("[ERROR] Write LBA failed!")
+        feedback.report_problem(window, "Write failed", "it failed")
+        q = parse_qs(urlparse(opened[0]).query) if opened else {}
+        if q.get("title") != ["Write failed"] or "Write LBA failed" not in q.get("log", [""])[0] \
+                or q.get("app-version") != [__import__("rkdeveloptool_gui").__version__]:
+            errors.append(f"report opened {opened}")
+
+        # The failure dialog's button.
+        feedback.report_problem = lambda gui, title="", problem="", log=None: reports.append(title)
+
+        def click_report(self):
+            for b in self.buttons():
+                if b.text() == window.tr("report_button"):
+                    b.click()
+            return 0
+        QMessageBox.exec = click_report
+        window._show_failure_guidance("burning", "The device refused the write", "Try again", "out")
+        if not reports or "The device refused the write" not in reports[0]:
+            errors.append(f"failure dialog's report button gave {reports}")
+    finally:
+        (feedback.QDesktopServices.openUrl, QDialog.exec, feedback.report_problem,
+         QMessageBox.exec) = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_self_update(app):
+    """In-place updates: the download must match the release digest; an
+    AppImage is replaced atomically; deb/rpm go through pkexec and the
+    package manager; nothing installs without a digest or mid-flash; the
+    dialog's Download and Install ends in a restart."""
+    import hashlib
+    import http.server
+    import threading
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import updater
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    payload = os.urandom(300000)
+    with open(os.path.join(work, "new.AppImage"), "wb") as f:
+        f.write(payload)
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **k):
+            super().__init__(*a, directory=work, **k)
+
+        def log_message(self, *a):
+            pass
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quiet)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/new.AppImage"
+    good = {"url": url, "name": "RKDevelopTool-GUI-9.9.9-x86_64.AppImage", "size": len(payload),
+            "digest": "sha256:" + hashlib.sha256(payload).hexdigest()}
+    try:
+        got = updater.download(good, os.path.join(work, "dl"))
+        if open(got, "rb").read() != payload:
+            errors.append("the downloaded update differs from the file served")
+        try:
+            updater.download(dict(good, digest="sha256:" + "0" * 64), os.path.join(work, "bad"))
+            errors.append("a download with the wrong checksum was accepted")
+        except updater.UpdateError:
+            pass
+        if os.path.exists(os.path.join(work, "bad", good["name"])):
+            errors.append("a download with the wrong checksum was left behind")
+        if updater.can_self_update({"asset": dict(good, digest="")}, "appimage") or \
+                updater.can_self_update({"asset": good}, "pip") or \
+                not updater.can_self_update({"asset": good}, "appimage"):
+            errors.append("can_self_update picked the wrong cases")
+
+        # AppImage: the file at $APPIMAGE is replaced, executable.
+        target = os.path.join(work, "RKDevelopTool-GUI.AppImage")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        os.environ["APPIMAGE"] = target
+        restart = updater.install(got, "appimage")
+        if open(target, "rb").read() != payload or not os.access(target, os.X_OK) \
+                or restart != [target] or os.path.exists(target + ".new"):
+            errors.append("the AppImage wasn't replaced in place")
+    finally:
+        os.environ.pop("APPIMAGE", None)
+        server.shutdown()
+
+    # deb/rpm: pkexec runs the package manager on the downloaded file.
+    bindir = os.path.join(work, "bin")
+    os.makedirs(bindir)
+    calls = os.path.join(work, "calls")
+    for tool in ("pkexec", "apt-get", "dnf"):
+        with open(os.path.join(bindir, tool), "w") as f:
+            f.write(f'#!/bin/sh\necho "{tool} $*" >> {calls}\nexit 0\n')
+        os.chmod(os.path.join(bindir, tool), 0o755)
+    real_path = os.environ["PATH"]
+    os.environ["PATH"] = bindir + os.pathsep + real_path
+    try:
+        updater.install("/tmp/x.deb", "deb")
+        updater.install("/tmp/x.rpm", "rpm")
+    finally:
+        os.environ["PATH"] = real_path
+    with open(calls) as f:
+        lines = f.read().splitlines()
+    if lines != ["pkexec apt-get install -y /tmp/x.deb", "pkexec dnf install -y /tmp/x.rpm"]:
+        errors.append(f"package installs ran {lines}")
+
+    # The window: refused mid-flash; otherwise installed, then restarted.
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    shown, restarts = [], []
+    real = (QMessageBox.exec, updater.UpdateInstallWorker.start, window.restart_into)
+
+    def answer(self):
+        shown.append(self.text())
+        for b in self.buttons():
+            if b.text() == window.tr("update_restart_now"):
+                b.click()
+        return 0
+    QMessageBox.exec = answer
+    window.restart_into = lambda command: restarts.append(command)
+    try:
+        release = {"version": "9.9.9", "asset": good, "page": "p", "download": url}
+        window._command_active = True
+        window.install_update(release)
+        window._command_active = False
+        if not shown or shown[-1] != window.tr("update_busy"):
+            errors.append(f"an update started mid-flash: {shown}")
+
+        def fake_start(worker):
+            worker.progress.emit(50)
+            worker.installing.emit()
+            worker.installed.emit(["/new/app"])
+        updater.UpdateInstallWorker.start = fake_start
+        window.install_update(release)
+        for _ in range(10):
+            app.processEvents()
+        if restarts != [["/new/app"]]:
+            errors.append(f"after installing, restart got {restarts} (dialogs {shown})")
+    finally:
+        QMessageBox.exec, updater.UpdateInstallWorker.start, window.restart_into = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_search(app):
+    """Search finds controls by their text in either language and by
+    everyday words; opening a result goes to its page and highlights it,
+    and never presses it."""
+    from rkdeveloptool_gui import search
+
+    window = RKDevToolGUI(TranslationManager(lang="zh", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.resize(1300, 800)
+    window.show()
+    for _ in range(10):
+        app.processEvents()
+    ran = []
+    real_run = window.run_command
+    window.run_command = lambda cmd, key, cb=None: ran.append(cmd)
+    try:
+        index = search.build_index(window)
+        labels = lambda q: [e.label for e in search.search(index, q)]
+        erase = window.erase_flash_btn.text().replace("&", "")
+        for query in ("擦除", "erase", "wipe"):           # own word, other language, synonym
+            if erase not in labels(query):
+                errors.append(f"search {query!r} didn't find {erase!r}: {labels(query)[:5]}")
+        if not labels("救砖") or "Maskrom" not in labels("救砖")[0]:
+            errors.append(f"search 救砖: {labels('救砖')[:3]}")
+        if search.search(index, "zzzz-nothing"):
+            errors.append("search matched nonsense")
+
+        # Through the box: type, Enter, land on the page with it highlighted.
+        window.tab_widget.setCurrentIndex(0)
+        box = window.search_box
+        box.setFocus()
+        box.setText(erase)
+        app.processEvents()
+        if box.results.count() == 0:
+            errors.append("the search box listed nothing")
+        box.returnPressed.emit()
+        app.processEvents()
+        page = window.tab_widget.currentWidget()
+        if not page.isAncestorOf(window.erase_flash_btn):
+            errors.append(f"opening the result went to tab {window.tab_widget.currentIndex()}")
+        if "palette(highlight)" not in window.erase_flash_btn.styleSheet():
+            errors.append("the result wasn't highlighted")
+        if ran:
+            errors.append(f"opening a search result ran {ran}")
+    finally:
+        window.run_command = real_run
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_notifications(app):
+    """The end of a flash goes out as a notification only while the app is
+    in the background and notifications are on; the Dock badge follows a
+    write and clears at the end."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import notify
+    from rkdeveloptool_gui import operations as ops
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    sent, badges, active = [], [], [False]
+    real = (notify._send, notify._app_active, notify.set_progress, QMessageBox.exec)
+    notify._send = lambda title, text, gui=None: sent.append(title)
+    notify._app_active = lambda: active[0]
+    notify.set_progress = lambda p: badges.append(p)
+    QMessageBox.exec = lambda self: 0
+    window.settings.set(app_settings.KEY_NOTIFY, "1")
+    try:
+        ops._show_rkfw_message(window, "rkfw_flash_complete_title", "done", "Information")
+        ops._show_rkfw_message(window, "pf_title", "not a finish", "Information")
+        active[0] = True
+        ops._show_rkfw_message(window, "rkfw_flash_failed_title", "seen already")
+        active[0] = False
+        window.settings.set(app_settings.KEY_NOTIFY, "0")
+        ops._show_rkfw_message(window, "rkfw_flash_failed_title", "turned off")
+        if sent != [window.tr("rkfw_flash_complete_title")]:
+            errors.append(f"notifications sent: {sent}")
+
+        window.begin_job(1000)
+        window.job_stage("writing", 0, 1000)
+        window._on_command_progress(50)
+        window.end_job()
+        if not badges or badges[-1] is not None or 50 not in badges:
+            errors.append(f"Dock badge went {badges}")
+    finally:
+        notify._send, notify._app_active, notify.set_progress, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_space_check(app):
+    """Decompressing or unpacking stops before it starts when the target
+    disk can't hold the result, says how much is needed, and leaves no
+    temp folder behind; an .xz's unpacked size is read from its index."""
+    import lzma
+    from collections import namedtuple
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import uncompressed_size
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    data = os.urandom(200000) + b"\0" * 800000
+    image = os.path.join(work, "board.img.xz")
+    with open(image, "wb") as f:
+        f.write(lzma.compress(data[:400000]) + lzma.compress(data[400000:]) + b"\0" * 4)
+    if uncompressed_size(image, "xz") != (len(data), True):
+        errors.append(f"xz size from the index: {uncompressed_size(image, 'xz')}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    shown, ready = [], []
+    Usage = namedtuple("Usage", "total used free")
+    real = (QMessageBox.exec, ops.shutil.disk_usage)
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    ops.shutil.disk_usage = lambda path: Usage(1 << 30, 0, 1000)
+    try:
+        before = set(os.listdir(work))
+        ops._with_plain_image(window, image, lambda path, cleanup: ready.append(path))
+        if ready or getattr(window, "_decompress_worker", None) is not None:
+            errors.append("decompressing started without room for it")
+        if not shown or "976.56 KB" not in shown[-1] or set(os.listdir(work)) != before:
+            errors.append(f"no-space message {shown[-1:]} / left {set(os.listdir(work)) - before}")
+    finally:
+        QMessageBox.exec, ops.shutil.disk_usage = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_maskrom_help(app):
+    """With no board, the Home banner links to the Maskrom guide; the
+    guide and the left panel's button open it."""
+    from PySide6.QtWidgets import QDialog
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.on_device_lost()
+        if 'href="maskrom"' not in window.home_status_banner.text():
+            errors.append(f"disconnected banner: {window.home_status_banner.text()!r}")
+        window.home_status_banner.linkActivated.emit("maskrom")
+        app.processEvents()
+        dialogs = [d for d in window.findChildren(QDialog) if d.isVisible()
+                   and d.windowTitle() == window.tr("maskrom_help_title")]
+        if not dialogs or "reboot loader" not in window.tr("maskrom_help_html"):
+            errors.append("the Maskrom guide didn't open from the banner")
+        for d in dialogs:
+            d.close()
+        window.maskrom_help_btn.click()
+        app.processEvents()
+        if not any(d.isVisible() for d in window.findChildren(QDialog)):
+            errors.append("the left panel's button didn't open the guide")
+        for d in window.findChildren(QDialog):
+            d.close()
+        window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tLoader"],
+                               "Loader", "RK3576")
+        if "href" in window.home_status_banner.text():
+            errors.append("the connected banner still links to the guide")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
+def check_first_run_wizard(app):
+    """The wizard opens on the first run only, reports the stub tool,
+    switches the language live, and Settings can bring it back."""
+    from rkdeveloptool_gui import wizard
+
+    settings = AppSettings()
+    settings.set(app_settings.KEY_FIRST_RUN_DONE, "0")
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=settings), settings=settings)
+    window.stop_device_detection()
+    del os.environ[wizard.NO_WIZARD_ENV]
+    try:
+        shown = wizard.maybe_show(window)
+        if shown is None:
+            errors.append("the wizard didn't open on the first run")
+            return
+        app.processEvents()
+        lines = [line.text() for line, *_ in shown.check_lines]
+        if not lines or "rkdeveloptool" not in lines[0] or "✗" in lines[0]:
+            errors.append(f"wizard setup check: {lines}")
+        if sys.platform.startswith("linux") and len(lines) != 2:
+            errors.append("the wizard didn't check USB access on Linux")
+        if shown.button(shown.WizardButton.CancelButton).text() != "Skip":
+            errors.append("wizard buttons aren't translated")
+        shown.language.setCurrentIndex(shown.language.findData("zh"))
+        app.processEvents()
+        if window.manager.lang != "zh" or shown.windowTitle() != window.tr("wizard_title") \
+                or shown.button(shown.WizardButton.CancelButton).text() != "跳过":
+            errors.append("the wizard's language picker didn't switch the language live")
+        shown.language.setCurrentIndex(shown.language.findData("en"))
+        app.processEvents()
+        text = shown.start_text.text()
+        if "{" in text or "Firmware Download" not in text or \
+                ("⌘" in text) != (sys.platform == "darwin"):
+            errors.append(f"wizard start page: {text!r}")
+        shown.reject()
+        app.processEvents()
+        if not settings.get_flag(app_settings.KEY_FIRST_RUN_DONE):
+            errors.append("skipping the wizard didn't mark the first run done")
+        if wizard.maybe_show(window) is not None:
+            errors.append("the wizard opened again after the first run")
+        again = wizard.show(window)
+        again.accept()
+        app.processEvents()
+    finally:
+        os.environ[wizard.NO_WIZARD_ENV] = "1"
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_partition_backup(app):
     """Before gpt overwrites the partition table (full flash or Import GPT)
     the old one is saved as a parameter file Import GPT accepts; a board
@@ -2666,6 +3093,15 @@ def main():
 
     check_translations()
     check_partition_backup(app)
+    check_first_run_wizard(app)
+    check_maskrom_help(app)
+    check_space_check(app)
+    # No real desktop notifications from the other tests.
+    AppSettings().set(app_settings.KEY_NOTIFY, "0")
+    check_notifications(app)
+    check_search(app)
+    check_self_update(app)
+    check_report_issue(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
@@ -2681,6 +3117,7 @@ def main():
     check_loader_before_write(app)
     check_rfi_capacity(app)
     check_idb_command()
+    check_rkfw_loader_once(app)
     check_command_chain(app)
     check_production_line(app)
     check_production_line_real_commands(app)

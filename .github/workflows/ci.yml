@@ -63,6 +63,50 @@ jobs:
       - name: Check the Loader builder
         run: python tests/loader_merge.py
 
+  dmg-layout:
+    name: DMG layout (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          brew install create-dmg
+          pip install PySide6
+
+      # A placeholder .app is enough: this checks the window layout, the
+      # Applications link and the note, not the app.
+      - name: Build a DMG the way the release does
+        run: |
+          mkdir -p dist/RKDevelopTool-GUI.app/Contents/MacOS
+          printf '#!/bin/sh\n' > dist/RKDevelopTool-GUI.app/Contents/MacOS/rkdevtoolgui
+          chmod +x dist/RKDevelopTool-GUI.app/Contents/MacOS/rkdevtoolgui
+          bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/test.dmg 2>&1 | tee make-dmg.log
+          if grep -q "building a plain DMG" make-dmg.log; then
+            echo "::error::create-dmg failed; the release would ship a DMG without the window layout"
+            exit 1
+          fi
+
+      - name: Check what is in it
+        run: |
+          M="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "$M" dist/test.dmg
+          ls -la "$M" "$M/.background" || true
+          test "$(readlink "$M/Applications")" = /Applications
+          test -f "$M/如果打不开 - If it won't open.txt"
+          test -f "$M/.DS_Store"
+          ls "$M/.background" | grep -q background
+          hdiutil detach "$M"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-layout
+          path: dist/test.dmg
+
   metadata:
     name: Desktop / AppStream metadata
     # Same validator version as the release build, which is what rejected the
