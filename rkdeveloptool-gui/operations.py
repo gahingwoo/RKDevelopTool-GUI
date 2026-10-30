@@ -836,7 +836,9 @@ def _verify_rkfw_parts(gui, tmp_dir):
                 gui._verify_hash_worker = None
                 status, offset = result if isinstance(result, tuple) else ("unverified", None)
                 detail = ""
-                if status == "unverified" and offset is not None:
+                if status == "unverified" and offset == 0:
+                    detail = gui.tr("rkfw_read_back_filler_all")
+                elif status == "unverified" and offset is not None:
                     detail = gui.tr("rkfw_read_back_filler").format(format_file_size(offset))
                 elif status == "mismatch":
                     detail = format_file_size(offset)

@@ -1712,14 +1712,14 @@ def check_rkfw_read_back(app):
     QMessageBox.exec = lambda self: shown.append((self.windowTitle(), self.text())) or 0
     try:
         # uboot matches (the read is rounded up to whole sectors); rootfs
-        # reads back filler after its first sector; misc isn't in the table.
-        with open(parts["rootfs"], "rb") as f:
-            rootfs = f.read(512) + b"\xcc" * 4608
+        # reads back only filler; misc isn't in the table.
+        rootfs = b"\xcc" * 5120     # past the Loader's read limit from its start
         run({"uboot": data("uboot", 72), "rootfs": rootfs})
         if ran != [("rl", hex(0x4000), hex(6)), ("rl", hex(0x8000), hex(10))]:
             errors.append(f"read back with {ran}")
         text = shown[-1][1] if shown else ""
-        if not ("1 partition(s)" in text and "rootfs" in text and "misc" in text):
+        if not ("1 partition(s)" in text and "misc" in text
+                and f"rootfs ({window.tr('rkfw_read_back_filler_all')})" in text):
             errors.append(f"read-back report: {shown}")
 
         # A real difference names the partition.
