@@ -851,6 +851,99 @@ def loader_chip(gui):
     return chip_from_device(gui.current_device)
 
 
+def loader_plan(gui):
+    """How a write in Maskrom would get its Loader: ("file", path) for the
+    one in the Loader field, ("rkbin", chip) to build one, or None."""
+    path = gui.loader_path.text().strip() if hasattr(gui, 'loader_path') else ""
+    if path and os.path.isfile(path):
+        return "file", path
+    chip = loader_chip(gui)
+    return ("rkbin", chip) if chip else None
+
+
+# After db the board takes a moment before it answers: on an RK3576 the
+# first rfi (or a write) right after it is refused, the next one works.
+READY_ATTEMPTS = 8
+READY_INTERVAL_MS = 1000
+
+
+def _board_answers():
+    from . import utils
+    try:
+        with utils.DEVICE_LOCK:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "Flash" in (result.stdout or "")
+
+
+def _when_board_answers(gui, on_ready, on_fail, attempt=1):
+    """Call on_ready() once the board answers rfi after db, or on_fail()
+    (with an explanation) when it doesn't within READY_ATTEMPTS tries."""
+    probe = CallWorker(_board_answers)
+    gui._ready_worker = probe
+
+    def answered(ok):
+        gui._ready_worker = None
+        if ok is True:
+            on_ready()
+        elif attempt < READY_ATTEMPTS:
+            QTimer.singleShot(READY_INTERVAL_MS, safe_slot(
+                lambda: _when_board_answers(gui, on_ready, on_fail, attempt + 1)))
+        else:
+            gui.log_message(f"[ERROR] {gui.tr('loader_no_answer')}")
+            _show_rkfw_message(gui, "loader_no_answer_title", gui.tr("loader_no_answer"))
+            on_fail()
+
+    probe.finished.connect(safe_slot(answered))
+    probe.start()
+
+
+def _load_loader_then(gui, on_ready, on_fail):
+    """Load the Loader loader_plan() names (building it from rkbin first if
+    needed), then call on_ready(); on_fail() if that doesn't work. The
+    window explains a failed db as usual."""
+    plan = loader_plan(gui)
+    if plan is None:
+        on_fail()
+        return
+
+    def run_db(path):
+        gui.log_message(f"[INFO] {gui.tr('loader_before_write').format(os.path.basename(path))}")
+
+        def loaded(success, output):
+            if not success:
+                on_fail()
+                return
+            gui.loader_loaded = True
+            gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
+            _when_board_answers(gui, on_ready, on_fail)
+
+        _run_when_idle(gui, [RKTOOL, "db", path], "loading_loader", loaded)
+
+    if plan[0] == "file":
+        run_db(plan[1])
+        return
+    worker = loader_fetch.LoaderFetchWorker(plan[1], loader_cache_dir())
+    gui._loader_fetch_worker = worker
+    gui.log_message(f"[INFO] {gui.tr('fetch_loader_start').format(plan[1], loader_fetch.RKBIN_REPO)}")
+
+    def fetched(path, ini_name, sha):
+        gui.loader_path.setText(path)
+        gui.log_message(f"[OK] {gui.tr('fetch_loader_done').format(os.path.basename(path), ini_name)}")
+        run_db(path)
+
+    def failed(kind, error):
+        gui.log_message(f"[ERROR] {gui.tr('fetch_loader_failed_title')}: {error}")
+        _show_rkfw_message(gui, "fetch_loader_failed_title", gui.tr("fetch_loader_failed_title")
+                           + f"\n\n{error}")
+        on_fail()
+
+    worker.finished_ok.connect(safe_slot(fetched))
+    worker.failed.connect(safe_slot(failed))
+    worker.start()
+
+
 def loader_cache_dir():
     from PySide6.QtCore import QStandardPaths
     base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
@@ -1020,7 +1113,13 @@ def preflight_checks(gui, file_path, address, capacity):
     else:
         checks.append((PASS, tr("pf_device").format(mode)))
         if 'Maskrom' in mode and not getattr(gui, 'loader_loaded', False):
-            checks.append((FAIL, tr("pf_need_loader")))
+            plan = loader_plan(gui)
+            if plan is None:
+                checks.append((FAIL, tr("pf_need_loader")))
+            elif plan[0] == "file":
+                checks.append((WARN, tr("pf_loader_first").format(os.path.basename(plan[1]))))
+            else:
+                checks.append((WARN, tr("pf_loader_first_rkbin").format(plan[1])))
         else:
             checks.append((PASS, tr("pf_loader_ready")))
 
@@ -1131,6 +1230,35 @@ def _burn_file(gui, file_path, address, make_cmd):
     lba = _sector_address(address)
 
     def start(path, cleanup):
+        if 'Maskrom' in (getattr(gui, 'device_mode', '') or '') and not gui.loader_loaded:
+            _load_loader_then(gui, lambda: check_size(path, cleanup), cleanup)
+            return
+        write(path, cleanup)
+
+    def check_size(path, cleanup):
+        # The confirmation couldn't read the storage size without a Loader.
+        if lba is None:
+            write(path, cleanup)
+            return
+        query = CallWorker(lambda: get_flash_capacity_bytes(gui)[0])
+        gui._capacity_worker = query
+
+        def got(capacity):
+            gui._capacity_worker = None
+            end = lba * SECTOR_SIZE + os.path.getsize(path)
+            if isinstance(capacity, int) and end > capacity:
+                cleanup()
+                text = gui.tr("pf_capacity_too_big").format(format_file_size(end),
+                                                            format_file_size(capacity))
+                gui.log_message(f"[ERROR] {text}")
+                _show_rkfw_message(gui, "pf_title", text)
+                return
+            write(path, cleanup)
+
+        query.finished.connect(safe_slot(got))
+        query.start()
+
+    def write(path, cleanup):
         size = os.path.getsize(path)
         verify = (lba is not None and getattr(gui, '_verify_after_write', False)
                   and getattr(gui, '_last_burn_md5', ''))

@@ -899,10 +899,28 @@ def check_preflight(app):
         window.current_device, window.device_mode, window.loader_loaded = device, mode, loaded
         return [status for status, _ in ops.preflight_checks(window, path, address, capacity)]
 
+    def with_loader_field(fn):
+        window.loader_path.setText(loader)
+        try:
+            return fn()
+        finally:
+            window.loader_path.setText("")
+
+    def with_chip(fn):
+        window.chip_info = "RK3576"
+        try:
+            return fn()
+        finally:
+            window.chip_info = "unknown_chip"
+
     P, W, F, U = ops.PASS, ops.WARN, ops.FAIL, ops.UNKNOWN
     cases = {
         "no device": (statuses(disk, "0x0", 1 << 20, device=None), [F, P, P]),
         "maskrom, no loader": (statuses(disk, "0x0", None, mode="Maskrom"), [P, F, P, U]),
+        "maskrom, Loader in the field": (with_loader_field(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
+        "maskrom, chip known": (with_chip(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
         "maskrom, loader loaded": (statuses(disk, "0x0", 1 << 20, mode="Maskrom", loaded=True),
                                    [P, P, P, P]),
         "loader at 0x0": (statuses(loader, "0x0", 1 << 20), [P, P, F, P]),
@@ -1669,6 +1687,80 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_loader_before_write(app):
+    """Writing in Maskrom without a Loader loads the one in the Loader
+    field first, re-checks the storage size, then writes."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    disk = os.path.join(work, "disk.img")
+    with open(disk, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    loader = os.path.join(work, "loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, shown = [], []
+
+    def fake_run(cmd, key, callback=None):
+        ran.append(cmd[1])
+        QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+    real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+            ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS)
+    answers = [True]
+    ops._board_answers = lambda: answers.pop(0) if len(answers) > 1 else answers[0]
+    ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS = 3, 10
+    window.run_command = fake_run
+    window.command_worker = None
+    QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
+
+    def write_once(capacity):
+        ran.clear()
+        window.current_device, window.device_mode = "DevNo=1\tMaskrom", "Maskrom"
+        window.loader_loaded = False
+        window.loader_path.setText(loader)
+        ops.get_flash_capacity_bytes = lambda gui: (capacity, "test")
+        ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+        end = time.time() + 10
+        while time.time() < end and not ("wl" in ran or any("too big" in t for t in shown)):
+            app.processEvents()
+            time.sleep(0.01)
+        for _ in range(20):
+            app.processEvents()
+
+    try:
+        write_once(1 << 30)
+        if ran != ["db", "wl"] or not window.loader_loaded:
+            errors.append(f"write in Maskrom ran {ran}, loader_loaded {window.loader_loaded}")
+        write_once(1024)
+        if ran != ["db"]:
+            errors.append(f"an image too big once the size was known still ran {ran}")
+        # Refused right after db, answering on the next try (as an RK3576
+        # does): written. Never answering: not written.
+        answers[:] = [False, True]
+        write_once(1 << 30)
+        if ran != ["db", "wl"]:
+            errors.append(f"a board answering on the second try: ran {ran}")
+        answers[:] = [False]
+        shown.clear()
+        write_once(1 << 30)
+        end = time.time() + 3
+        while time.time() < end and not shown:
+            app.processEvents()
+            time.sleep(0.01)
+        if ran != ["db"] or not any(window.tr("loader_no_answer") in t for t in shown):
+            errors.append(f"a board that never answers: ran {ran}, said {shown}")
+    finally:
+        (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+         ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS) = real
+
+
 def check_rfi_capacity(app):
     """The pre-flight storage size comes from real rfi output, exactly."""
     import subprocess as sp
@@ -1793,6 +1885,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_loader_before_write(app)
     check_rfi_capacity(app)
     check_idb_command()
     check_command_chain(app)
