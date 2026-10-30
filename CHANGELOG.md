@@ -3,6 +3,49 @@
 Each release's notes come from its section here (packaging/release-notes.sh).
 Releases before 5.5.0 are listed on the GitHub releases page.
 
+## 5.7.0
+
+### Fixes that matter for flashing
+
+- **RK3576 and other NEWIDB chips boot after a full `update.img` flash.** The flash reported success, but the board came back in Maskrom: rkdeveloptool's `ul` writes the bootloader in a layout these chips' boot ROM rejects. The app now builds the boot image itself and writes it at sector 0x40. Raw images such as Armbian carry their own bootloader and weren't affected.
+- **A full flash no longer fails on its first step** when you had already answered Yes to "load the Loader now?". A running Loader refuses a second one, and the flash gave up after three tries. It now skips that step; the image's own Loader still goes onto the board.
+- **Multi-step jobs no longer stop halfway with no error.** When one step started the next one right away, the next step's follow-up was lost. This stopped the production line before the reset, and could skip the read-back after a large write.
+- After loading the Loader, the app waits until the board answers before writing. Writing straight away was refused for a second or two.
+- The storage size in the pre-flight check was always "unknown" on a real board. It's now read correctly.
+- In Maskrom, the chip is known from the USB ID before any Loader runs, so **Get Loader for This Chip** works when it's most needed. Older chips (RK3368, RK3399, …) now show their product name instead of an internal number.
+- Change Storage asks first; switching to storage the board doesn't have leaves every read and write failing. Erasing everything is one button with one confirmation.
+
+### New
+
+- **Safer flashing**
+  - Before a full flash or Import GPT overwrites the partition table, the old one is saved as a parameter file. Import GPT restores it.
+  - Before decompressing or unpacking, the app checks that the disk has room, instead of failing part-way through.
+  - A full `update.img` flash can read every partition back and compare it with the image.
+  - When a flash is done, **Reset Board** boots the new system straight away.
+- **History** tab: every flash with its time, chip, image, result and duration. **Flash Again** puts the image back; right-click for details or to delete one.
+- **Production line**: flash the same image onto boards one after another. Plug in a board in Maskrom, and it gets its Loader, the write, an optional read-back and a reset; then plug in the next. It replaces the old mass production, which couldn't work: rkdeveloptool refuses to run with more than one board connected.
+- **For newcomers**
+  - A first-run guide checks the setup (rkdeveloptool, and the USB rule on Linux), sets the language and theme, and shows how a flash goes.
+  - **How do I get into Maskrom?** explains the button, `sudo reboot loader`, boards without a button, and what to check when nothing shows up.
+  - **Search** (⌘K on macOS, Ctrl+K elsewhere, or the button in the status bar) finds any button or setting by its name in either language, or by everyday words like "flash", "backup" or "救砖", then takes you to it and highlights it.
+- **Updates and installing**
+  - The app updates itself on macOS and Linux (DMG, AppImage, deb, rpm): download, check against GitHub's SHA-256, install, restart.
+  - One-line install: `curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh`. It picks the right package for the system and checks it the same way.
+  - Homebrew: `brew trust gahingwoo/tap && brew install --cask gahingwoo/tap/rkdeveloptool-gui`.
+  - The DMG shows an Applications folder to drag onto, and how to get past the first-launch warning.
+- **Report a Problem** opens a GitHub issue with the board, the environment and the end of the log filled in. You see and can edit everything before it's sent, and your home folder and user name are left out.
+- A desktop notification when a flash ends while the app is in the background, and progress on the Dock icon.
+
+### Smaller changes
+
+- The Parameters tab's options (verify, erase before writing, reset after writing, timeout, retries) now take effect. Before, nothing read them.
+- Partitions can be erased from their row in the partition table. Sizes read "4.00 MB" instead of `0x2000` sectors.
+- Dialog titles, the `update.img` details and the Yes/No buttons are translated in the Chinese UI.
+- Buttons whose name doesn't say what they do, or what they risk, have tooltips. Status colours suit light and dark themes. Ctrl+1…9 switch tabs.
+- At the default window size, every tab fits beside the left panel again.
+
+**Full Changelog**: https://github.com/gahingwoo/RKDevelopTool-GUI/compare/5.6.1...5.7.0
+
 ## 5.6.1
 
 ### Fixes

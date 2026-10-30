@@ -2,89 +2,121 @@
 
 [中文](README.zh.md) | English
 
-RKDevelopTool GUI is a graphical front-end for Rockchip's rkdeveloptool, for Linux and macOS. It flashes firmware to Rockchip boards, manages their partitions and recovers them from Maskrom, without the command line. The prebuilt packages include rkdeveloptool.
-
-**GitHub:** https://github.com/gahingwoo/RKDevelopTool-GUI
+A graphical front-end for Rockchip's `rkdeveloptool`, for macOS and Linux. It flashes firmware to Rockchip boards, manages their partitions and brings them back from Maskrom, without the command line. The prebuilt packages include rkdeveloptool, so there is nothing else to install.
 
 ![Writing an image: overall progress, speed and time left](docs/images/home_en.png)
 
-## Features
+## Install
 
-**Flashing**
-- One-click flashing of an `update.img` (RKFW, including images over 4 GiB), a raw disk image, or a compressed `.img.xz`, `.img.gz` or `.img.bz2`, which is decompressed first.
-- A check before every write: device connected, Loader loaded, the right kind of image for the address, and enough storage for it. A failed check stops the write.
-- Progress for the whole write with speed and time left, a Cancel button, and an optional read-back verification afterwards.
-- An `update.img` brings its own Loader. For other images in Maskrom mode, the app offers to load yours and picks the right way to do it.
-- No Loader for your chip? **Get Loader for This Chip** builds one from Rockchip's [rkbin](https://github.com/rockchip-linux/rkbin) repository.
-- A production line for flashing the same image onto many boards, one after another.
-
-**When something goes wrong**
-- Failures come with the likely cause and what to try, instead of an exit code.
-- If the board disconnects mid-write, the app stops and tells you how to recover it.
-
-**Everything else**
-- Drag a firmware, Loader or other file onto the window; it goes to the right field.
-- Partition table: read it, then flash, back up or erase single partitions.
-- A command line for any rkdeveloptool command, with history.
-- A Settings tab: style, theme, language, text size, which rkdeveloptool to use, a default Loader, and where to decompress images.
-- Update check against GitHub releases, and Chinese and English.
-
-| Check before writing | Settings |
-| --- | --- |
-| ![The burn confirmation with its pre-flight check](docs/images/preflight_en.png) | ![The Settings tab](docs/images/settings_en.png) |
-
----
-
-## Install in one line (macOS and Linux)
+**macOS and Linux, one line:**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
 ```
 
-It picks the right package for your system, checks it against the SHA-256
-checksum GitHub publishes, and installs it:
+It picks the package for your system, checks it against the SHA-256 checksum GitHub publishes, and installs it:
 
-- macOS: the app into `/Applications` (no "cannot be opened" prompt this way).
-- Debian/Ubuntu, Fedora/openSUSE: the `.deb` or `.rpm` through apt, dnf or
-  zypper (asks for your password); it includes the udev rule, so the board
-  shows up without sudo.
-- Other Linux, or with `PACKAGE=appimage`: the AppImage into `~/.local/bin`
-  with a menu entry, no root needed.
+- macOS: the app goes into `/Applications`, and opens without the "cannot be opened" warning.
+- Debian/Ubuntu, Fedora/openSUSE: the `.deb` or `.rpm`, through apt, dnf or zypper (it asks for your password). It includes the USB rule, so the board shows up without sudo.
+- Other Linux, or with `PACKAGE=appimage`: the AppImage in `~/.local/bin` with a menu entry, no root needed.
 
 [Read the script](install.sh) first if you like.
 
-## Download
+**Homebrew (macOS):**
 
-Prebuilt packages are attached to every [GitHub Release](https://github.com/gahingwoo/RKDevelopTool-GUI/releases).
-They **bundle `rkdeveloptool`**, so there is nothing else to install.
+```sh
+brew trust gahingwoo/tap
+brew install --cask gahingwoo/tap/rkdeveloptool-gui
+```
+
+Homebrew only loads casks from taps you trust, hence the first line.
+
+**Download:** every [release](https://github.com/gahingwoo/RKDevelopTool-GUI/releases) has these files.
 
 | Platform | File |
 | --- | --- |
 | macOS (Apple Silicon) | `RKDevelopTool-GUI-arm64.dmg` |
 | macOS (Intel) | `RKDevelopTool-GUI-x86_64.dmg` |
-| Linux (portable, x86_64 / arm64) | `RKDevelopTool-GUI-*-x86_64.AppImage` / `*-aarch64.AppImage` |
+| Linux, portable (x86_64 / arm64) | `RKDevelopTool-GUI-*-x86_64.AppImage` / `*-aarch64.AppImage` |
 | Debian/Ubuntu (amd64 / arm64) | `rkdeveloptool-gui_*.deb` |
 | Fedora/openSUSE (x86_64 / aarch64) | `rkdeveloptool-gui-*.rpm` |
 
-To update, click "Check for updates" in the bottom-right corner. The app also
-checks by itself at most once a day: one request to the GitHub Releases API,
-and nothing else is sent. You can turn that off in Settings.
+> **macOS, first launch from the DMG:** the app isn't notarized yet, so macOS says it can't be opened. On macOS 15 (Sequoia) and later, open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. On older versions, right-click the app, then **Open** and **Open** again. This is needed once; the app's own updates don't trigger it. The one-line installer and Homebrew skip this step.
 
-> **macOS, first launch from the DMG:** the app isn't notarized yet, so macOS
-> says it can't be opened. On macOS 15 (Sequoia) and later, open **System
-> Settings → Privacy & Security**, scroll down and click **Open Anyway**
-> (right-click → Open no longer gets past this). On older versions,
-> right-click the app → **Open** → **Open**. Or run
-> `xattr -cr /Applications/RKDevelopTool-GUI.app`. This is only needed once:
-> the app's own updates don't trigger it.
+**Updates:** the app updates itself. When a new release is out, **Download and Install** in the update dialog fetches it, checks it and restarts. To look now, click the version in the bottom-right corner. The automatic check runs at most once a day, sends one request to GitHub's Releases API and nothing else, and can be turned off in Settings.
 
-### Linux: USB access
+## What it does
 
-Without a udev rule only root can open a Rockchip device, and the board won't
-show up. The `.deb` and `.rpm` packages install the rule, so the logged-in user
-has access straight away. With the AppImage or pip, the app notices when the
-board is there but can't be opened, and gives you a one-line command to
-install the rule. You can also install it yourself:
+**Flashing**
+- Flash an `update.img` (RKFW, including images over 4 GiB), a raw disk image, or a compressed `.img.xz`, `.img.gz` or `.img.bz2`, which is decompressed first.
+- Before every write, a check: is a board connected, is a Loader running, does the image suit the address, does it fit in the storage. A failed check stops the write.
+- One progress bar for the whole job, with speed and time left, and a Cancel button.
+- Read the image back afterwards and compare, for single images and for each partition of an `update.img`.
+- The partition table is saved before anything overwrites it, so Import GPT can put it back.
+- In Maskrom the Loader is loaded for you: yours, or one built for your chip from Rockchip's [rkbin](https://github.com/rockchip-linux/rkbin) with **Get Loader for This Chip**.
+- **Reset Board** when it's done, and the new system boots.
+
+**Many boards**
+- The production line flashes the same image onto boards one after another: plug one in, wait for "unplug", plug in the next. Each gets its Loader, the write, an optional read-back and a reset.
+
+**When you're new to this**
+- A first-run guide checks your setup and walks through a flash.
+- **How do I get into Maskrom?** covers the button, boards that already run Linux, boards without a button, and what to check when nothing shows up.
+- **Search** (⌘K on macOS, Ctrl+K elsewhere) finds any button or setting in English or Chinese, or by everyday words like "flash", "backup" or "unbrick", and takes you to it.
+- Errors come with the likely cause and what to try. **Report a Problem** opens a GitHub issue with the details filled in.
+
+**Everything else**
+- The **History** tab lists every flash; **Flash Again** puts the image back.
+- Partition table: read it, then flash, back up or erase single partitions.
+- A command line for any rkdeveloptool command, showing the command behind each button.
+- Drag a firmware, Loader or other file onto the window and it goes to the right field.
+- A desktop notification when a flash ends in the background.
+- Light and dark themes, adjustable text size, English and Chinese.
+
+| Check before writing | History |
+| --- | --- |
+| ![The burn confirmation with its pre-flight check](docs/images/preflight_en.png) | ![The History tab](docs/images/history_en.png) |
+
+| Search | Getting into Maskrom |
+| --- | --- |
+| ![Search, with what matches "backup"](docs/images/search_en.png) | ![How do I get into Maskrom?](docs/images/maskrom_en.png) |
+
+## Usage
+
+### Flashing a board
+
+1. Put the board into Maskrom mode: with the USB cable in the board's OTG / download port, hold its Maskrom (or Recovery) button while you power it on. The left panel shows "Connected (Maskrom)". If it doesn't, click **How do I get into Maskrom?**.
+2. Drag the firmware onto the window, or choose it on the **Firmware Download** tab. An `update.img`, a raw `.img` or a compressed `.img.xz` all work.
+3. An `update.img` brings its own Loader. For anything else, choose the Loader for your chip, for example `rk3588_spl_loader_*.bin`, or click **Get Loader for This Chip**. The write loads it when it's needed.
+4. Click **Start One-Click Burn** (for an `update.img`) or **Burn Image**. Read the check results and confirm. You can tick "Read back and verify".
+5. When it's done, click **Reset Board**. **Cancel** stops a write, but then the board needs flashing again before it boots.
+
+### Many boards
+
+rkdeveloptool works with one connected board at a time, so the production line on the **Advanced Tools** tab takes them one after another. Choose the image, click **Start Line**, then plug in boards in Maskrom one at a time. Unplug each when the line says so. Results are listed per board.
+
+### Partitions
+
+1. With the Loader running, click **Read Partition Table**.
+2. On the **Partition Management** tab, flash, back up or erase a partition from its row.
+
+Before a full flash or **Import GPT** writes a new table, the old one is saved as a parameter file; the log says where. Import GPT restores it.
+
+### Commands
+
+The **Command** field above the log shows the rkdeveloptool command behind each button. Type or edit a command there and press Enter, for example `ld`, `rci` or `ppt`. Commands that write or erase ask first.
+
+### Settings
+
+The **Settings** tab (Ctrl+, or ⌘,) has the style, theme, language and text size, which rkdeveloptool to use, a default Loader, where to decompress images, notifications, debug logging and updates. It can also reopen the first-run guide.
+
+### If something fails
+
+The app explains the common rkdeveloptool errors: no device found, the device can't be opened, the wrong Loader, a write that failed. Each comes with what to try, and rkdeveloptool's own output is under **Show Details**. **Report This Problem** in the error dialog, or **Report a Problem…** in Settings, opens a GitHub issue with the board, the environment and the end of the log. You see everything before it's sent.
+
+## Linux: USB access
+
+Without a udev rule only root can open a Rockchip device, and the board won't show up. The `.deb` and `.rpm` packages install the rule. With the AppImage or pip, the first-run guide and the app both notice and give you a one-line command. To install the rule yourself:
 
 ```bash
 echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="2207", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-rkdeveloptool-gui.rules
@@ -93,14 +125,11 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Then unplug and replug the board.
 
----
+## Other ways to install
 
-## Install via pip
+### pip
 
-Install a standard Python wheel — this adds the `rkdeveloptool-gui` command to
-your `PATH`. Unlike the prebuilt packages above, the wheel does **not** bundle
-`rkdeveloptool`, so install that separately (see [Running from source](#running-from-source)
-for the requirements).
+The wheel adds the `rkdeveloptool-gui` command. Unlike the packages above it doesn't include `rkdeveloptool`, so install that separately ([instructions](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool)) and check it with `rkdeveloptool --version`.
 
 ```bash
 git clone https://github.com/gahingwoo/RKDevelopTool-GUI
@@ -109,25 +138,9 @@ pip install .
 rkdeveloptool-gui
 ```
 
-Or build a redistributable wheel and install it anywhere:
+### From source
 
-```bash
-pip install build
-python -m build --wheel
-pip install dist/rkdeveloptool_gui-*.whl
-```
-
----
-
-## Running from source
-
-If you run from source instead of a prebuilt package, you need:
-
-- Python 3.9 or later, PySide6 (Qt 6 for Python)
-- `rkdeveloptool` installed and on PATH — verify with `rkdeveloptool --version`
-  ([installation instructions](https://docs.radxa.com/en/zero/zero3/low-level-dev/rkdeveloptool))
-
-### From Source
+Python 3.9 or later, PySide6, and `rkdeveloptool` on PATH:
 
 ```bash
 git clone https://github.com/gahingwoo/RKDevelopTool-GUI
@@ -136,117 +149,28 @@ pip install -r requirements.txt
 python rkdevtoolgui.py
 ```
 
-### Build Standalone Executable
-
-```bash
-python build_nuitka.py
-./rkdevtoolgui
-```
+To build a standalone app: `python build_nuitka.py`.
 
 ### Arch Linux
 
-Available in AUR:
+From the AUR:
+
 ```bash
 yay -S rkdeveloptool-gui
 ```
 
-Or through a community repository:
-```bash
-sudo pacman -S rkdeveloptool-gui
-```
+Or from a community repository: `sudo pacman -S rkdeveloptool-gui`, or the [self-hosted package repository](https://github.com/taotieren/aur-repo). [Repology](https://repology.org/project/rkdeveloptool-gui/versions) lists other distributions.
 
-For the packaging status across more distributions, please refer to [Repology](https://repology.org/project/rkdeveloptool-gui/versions)
+## Important notice
 
-Alternatively, you can install it via a [self-hosted package repository](https://github.com/taotieren/aur-repo)
+This is a graphical wrapper around rkdeveloptool. Flashing firmware is risky: done wrong, it can leave a board unbootable or lose its data. Before you start, back up what matters, use a good USB cable and a stable power supply, and check that the firmware is for your board.
 
----
+The author is not responsible for damage to devices, lost data or other consequences of using this software.
 
-## Usage
+## Contributing and support
 
-### Flashing a board
-
-1. Put the board into Maskrom mode: hold its Maskrom (or Recovery) button while
-   you plug in USB or power it on. The status bar shows "Connected (Maskrom)".
-2. Drag the firmware onto the window, or choose it with **Browse** on the
-   **Firmware Download** tab. An `update.img`, a raw `.img` or a compressed
-   `.img.xz` all work.
-3. For anything other than an `update.img` (which brings its own Loader),
-   choose the Loader for your chip, for example `rk3588_spl_loader_*.bin`, and
-   load it when the app asks, or with **Load Loader**. If you don't have one,
-   **Get Loader for This Chip** downloads the parts from rkbin and builds it.
-4. Click **Start One-Click Burn**. Review the check results and confirm. For
-   a raw or compressed image you can also tick "Read back and verify".
-5. Wait for it to finish. The bar covers the whole flash, and **Cancel**
-   stops it, but a cancelled write has to be flashed again before the board
-   boots.
-
-### Many boards
-
-rkdeveloptool works with one connected board at a time, so the production line
-on the **Advanced Tools** tab takes boards one after another. Choose the image,
-click **Start Line**, then plug in boards in Maskrom mode one at a time. Each
-board gets its Loader (the one on the Firmware Download tab, or one built from
-rkbin), a size check, the write, an optional read-back and a reset. When the
-line says so, unplug it and plug in the next. Results are listed per board.
-
-### Partitions
-
-1. Load the Loader, then click **Read Partition Table**.
-2. On the **Partition Management** tab, pick a partition and flash, back up or
-   erase it.
-
-### Commands
-
-The **Command** field above the log shows the rkdeveloptool command behind
-each button. You can type or edit a command there and run it with Enter, for
-example `ld`, `rci` or `ppt`. Commands that write or erase ask first.
-
-### Settings
-
-The **Settings** tab (Ctrl+, or ⌘,) has the style, theme, language and text
-size, the rkdeveloptool binary to use, a default Loader, where to decompress
-images, debug logging and the update check. The style, theme and language
-pickers are also in the status bar.
-
-### If something fails
-
-The app explains the most common rkdeveloptool errors: no device found, the
-device can't be opened, the wrong Loader, a write that failed. Each comes with
-what to try, and rkdeveloptool's own output is under **Show Details**. To
-report a problem, use **Export diagnostics…** in Settings and attach the file
-to an issue.
-
----
-
-## Important Notice
-
-This software is a graphical wrapper around rkdeveloptool. Firmware flashing is inherently risky and may result in device bricking or data loss if not performed correctly.
-
-Before using this tool:
-- Ensure you have a backup of important data
-- Use a reliable USB cable and a stable power supply for the board
-- Understand the implications of each operation
-- Consult device-specific documentation if needed
-
-The author is not responsible for any device damage, data loss, or other consequences resulting from the use of this software.
-
----
-
-## Contributing
-
-Contributions are welcome. Please feel free to submit issues or pull requests.
-
----
+Issues and pull requests are welcome: [github.com/gahingwoo/RKDevelopTool-GUI/issues](https://github.com/gahingwoo/RKDevelopTool-GUI/issues). The README screenshots are made by `docs/make_screenshots.py`.
 
 ## License
 
-See [LICENSE](LICENSE) file for details.
-
----
-
-## Support
-
-For issues, questions, or feature requests, please visit:
-https://github.com/gahingwoo/RKDevelopTool-GUI/issues
-
-
+See [LICENSE](LICENSE).
