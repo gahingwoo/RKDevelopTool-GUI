@@ -470,9 +470,11 @@ def onekey_burn(gui):
     _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
-def _show_rkfw_message(gui, title_key, text, icon="Critical"):
+def _show_rkfw_message(gui, title_key, text, icon="Critical", offer_reset=False):
     """Show a QMessageBox for RKFW flashing errors/status with dynamic text
-    that gui.show_message()'s static-key-only signature can't express."""
+    that gui.show_message()'s static-key-only signature can't express.
+    offer_reset adds a button that resets the board (rd) so the new
+    firmware boots."""
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr(title_key))
@@ -484,7 +486,15 @@ def _show_rkfw_message(gui, title_key, text, icon="Critical"):
         msg.setIcon(QMessageBox.Icon.Warning)
     else:
         msg.setIcon(QMessageBox.Icon.Information)
+    reset = None
+    if offer_reset and getattr(gui, 'current_device', None):
+        reset = msg.addButton(gui.tr("reset_board_btn"), QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton(gui.tr("later_btn"), QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(reset)
     msg.exec()
+    if reset is not None and msg.clickedButton() is reset:
+        gui.log_message(f"[INFO] {gui.tr('rebooting')}")
+        _run_when_idle(gui, [RKTOOL, "rd"], "rebooting", lambda success, output: None)
 
 
 def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
@@ -702,7 +712,8 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
         _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
-                            gui.tr("rkfw_flash_complete_message"), "Information")
+                            gui.tr("rkfw_flash_complete_message"), "Information",
+                            offer_reset=True)
         return
 
     if getattr(gui, '_cancel_requested', False):
@@ -1270,8 +1281,13 @@ def _burn_file(gui, file_path, address, make_cmd):
         def after_write(success, output):
             if success and verify:
                 _verify_written(gui, path, address, size, expected, cleanup)
-            else:
-                cleanup()
+                return
+            cleanup()
+            if success and lba == 0:
+                # A whole image: the board boots it once reset.
+                _show_rkfw_message(gui, "write_done_title",
+                                   gui.tr("write_done_message").format(os.path.basename(path)),
+                                   "Information", offer_reset=True)
 
         gui.run_command(make_cmd(path), "burning", after_write)
 
@@ -1318,7 +1334,8 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
                 finish()
                 gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
                 _show_rkfw_message(gui, "verify_ok_title",
-                                   gui.tr("verify_ok").format(name), "Information")
+                                   gui.tr("verify_ok").format(name), "Information",
+                                   offer_reset=_sector_address(address) == 0)
                 return
             # A mismatch may only mean the loader can't read part of the
             # storage back; look for its filler before calling the write bad.

@@ -276,7 +276,7 @@ def check_burn_flow(app):
         app.quit()
 
     operations._burn_with_confirm = fake_confirm
-    operations._show_rkfw_message = lambda gui, title, text, icon="Critical": seen.update(refused=text)
+    operations._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: seen.update(refused=text)
     window.run_command = fake_run
     try:
         window.firmware_path.setText(src)
@@ -1118,7 +1118,7 @@ def check_cancel(app):
     real = (QMessageBox.warning, QMessageBox.exec, ops._show_rkfw_message)
     QMessageBox.warning = staticmethod(lambda *a, **k: asked.append(a[1]) or answer[0])
     QMessageBox.exec = lambda self: shown.append(self.text()) or 0
-    ops._show_rkfw_message = lambda gui, title, text, icon="Critical": shown.append(title)
+    ops._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: shown.append(title)
     try:
         def start(key):
             window.command_worker = FakeWorker(key)
@@ -1353,7 +1353,7 @@ def check_verify_after_write(app):
 
         real = (ops._burn_with_confirm, ops._show_rkfw_message, window.run_command)
         ops._burn_with_confirm = fake_confirm
-        ops._show_rkfw_message = lambda gui, title, text, icon="Critical": reports.append(title)
+        ops._show_rkfw_message = lambda gui, title, text, icon="Critical", **_: reports.append(title)
         window.run_command = fake_run
         try:
             ops._burn_file(window, image, address,
@@ -1381,7 +1381,7 @@ def check_verify_after_write(app):
         errors.append(f"a readback that turns to 0xCC filler was reported as {reports} "
                       f"(temp left {leftovers})")
     commands, reports, _, _ = run_burn(verify=False)
-    if commands != [["wl", "0x0"]] or reports:
+    if commands != [["wl", "0x0"]] or reports != ["write_done_title"]:
         errors.append(f"verify off: commands {commands}, reports {reports}")
     _, _, offered, _ = run_burn(verify=False, address="boot")
     if offered != [False]:
@@ -1687,6 +1687,11 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_reset_after_write(app):
+    """A whole image written at 0x0 ends with a Reset Board button that
+    runs rd; a write elsewhere doesn't ask."""
+
+
 def check_loader_before_write(app):
     """Writing in Maskrom without a Loader loads the one in the Loader
     field first, re-checks the storage size, then writes."""
@@ -1699,6 +1704,10 @@ def check_loader_before_write(app):
     disk = os.path.join(work, "disk.img")
     with open(disk, "wb") as f:
         f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, offered = [], []
     loader = os.path.join(work, "loader.bin")
     with open(loader, "wb") as f:
         f.write(b"LDR " + b"\0" * 600)
@@ -1710,6 +1719,38 @@ def check_loader_before_write(app):
     def fake_run(cmd, key, callback=None):
         ran.append(cmd[1])
         QTimer.singleShot(0, lambda: callback and callback(True, ""))
+
+    def fake_exec(self):
+        buttons = {b.text(): b for b in self.buttons()}
+        offered.append(window.tr("reset_board_btn") in buttons)
+        if window.tr("reset_board_btn") in buttons:
+            buttons[window.tr("reset_board_btn")].click()
+        return QMessageBox.StandardButton.Yes
+
+    real = (window.run_command, QMessageBox.exec)
+    window.run_command, QMessageBox.exec = fake_run, fake_exec
+    window.command_worker = None
+    window.current_device, window.device_mode, window.loader_loaded = "dev", "Loader", True
+    try:
+        for address in ("0x0", "0x8000"):
+            ran.clear()
+            offered.clear()
+            ops._burn_file(window, disk, address, lambda p, a=address: [ops.RKTOOL, "wl", a, p])
+            end = time.time() + 5
+            while time.time() < end and "wl" not in ran:
+                app.processEvents()
+                time.sleep(0.01)
+            for _ in range(30):
+                app.processEvents()
+                time.sleep(0.005)
+            # offered[0] is the confirmation; the rest come after the write.
+            if address == "0x0" and (ran != ["wl", "rd"] or offered[1:] != [True]):
+                errors.append(f"whole image: ran {ran}, reset offered {offered}")
+            if address != "0x0" and (ran != ["wl"] or any(offered)):
+                errors.append(f"write at {address}: ran {ran}, reset offered {offered}")
+    finally:
+        window.run_command, QMessageBox.exec = real
+
 
     real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
             ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS)
@@ -1885,6 +1926,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_reset_after_write(app)
     check_loader_before_write(app)
     check_rfi_capacity(app)
     check_idb_command()

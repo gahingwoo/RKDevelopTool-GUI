@@ -28,6 +28,10 @@ TRANSLATIONS = {
         "stage_verifying": "校验 {}",
         "verify_comparing": "正在比对读回的数据…",
         "verify_ok_title": "校验通过",
+        "reset_board_btn": "重启板子",
+        "later_btn": "稍后",
+        "write_done_title": "写入完成",
+        "write_done_message": "{} 已写入。重启板子后就会从新系统启动。",
         "verify_ok": "{} 已写入，读回的数据与镜像一致。",
         "verify_mismatch_title": "校验失败",
         "verify_mismatch_message": "读回的数据和 {} 不一致，写入的内容有误。\n\n建议：换一根线、直接接电脑后面的 USB 口，让设备重新进入 Maskrom 后重新烧录。如果反复失败，存储本身可能有问题。",
@@ -342,7 +346,7 @@ TRANSLATIONS = {
         "rkfw_no_parameter_message": "固件包内未找到 parameter 分区表条目，无法安全生成 GPT，本次烧录已终止。",
         "rkfw_extract_failed_title": "固件解包失败",
         "rkfw_flash_complete_title": "烧录完成",
-        "rkfw_flash_complete_message": "固件已完整烧录，建议重启设备使其生效。",
+        "rkfw_flash_complete_message": "固件已完整烧录。重启板子后就会从新固件启动。",
         "rkfw_flash_failed_title": "烧录失败",
         "rkfw_flash_failed_message": "烧录过程中失败，详情请查看日志。设备可能处于不完整状态，"
                                       "请勿断开连接，可在确认 Loader/分区文件无误后重新从 Maskrom 模式开始整包烧录。",
@@ -596,6 +600,10 @@ TRANSLATIONS = {
         "stage_verifying": "Verifying {}",
         "verify_comparing": "Comparing the readback…",
         "verify_ok_title": "Verified",
+        "reset_board_btn": "Reset Board",
+        "later_btn": "Later",
+        "write_done_title": "Write complete",
+        "write_done_message": "{} has been written. The board boots it once it's reset.",
         "verify_ok": "{} was written and reads back identical to the image.",
         "verify_mismatch_title": "Verification failed",
         "verify_mismatch_message": "What was read back doesn't match {}, so the write is wrong.\n\nTry another cable straight into a port on the computer, put the device back into Maskrom and flash again. If it keeps failing, the storage itself may be faulty.",
@@ -924,8 +932,7 @@ TRANSLATIONS = {
                                       "been aborted.",
         "rkfw_extract_failed_title": "Firmware Extraction Failed",
         "rkfw_flash_complete_title": "Flash Complete",
-        "rkfw_flash_complete_message": "The firmware has been fully flashed. It's recommended to reset "
-                                        "the device for the changes to take effect.",
+        "rkfw_flash_complete_message": "The firmware is fully flashed. The board boots it once it's reset.",
         "rkfw_flash_failed_title": "Flash Failed",
         "rkfw_flash_failed_message": "The flash process failed - see the log for details. The device may "
                                       "be left in an incomplete state; do not disconnect it. You can retry "
