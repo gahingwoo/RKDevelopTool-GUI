@@ -54,11 +54,32 @@ jobs:
           codesign --force --deep --sign - "$APP"
           codesign --verify --deep --strict "$APP"
 
+      # Developer ID + hardened runtime when the signing secrets are set,
+      # ad hoc otherwise (adding rkdeveloptool broke Nuitka's seal).
+      - name: Sign the app
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash packaging/macos-sign.sh app dist/RKDevelopTool-GUI.app
+
       - name: Create DMG
         run: |
           # The app, an Applications link to drop it on, a background with
           # first-launch instructions, and a note about Gatekeeper.
           bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-arm64.dmg
+
+      # Notarized and stapled when the signing secrets are set; skipped otherwise.
+      - name: Notarize the DMG
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash packaging/macos-sign.sh dmg dist/RKDevelopTool-GUI-arm64.dmg
 
       - uses: actions/upload-artifact@v4
         with:
@@ -312,6 +333,17 @@ jobs:
           codesign --force --deep --sign - "$APP"
           codesign --verify --deep --strict "$APP"
 
+      # Developer ID + hardened runtime when the signing secrets are set,
+      # ad hoc otherwise (adding rkdeveloptool broke Nuitka's seal).
+      - name: Sign the app
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash packaging/macos-sign.sh app dist/RKDevelopTool-GUI.app
+
       - name: Confirm x86_64 architecture
         run: |
           APP="$(ls -d dist/*.app | head -1)"
@@ -322,6 +354,16 @@ jobs:
           # The app, an Applications link to drop it on, a background with
           # first-launch instructions, and a note about Gatekeeper.
           bash packaging/make-dmg.sh dist/RKDevelopTool-GUI.app dist/RKDevelopTool-GUI-x86_64.dmg
+
+      # Notarized and stapled when the signing secrets are set; skipped otherwise.
+      - name: Notarize the DMG
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash packaging/macos-sign.sh dmg dist/RKDevelopTool-GUI-x86_64.dmg
 
       - uses: actions/upload-artifact@v4
         with:
