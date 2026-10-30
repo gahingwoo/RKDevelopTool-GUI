@@ -128,6 +128,8 @@ def update_partition_tab_texts(gui):
     # Update danger zone label
     if hasattr(gui, 'danger_label') and gui.danger_label:
         gui.danger_label.setText(gui.tr("danger_zone_label"))
+    gui.apply_status_colors()
+    set_tooltips(gui)
 
 
 def update_parameter_tab_texts(gui):
@@ -298,3 +300,35 @@ def populate_address_combo(gui):
             gui.address_combo.setCurrentIndex(current_idx)
     except (RuntimeError, AttributeError) as e:
         print(f"Warning: Failed to populate address combo: {e}")
+
+
+
+# Buttons whose name alone doesn't say what they do or what they risk.
+_TOOLTIPS = {
+    'enter_maskrom_btn': "tip_enter_maskrom",
+    'enter_loader_btn': "tip_load_loader",
+    'load_loader_btn': "tip_load_loader",
+    'reset_device_btn': "tip_reset_device",
+    'onekey_burn_btn': "tip_onekey_burn",
+    'burn_image_btn': "tip_burn_image",
+    'change_storage_btn': "tip_change_storage",
+    'erase_flash_btn': "tip_erase_all",
+    'erase_all_btn': "tip_erase_all",
+    'refresh_partitions_btn': "tip_read_partitions",
+    'read_partitions_btn': "tip_read_partitions",
+    'backup_firmware_btn': "tip_backup_firmware",
+    'run_command_btn': "tip_run_command",
+}
+
+
+def set_tooltips(gui):
+    """Give the less obvious buttons a one-line explanation. It is kept as
+    the baseTip property so a disabled button's "connect a device first"
+    tip can be swapped back for it."""
+    for attr, key in _TOOLTIPS.items():
+        widget = getattr(gui, attr, None)
+        if widget is not None:
+            widget.setProperty("baseTip", gui.tr(key))
+            widget.setToolTip(gui.tr(key))
+    if hasattr(gui, '_update_action_states'):
+        gui._update_action_states()
