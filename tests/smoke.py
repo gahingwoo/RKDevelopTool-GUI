@@ -14,6 +14,7 @@ wrong answer, or settings / manual commands that don't take effect.
 
     pip install . && python tests/smoke.py
 """
+import faulthandler
 import os
 import stat
 import sys
@@ -1823,7 +1824,11 @@ def check_production_line_real_commands(app):
             # -v (version at start-up) and a device poll (ld, rci) that may
             # slip in before detection stops aren't the line's.
             ran = [c for c in f.read().split() if c not in ("-v", "ld", "rci")]
-        if ran != ["db", "rfi", "wl", "rd"] or line.ok != 1:
+        # Such a poll can also make the first rfi fail; the line retries
+        # it (RFI_ATTEMPTS), which is what it's for.
+        steps = [c for i, c in enumerate(ran) if not (c == "rfi" and i and ran[i - 1] == "rfi")]
+        if steps != ["db", "rfi", "wl", "rd"] or ran.count("rfi") > production.RFI_ATTEMPTS \
+                or line.ok != 1:
             errors.append(f"line with real commands ran {ran}, ok {line.ok}, state {line.state}")
     finally:
         production.AFTER_DB_MS = real_delay
@@ -3115,6 +3120,33 @@ def check_qt_translation(app):
         errors.append(f"Qt's Yes button in Chinese reads {zh!r} (English {en!r})")
 
 
+def check_theme_poll(app):
+    """The 2-second system-theme poll restyles the app only when the
+    system's theme changed; doing it every time kept slow machines busy."""
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    auto = window.theme_auto_manager
+    applied, system = [], ["dark"]
+    real = (window.theme_manager.apply_theme, auto.get_system_theme)
+    window.theme_manager.apply_theme = lambda theme=None, style=None: applied.append(theme)
+    auto.get_system_theme = lambda: system[0]
+    auto.enable_auto = True
+    try:
+        auto.apply_system_theme(force=True)
+        auto.apply_system_theme()
+        auto.apply_system_theme()
+        system[0] = "light"
+        auto.apply_system_theme()
+        if applied != ["dark", "light"]:
+            errors.append(f"theme poll applied {applied}")
+    finally:
+        window.theme_manager.apply_theme, auto.get_system_theme = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -3128,7 +3160,26 @@ def run_window(app, lang):
     app.processEvents()
 
 
+def _timed(check):
+    """Log each check and how long it took to stderr, which CI shows as it
+    happens (stdout is buffered until the end)."""
+    def run(*args):
+        start = time.monotonic()
+        try:
+            return check(*args)
+        finally:
+            print(f"[smoke] {check.__name__} {time.monotonic() - start:.1f}s", file=sys.stderr, flush=True)
+    run.__name__ = check.__name__
+    return run
+
+
 def main():
+    # CI stops the job at 15 minutes with no clue where it hung: dump every
+    # thread's stack before that and exit.
+    faulthandler.dump_traceback_later(13 * 60, exit=True)
+    for name, value in list(globals().items()):
+        if name.startswith("check_") and callable(value):
+            globals()[name] = _timed(value)
     app = QApplication(sys.argv)
     app.setOrganizationName(app_settings.ORGANIZATION)
     app.setApplicationName(app_settings.APPLICATION)
@@ -3142,6 +3193,7 @@ def main():
 
     check_translations()
     check_qt_translation(app)
+    check_theme_poll(app)
     check_partition_backup(app)
     check_first_run_wizard(app)
     check_maskrom_help(app)
