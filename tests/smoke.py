@@ -2828,6 +2828,48 @@ def check_notifications(app):
         app.processEvents()
 
 
+def check_space_check(app):
+    """Decompressing or unpacking stops before it starts when the target
+    disk can't hold the result, says how much is needed, and leaves no
+    temp folder behind; an .xz's unpacked size is read from its index."""
+    import lzma
+    from collections import namedtuple
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import uncompressed_size
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    data = os.urandom(200000) + b"\0" * 800000
+    image = os.path.join(work, "board.img.xz")
+    with open(image, "wb") as f:
+        f.write(lzma.compress(data[:400000]) + lzma.compress(data[400000:]) + b"\0" * 4)
+    if uncompressed_size(image, "xz") != (len(data), True):
+        errors.append(f"xz size from the index: {uncompressed_size(image, 'xz')}")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    shown, ready = [], []
+    Usage = namedtuple("Usage", "total used free")
+    real = (QMessageBox.exec, ops.shutil.disk_usage)
+    QMessageBox.exec = lambda self: shown.append(self.text()) or 0
+    ops.shutil.disk_usage = lambda path: Usage(1 << 30, 0, 1000)
+    try:
+        before = set(os.listdir(work))
+        ops._with_plain_image(window, image, lambda path, cleanup: ready.append(path))
+        if ready or getattr(window, "_decompress_worker", None) is not None:
+            errors.append("decompressing started without room for it")
+        if not shown or "976.56 KB" not in shown[-1] or set(os.listdir(work)) != before:
+            errors.append(f"no-space message {shown[-1:]} / left {set(os.listdir(work)) - before}")
+    finally:
+        QMessageBox.exec, ops.shutil.disk_usage = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2854,6 +2896,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_space_check(app)
     # No real desktop notifications from the other tests.
     AppSettings().set(app_settings.KEY_NOTIFY, "0")
     check_notifications(app)
