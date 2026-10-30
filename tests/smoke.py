@@ -1569,8 +1569,9 @@ def check_gpt_import_export(app):
 
         window.gpt_path.setText(exported)
         ops.import_gpt_table(window)
-        if ran != [["gpt", exported]]:
-            errors.append(f"Import GPT ran {ran}, want ['gpt', <parameter file>]")
+        # The board's table is backed up (ppt) before gpt replaces it.
+        if ran != [["ppt"], ["gpt", exported]]:
+            errors.append(f"Import GPT ran {ran}, want ['ppt'], ['gpt', <parameter file>]")
     finally:
         (app_settings.get_save_file, app_settings.get_open_file, window.run_command,
          window.show_message, QMessageBox.exec) = real
@@ -2159,12 +2160,13 @@ def check_rkfw_loader_once(app):
     ran = []
     real = (ops.loader_to_flash_command, ops._run_rkfw_steps)
     ops.loader_to_flash_command = lambda loader, tmp: [ops.RKTOOL, "ul", loader]
-    ops._run_rkfw_steps = lambda gui, steps, index, tmp: ran.append([c[1] for c, _, _ in steps])
+    ops._run_rkfw_steps = lambda gui, steps, index, tmp: ran.append(
+        ["backup" if c is ops.BACKUP_STEP else c[1] for c, _, _ in steps])
     try:
         for loaded in (False, True):
             window.loader_loaded = loaded
             ops._start_rkfw_steps(window, paths, work)
-        if ran != [["db", "gpt", "ul", "wlx"], ["gpt", "ul", "wlx"]]:
+        if ran != [["db", "backup", "gpt", "ul", "wlx"], ["backup", "gpt", "ul", "wlx"]]:
             errors.append(f"full flash steps with and without a running Loader: {ran}")
     finally:
         ops.loader_to_flash_command, ops._run_rkfw_steps = real
@@ -2987,6 +2989,83 @@ def check_first_run_wizard(app):
         app.processEvents()
 
 
+def check_partition_backup(app):
+    """Before gpt overwrites the partition table (full flash or Import GPT)
+    the old one is saved as a parameter file Import GPT accepts; a board
+    without one gets no file and the flash goes on."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import parameter_has_mtdparts, parse_partition_info
+
+    ppt = "**********Partition Info(GPT)**********\nNO  LBA       Name                \n00  00004000  uboot\n01  00008000  boot\n02  00048000  rootfs\n"
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, table = [], [ppt]
+
+    def fake_run(cmd, key, callback=None):
+        ran.append(cmd[1])
+        out = table[0] if cmd[1] == "ppt" else ""
+        QTimer.singleShot(0, lambda: callback and callback(True, out))
+
+    real = (window.run_command, QMessageBox.exec, ops._show_rkfw_message)
+    window.run_command = fake_run
+    window.command_worker = None
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.Yes
+    ops._show_rkfw_message = lambda *a, **k: None
+    folder = ops.partition_backup_dir()
+
+    def pump(until):
+        end = time.time() + 5
+        while not until() and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+
+    try:
+        if not parse_partition_info(ppt):
+            errors.append("the test's ppt output doesn't parse")
+        before = set(os.listdir(folder)) if os.path.isdir(folder) else set()
+        steps = [(ops.BACKUP_STEP, "gpt_backup", "backup"),
+                 ([ops.RKTOOL, "gpt", "/tmp/p.txt"], "importing_gpt", "gpt")]
+        window._rkfw_flashing = True
+        tmp = tempfile.mkdtemp(dir=_tmp)
+        ops._run_rkfw_steps(window, steps, 0, tmp)
+        pump(lambda: not window._rkfw_flashing)
+        new = set(os.listdir(folder)) - before if os.path.isdir(folder) else set()
+        if ran[:2] != ["ppt", "gpt"] or len(new) != 1:
+            errors.append(f"full flash: ran {ran}, backups {new}")
+        elif not parameter_has_mtdparts(os.path.join(folder, new.pop())):
+            errors.append("the saved partition table isn't a parameter file")
+
+        # Import GPT: backup first; an empty board saves nothing.
+        ran.clear()
+        table[0] = ""
+        param = os.path.join(_tmp, "import-parameter.txt")
+        with open(param, "w") as f:
+            f.write("CMDLINE: mtdparts=rk29xxnand:0x2000@0x4000(uboot)\n")
+        window.loader_loaded = True
+        count = len(os.listdir(folder))
+        window.current_device = "dev"
+        window.gpt_path.setText(param)
+        real_open = ops.app_settings.get_open_file
+        ops.app_settings.get_open_file = lambda *a, **k: param
+        try:
+            ops.import_gpt_table(window)
+        finally:
+            ops.app_settings.get_open_file = real_open
+        pump(lambda: "gpt" in ran)
+        if ran[:2] != ["ppt", "gpt"] or len(os.listdir(folder)) != count:
+            errors.append(f"Import GPT on an empty board: ran {ran}, backups {len(os.listdir(folder)) - count}")
+    finally:
+        window.run_command, QMessageBox.exec, ops._show_rkfw_message = real
+        window._rkfw_flashing = False
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -3013,6 +3092,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_partition_backup(app)
     check_first_run_wizard(app)
     check_maskrom_help(app)
     check_space_check(app)

@@ -727,6 +727,7 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     if _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
         steps.append(([RKTOOL, "ef"], "erase_flash", gui.tr("rkfw_step_erase")))
     steps += [
+        (BACKUP_STEP, "gpt_backup", gui.tr("gpt_backup")),
         ([RKTOOL, "gpt", paths['parameter']], "importing_gpt", gui.tr("rkfw_step_gpt")),
         (idb_cmd, "writing_idb", gui.tr("rkfw_step_idb")),
     ]
@@ -738,7 +739,7 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
                       gui.tr("rkfw_step_partition").format(name)))
 
     # What to read back afterwards: each partition written by name.
-    gui._rkfw_written = [(cmd[2], cmd[3]) for cmd, key, _ in steps if cmd[1] == "wlx"]
+    gui._rkfw_written = [(cmd[2], cmd[3]) for cmd, key, _ in steps if cmd[1:2] == ["wlx"]]
     gui._rkfw_parameter = paths['parameter']
     gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
     # Weight each step by the file it writes (every step's last argument),
@@ -756,6 +757,10 @@ def _record_rkfw(gui, result):
     gui._rkfw_history = None
     if entry:
         _record_flash(gui, entry[0], result, "update.img", "", entry[1])
+
+
+# A full flash's step that saves the old partition table (not a command).
+BACKUP_STEP = ["backup-partition-table"]
 
 
 def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
@@ -802,6 +807,11 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     sizes = getattr(gui, '_rkfw_step_bytes', None)
     if hasattr(gui, 'job_stage') and sizes and len(sizes) == len(steps):
         gui.job_stage(f"[{index + 1}/{len(steps)}] {label}", sum(sizes[:index]), sizes[index])
+
+    if cmd is BACKUP_STEP:
+        _backup_partition_table(gui, lambda: QTimer.singleShot(0, safe_slot(
+            lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir))))
+        return
 
     def on_step_done(success, output):
         if not success and getattr(gui, '_cancel_requested', False):
@@ -2396,7 +2406,41 @@ def import_gpt_table(gui):
             gui.log_message(f"[ERROR] {gui.tr('gpt_import_failed') if hasattr(gui, 'tr') else 'GPT import failed'}: {error_msg}")
     
     gui.log_message(f"[INFO] {gui.tr('importing_gpt_table') if hasattr(gui, 'tr') else 'Importing GPT table'}...")
-    gui.run_command([RKTOOL, "gpt", input_file], "importing_gpt", on_finished)
+    _backup_partition_table(gui, lambda: _run_when_idle(
+        gui, [RKTOOL, "gpt", input_file], "importing_gpt", on_finished))
+
+
+def partition_backup_dir():
+    """Where partition tables are saved before they're overwritten."""
+    from . import history
+    return os.path.join(os.path.dirname(history.history_path()), "gpt-backups")
+
+
+def _backup_partition_table(gui, then):
+    """Save the board's current partition table as a parameter file before
+    something overwrites it, then call then(). A board without one, or a
+    read that fails, is noted and doesn't stop the flash."""
+    from .utils import build_parameter_text
+
+    def read(success, output):
+        partitions = parse_partition_info(output) if success else {}
+        if not partitions:
+            gui.log_message(f"[INFO] {gui.tr('gpt_backup_none') if success else gui.tr('gpt_backup_failed')}")
+            then()
+            return
+        chip = (loader_chip(gui) or "board").lower()
+        folder = partition_backup_dir()
+        path = os.path.join(folder, f"{chip}-{time.strftime('%Y%m%d-%H%M%S')}-parameter.txt")
+        try:
+            os.makedirs(folder, exist_ok=True)
+            with open(path, "w") as f:
+                f.write(build_parameter_text(partitions))
+            gui.log_message(f"[INFO] {gui.tr('gpt_backup_saved').format(path)}")
+        except OSError as e:
+            gui.log_message(f"[WARNING] {gui.tr('gpt_backup_failed')}: {e}")
+        then()
+
+    _run_when_idle(gui, [RKTOOL, "ppt"], "gpt_backup", read)
 
 
 def read_device_params(gui):
