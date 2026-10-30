@@ -2078,73 +2078,37 @@ def erase_partition(gui, partition_name):
 
 
 def erase_all_storage(gui):
-    """Erase entire storage device - requires multiple confirmations
-    
-    Implements three-layer confirmation:
-    1. Initial warning dialog
-    2. Storage name verification input
-    3. Final confirmation
+    """Erase the whole storage with `ef` (the Firmware Download tab's Erase
+    Entire Flash and the danger zone's Erase All Storage both come here).
+
+    One confirmation, Cancel by default, whose Erase button only enables
+    once "I understand" is ticked. `ef` takes no arguments; "ef all" is
+    rejected by rkdeveloptool as invalid and erased nothing.
     """
-    current_storage = gui.change_storage_combo.currentText() if hasattr(gui, 'change_storage_combo') else "Storage"
-    
-    # Layer 1: Initial warning dialog
-    msg1 = QMessageBox()
-    style_messagebox(msg1)
-    msg1.setWindowTitle(gui.tr("erase_all_warning_title"))
-    msg1.setIcon(QMessageBox.Icon.Critical)
-    warning_text = gui.tr("erase_flash_warning_message")
-    # Replace {storage} placeholder if it exists
-    if "{storage}" in warning_text:
-        warning_text = warning_text.format(storage=current_storage)
-    msg1.setText(warning_text)
-    msg1.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-    msg1.setMinimumWidth(500)
-    
-    if msg1.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("[ERROR] Erase all storage cancelled by user")
+    storage = gui.change_storage_combo.currentText() if hasattr(gui, 'change_storage_combo') else ""
+    msg = QMessageBox()
+    style_messagebox(msg)
+    msg.setWindowTitle(gui.tr("erase_all_warning_title"))
+    msg.setIcon(QMessageBox.Icon.Critical)
+    msg.setText(gui.tr("erase_all_message").format(storage or gui.tr("storage_type")))
+    understood = QCheckBox(gui.tr("erase_all_understood"))
+    msg.setCheckBox(understood)
+    erase = msg.addButton(gui.tr("erase_all_btn"), QMessageBox.ButtonRole.DestructiveRole)
+    cancel = msg.addButton(QMessageBox.StandardButton.Cancel)
+    msg.setDefaultButton(cancel)
+    erase.setEnabled(False)
+    understood.toggled.connect(erase.setEnabled)
+    msg.exec()
+    if msg.clickedButton() is not erase or not understood.isChecked():
         return
-    
-    # Layer 2: Verify storage name input
-    verification_prompt = gui.tr("erase_all_verification_title")
-    text, ok = QInputDialog.getText(
-        gui, 
-        gui.tr("erase_all_verification_title"),
-        f"{verification_prompt}:\n\n'{current_storage}'",
-        QLineEdit.EchoMode.Normal
-    )
-    
-    if not ok or text.strip() != current_storage:
-        gui.log_message("[ERROR] Verification failed - storage name does not match. Operation cancelled.")
-        return
-    
-    # Layer 3: Final confirmation
-    msg2 = QMessageBox()
-    style_messagebox(msg2)
-    msg2.setWindowTitle(gui.tr("erase_all_final_confirmation_title"))
-    msg2.setIcon(QMessageBox.Icon.Critical)
-    msg2.setText(
-        f"{gui.tr('erase_all_about_to_erase')}\n"
-        f"{current_storage}\n\n"
-        f"{gui.tr('erase_all_confirm_certain')}"
-    )
-    msg2.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
-    msg2.setMinimumWidth(500)
-    
-    if msg2.exec() != QMessageBox.StandardButton.Yes:
-        gui.log_message("[ERROR] Erase all storage cancelled at final confirmation")
-        return
-    
+
     def on_finished(success, output):
         if success:
-            gui.log_message(f"[OK] {current_storage} successfully erased")
-            gui.log_message(f"[INFO] Auto-refreshing partition table...")
-            # Auto-refresh partition table after successful erase
+            gui.log_message(f"[OK] {gui.tr('erase_all_done')}")
             read_partition_table(gui)
-        else:
-            gui.log_message(f"[ERROR] Failed to erase {current_storage}: {output if output else 'Unknown error'}")
-    
-    gui.log_message(f"[INFO] Erasing all data on {current_storage}... This may take a moment.")
-    gui.run_command([RKTOOL, "ef", "all"], "erasing_all_storage", on_finished)
+
+    gui.log_message(f"[INFO] {gui.tr('erase_all_start')}")
+    gui.run_command([RKTOOL, "ef"], "erasing_all_storage", on_finished)
 
 
 # ============================================================================

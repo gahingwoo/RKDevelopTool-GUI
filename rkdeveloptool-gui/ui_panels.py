@@ -303,7 +303,7 @@ def create_download_tab(gui):
     # Flash operations
     erase_btn = QPushButton()
     erase_btn.setProperty("class", "danger")
-    erase_btn.clicked.connect(safe_slot(lambda: erase_flash(gui)))
+    erase_btn.clicked.connect(safe_slot(lambda: operations.erase_all_storage(gui)))
 
     test_btn = QPushButton()
     test_btn.clicked.connect(safe_slot(lambda: test_device(gui)))
@@ -911,6 +911,18 @@ def change_storage(gui):
         return
     
     storage_name = gui.change_storage_combo.currentText()
+    # Switching to storage the board doesn't have leaves the Loader refusing
+    # every read and write (seen on an RK3576), so ask, No by default.
+    from PySide6.QtWidgets import QMessageBox
+    msg = QMessageBox()
+    operations.style_messagebox(msg)
+    msg.setIcon(QMessageBox.Icon.Warning)
+    msg.setWindowTitle(gui.tr("change_storage_title"))
+    msg.setText(gui.tr("change_storage_message").format(storage_name))
+    msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+    msg.setDefaultButton(QMessageBox.StandardButton.No)
+    if msg.exec() != QMessageBox.StandardButton.Yes:
+        return
     gui.log_message(f"[INFO] Switching storage to {storage_name}...")
     
     # Store the storage name for use in callback
@@ -946,24 +958,6 @@ def change_storage(gui):
         except:
             pass
         gui.command_worker.finished_signal.connect(safe_slot(on_storage_finished))
-
-
-def erase_flash(gui):
-    """Erase entire flash"""
-    from PySide6.QtWidgets import QMessageBox, QApplication
-    from .utils import RKTOOL
-
-    msg = QMessageBox()
-    # Use application palette for automatic theme following
-    msg.setPalette(QApplication.palette())
-    msg.setWindowTitle(gui.tr("erase_flash_warning_title"))
-    msg.setText(gui.tr("erase_flash_warning_message"))
-    msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-    msg.setIcon(QMessageBox.Icon.Warning)
-    msg.setMinimumWidth(500)
-    
-    if msg.exec() == QMessageBox.StandardButton.Yes:
-        gui.run_command([RKTOOL, "ef"], "erase_flash")
 
 
 def test_device(gui):
