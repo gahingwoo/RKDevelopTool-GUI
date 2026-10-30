@@ -1653,6 +1653,35 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_idb_command():
+    """A NEWIDB Loader goes into the boot area as a verified bootloader
+    image at sector 0x40 (ul writes it in a layout an RK3576 rejects); an
+    old-format Loader still uses ul."""
+    import importlib.util
+    import time as _time
+
+    from rkdeveloptool_gui import operations as ops
+
+    spec = importlib.util.spec_from_file_location(
+        "loader_tests", os.path.join(os.path.dirname(os.path.abspath(__file__)), "loader_merge.py"))
+    source = open(spec.origin).read().split("\ncheck_new()\n")[0]
+    scope = {"__name__": "loader_tests"}
+    exec(compile(source, spec.origin, "exec"), scope)
+    lm = scope["loader_merge"]
+    work = tempfile.mkdtemp(dir=_tmp)
+    new = os.path.join(work, "new.bin")
+    old = os.path.join(work, "old.bin")
+    with open(new, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["NEW_INI"]), scope["NEW_BLOBS"].__getitem__, _time.localtime()))
+    with open(old, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["OLD_INI"]), scope["OLD_BLOBS"].__getitem__, _time.localtime()))
+    cmd = ops.loader_to_flash_command(new, work)
+    if cmd[1:3] != ["wl", "0x40"] or not os.path.isfile(cmd[3]):
+        errors.append(f"NEWIDB Loader written with {cmd}")
+    if ops.loader_to_flash_command(old, work)[1:] != ["ul", old]:
+        errors.append("an old-format Loader isn't written with ul")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1679,6 +1708,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_idb_command()
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
