@@ -194,7 +194,7 @@ class SearchBox(QLineEdit):
         self.results.clear()
         for entry in found:
             where = entry.page_name or self.gui.tr("search_left_panel")
-            item = QListWidgetItem(f"{entry.label}    — {where}")
+            item = QListWidgetItem(self.gui.tr("search_result").format(entry.label, where))
             item.setData(Qt.ItemDataRole.UserRole, entry)
             self.results.addItem(item)
         if not found:

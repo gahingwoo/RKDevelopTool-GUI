@@ -1402,7 +1402,8 @@ class RKDevToolGUI(QMainWindow):
         msg = QMessageBox(self)
         style_messagebox(msg)
         msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(f"{self.tr(description_key)} — {self.tr('failure').rstrip(': ')}")
+        # The text below says what failed; the title just says that it did.
+        msg.setWindowTitle(self.tr('failure').rstrip(': ：'))
         msg.setText(title)
         msg.setInformativeText(body)
         msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)

@@ -9,11 +9,11 @@ TRANSLATIONS = {
         "home_card_partition": "分区管理\n查看分区表，单独刷写/备份",
         "home_card_maskrom": "进入 Maskrom\n设备无法识别时强制进入",
         "home_guide_title": "新手指引：三步刷机",
-        "home_guide_body": "<b>1. 连接设备</b> — 用 USB 连接，顶部横幅变绿即代表已识别。<br>"
-                           "<b>2. 选择固件</b> — 点上方「一键刷固件」，浏览选择 update.img 文件。<br>"
-                           "<b>3. 开始烧录</b> — 点「开始烧录」，等待进度条完成即可。<br><br>"
+        "home_guide_body": "<b>1. 连接设备</b>：用 USB 连接，顶部横幅变绿即代表已识别。<br>"
+                           "<b>2. 选择固件</b>：点上方「一键刷固件」，浏览选择 update.img 文件。<br>"
+                           "<b>3. 开始烧录</b>：点「开始烧录」，等待进度条完成即可。<br><br>"
                            "刷机有变砖风险，操作前请确认固件与设备型号匹配，并备份重要数据。",
-        "home_banner_disconnected": "未检测到设备 — 请用 USB 连接 Rockchip 设备",
+        "home_banner_disconnected": "未检测到设备，请用 USB 连接 Rockchip 设备",
         "equiv_command_label": "命令:",
         "copy_btn": "复制",
         "command_copied": "命令已复制到剪贴板",
@@ -155,6 +155,7 @@ TRANSLATIONS = {
         "search_placeholder": "搜索功能…  {}",
         "search_left_panel": "左侧面板",
         "search_nothing": "没有找到。试试“刷机”“备份”“擦除”“loader”这样的词",
+        "search_result": "{}（{}）",
         "history_tab": "烧录历史",
         "history_details": "详细信息",
         "history_reveal": "在文件夹中显示",
@@ -163,7 +164,7 @@ TRANSLATIONS = {
         "history_kind": "类型",
         "history_kind_image": "镜像",
         "history_loader": "Loader",
-        "history_none": "—",
+        "history_none": "无",
         "history_time": "时间",
         "history_image": "镜像",
         "history_result": "结果",
@@ -663,11 +664,11 @@ TRANSLATIONS = {
         "home_card_partition": "Partitions\nView the table, flash/back up individually",
         "home_card_maskrom": "Enter Maskrom\nForce Maskrom when the device isn't detected",
         "home_guide_title": "Quick start: flashing in 3 steps",
-        "home_guide_body": "<b>1. Connect</b> — Plug in over USB; the banner above turns green once detected.<br>"
-                           "<b>2. Pick firmware</b> — Click \"Flash Firmware\" above and browse for your update.img.<br>"
-                           "<b>3. Burn</b> — Click \"Start Burn\" and wait for the progress bar to finish.<br><br>"
+        "home_guide_body": "<b>1. Connect</b>: plug in over USB; the banner above turns green once detected.<br>"
+                           "<b>2. Pick firmware</b>: click \"Flash Firmware\" above and browse for your update.img.<br>"
+                           "<b>3. Burn</b>: click \"Start Burn\" and wait for the progress bar to finish.<br><br>"
                            "Flashing can brick a device. Make sure the firmware matches your model and back up important data first.",
-        "home_banner_disconnected": "No device detected — connect a Rockchip device over USB",
+        "home_banner_disconnected": "No device detected. Connect a Rockchip device over USB",
         "equiv_command_label": "Command:",
         "copy_btn": "Copy",
         "command_copied": "Command copied to clipboard",
@@ -809,6 +810,7 @@ TRANSLATIONS = {
         "search_placeholder": "Search…  {}",
         "search_left_panel": "left panel",
         "search_nothing": "Nothing found. Try words like flash, backup, erase, loader",
+        "search_result": "{} ({})",
         "history_tab": "History",
         "history_details": "Details",
         "history_reveal": "Show in Folder",
@@ -817,7 +819,7 @@ TRANSLATIONS = {
         "history_kind": "Kind",
         "history_kind_image": "image",
         "history_loader": "Loader",
-        "history_none": "—",
+        "history_none": "none",
         "history_time": "Time",
         "history_image": "Image",
         "history_result": "Result",
