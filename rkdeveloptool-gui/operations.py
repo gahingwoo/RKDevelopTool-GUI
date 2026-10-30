@@ -17,7 +17,8 @@ from .utils import (
     RKTOOL, parse_partition_info, parse_flash_info,
     calculate_file_md5, format_file_size, safe_slot, is_rkfw_image,
     detect_compression, decompressed_name, DECOMPRESSIBLE,
-    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info
+    classify_image_file, WHOLE_IMAGE_KINDS, parse_chip_info, flash_capacity_bytes,
+    chip_from_device
 )
 from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
@@ -74,6 +75,8 @@ def get_flash_capacity_bytes(gui):
     """
     # Try cached flash info first
     if hasattr(gui, '_cached_flash_info') and gui._cached_flash_info:
+        if gui._cached_flash_info.get('bytes'):
+            return gui._cached_flash_info['bytes'], "cached"
         capacity_str = gui._cached_flash_info.get('capacity', '')
         if capacity_str:
             m = re.match(r'([0-9.]+)\s*(MB|GB)', capacity_str, re.I)
@@ -94,6 +97,11 @@ def get_flash_capacity_bytes(gui):
             result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True,
                                     timeout=6, env=env)
         out = (result.stdout or "") + "\n" + (result.stderr or "")
+
+        bytes_size = flash_capacity_bytes(out)
+        if bytes_size:
+            gui._cached_flash_info = dict(parse_flash_info(out) or {}, bytes=bytes_size)
+            return bytes_size, "detected"
 
         # Try to parse capacity
         m = re.search(r'capacity[:\s]*([0-9.]+)\s*(MB|GB)', out, re.I)
@@ -462,9 +470,11 @@ def onekey_burn(gui):
     _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
-def _show_rkfw_message(gui, title_key, text, icon="Critical"):
+def _show_rkfw_message(gui, title_key, text, icon="Critical", offer_reset=False):
     """Show a QMessageBox for RKFW flashing errors/status with dynamic text
-    that gui.show_message()'s static-key-only signature can't express."""
+    that gui.show_message()'s static-key-only signature can't express.
+    offer_reset adds a button that resets the board (rd) so the new
+    firmware boots."""
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr(title_key))
@@ -476,7 +486,15 @@ def _show_rkfw_message(gui, title_key, text, icon="Critical"):
         msg.setIcon(QMessageBox.Icon.Warning)
     else:
         msg.setIcon(QMessageBox.Icon.Information)
+    reset = None
+    if offer_reset and getattr(gui, 'current_device', None):
+        reset = msg.addButton(gui.tr("reset_board_btn"), QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton(gui.tr("later_btn"), QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(reset)
     msg.exec()
+    if reset is not None and msg.clickedButton() is reset:
+        gui.log_message(f"[INFO] {gui.tr('rebooting')}")
+        _run_when_idle(gui, [RKTOOL, "rd"], "rebooting", lambda success, output: None)
 
 
 def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
@@ -646,20 +664,33 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
     RK3576-手动刷固件指南.md: on a fresh Maskrom the chip refuses every
     "read flash info" request until a loader has been downloaded into RAM,
     so `gpt` must come *after* `db`. The loader is then persisted to the
-    idb area with `ul` (never `wlx bootloader`), and every remaining
+    idb area (never `wlx bootloader`): with `ul` for an old-format Loader,
+    as a verified bootloader image at sector 0x40 for a NEWIDB one (see
+    loader_to_flash_command). Every remaining
     archive partition is flashed by name - except `package-file`, which is
     tool metadata and not a real partition.
     """
     # RKAF entries that must not be written as GPT partitions:
     # - "package-file" is tool metadata consumed by Rockchip's own tools.
     # - "bootloader" is the MiniLoader/idb image; it goes to the idb area
-    #   above (via `ul`), not to a GPT partition named "bootloader".
+    #   above, not to a GPT partition named "bootloader".
     skip_names = {"package-file", "bootloader"}
+
+    from .loader_merge import LoaderMergeError
+    try:
+        idb_cmd = loader_to_flash_command(paths['loader'], tmp_dir)
+    except (LoaderMergeError, OSError) as e:
+        # Nothing written yet; a board with a bootloader that doesn't
+        # verify would only come back in Maskrom.
+        gui.log_message(f"[ERROR] {e}")
+        _finish_rkfw_flow(gui, tmp_dir)
+        _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+        return
 
     steps = [
         ([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")),
         ([RKTOOL, "gpt", paths['parameter']], "importing_gpt", gui.tr("rkfw_step_gpt")),
-        ([RKTOOL, "ul", paths['loader']], "writing_idb", gui.tr("rkfw_step_idb")),
+        (idb_cmd, "writing_idb", gui.tr("rkfw_step_idb")),
     ]
     for name, part_path in paths['parts']:
         if name in skip_names:
@@ -699,7 +730,8 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
             return
         _finish_rkfw_flow(gui, tmp_dir)
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
-                            gui.tr("rkfw_flash_complete_message"), "Information")
+                            gui.tr("rkfw_flash_complete_message"), "Information",
+                            offer_reset=True)
         return
 
     if getattr(gui, '_cancel_requested', False):
@@ -933,11 +965,108 @@ def load_loader(gui):
 
 
 def loader_chip(gui):
-    """The connected chip's name when rkbin may have a Loader for it."""
-    if not gui.current_device or not gui.chip_info or gui.chip_info == "unknown_chip":
+    """The connected chip's name when rkbin may have a Loader for it. In
+    Maskrom, rci can't answer before a Loader runs; the USB ID tells then."""
+    if not gui.current_device:
         return None
-    chip = parse_chip_info(gui.chip_info)
-    return chip if loader_fetch.ini_candidates(chip) else None
+    if gui.chip_info and gui.chip_info != "unknown_chip":
+        chip = parse_chip_info(gui.chip_info)
+        if loader_fetch.ini_candidates(chip):
+            return chip
+    return chip_from_device(gui.current_device)
+
+
+def loader_plan(gui):
+    """How a write in Maskrom would get its Loader: ("file", path) for the
+    one in the Loader field, ("rkbin", chip) to build one, or None."""
+    path = gui.loader_path.text().strip() if hasattr(gui, 'loader_path') else ""
+    if path and os.path.isfile(path):
+        return "file", path
+    chip = loader_chip(gui)
+    return ("rkbin", chip) if chip else None
+
+
+# After db the board takes a moment before it answers: on an RK3576 the
+# first rfi (or a write) right after it is refused, the next one works.
+READY_ATTEMPTS = 8
+READY_INTERVAL_MS = 1000
+
+
+def _board_answers():
+    from . import utils
+    try:
+        with utils.DEVICE_LOCK:
+            result = subprocess.run([RKTOOL, "rfi"], capture_output=True, text=True, timeout=6)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "Flash" in (result.stdout or "")
+
+
+def _when_board_answers(gui, on_ready, on_fail, attempt=1):
+    """Call on_ready() once the board answers rfi after db, or on_fail()
+    (with an explanation) when it doesn't within READY_ATTEMPTS tries."""
+    probe = CallWorker(_board_answers)
+    gui._ready_worker = probe
+
+    def answered(ok):
+        gui._ready_worker = None
+        if ok is True:
+            on_ready()
+        elif attempt < READY_ATTEMPTS:
+            QTimer.singleShot(READY_INTERVAL_MS, safe_slot(
+                lambda: _when_board_answers(gui, on_ready, on_fail, attempt + 1)))
+        else:
+            gui.log_message(f"[ERROR] {gui.tr('loader_no_answer')}")
+            _show_rkfw_message(gui, "loader_no_answer_title", gui.tr("loader_no_answer"))
+            on_fail()
+
+    probe.finished.connect(safe_slot(answered))
+    probe.start()
+
+
+def _load_loader_then(gui, on_ready, on_fail):
+    """Load the Loader loader_plan() names (building it from rkbin first if
+    needed), then call on_ready(); on_fail() if that doesn't work. The
+    window explains a failed db as usual."""
+    plan = loader_plan(gui)
+    if plan is None:
+        on_fail()
+        return
+
+    def run_db(path):
+        gui.log_message(f"[INFO] {gui.tr('loader_before_write').format(os.path.basename(path))}")
+
+        def loaded(success, output):
+            if not success:
+                on_fail()
+                return
+            gui.loader_loaded = True
+            gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
+            _when_board_answers(gui, on_ready, on_fail)
+
+        _run_when_idle(gui, [RKTOOL, "db", path], "loading_loader", loaded)
+
+    if plan[0] == "file":
+        run_db(plan[1])
+        return
+    worker = loader_fetch.LoaderFetchWorker(plan[1], loader_cache_dir())
+    gui._loader_fetch_worker = worker
+    gui.log_message(f"[INFO] {gui.tr('fetch_loader_start').format(plan[1], loader_fetch.RKBIN_REPO)}")
+
+    def fetched(path, ini_name, sha):
+        gui.loader_path.setText(path)
+        gui.log_message(f"[OK] {gui.tr('fetch_loader_done').format(os.path.basename(path), ini_name)}")
+        run_db(path)
+
+    def failed(kind, error):
+        gui.log_message(f"[ERROR] {gui.tr('fetch_loader_failed_title')}: {error}")
+        _show_rkfw_message(gui, "fetch_loader_failed_title", gui.tr("fetch_loader_failed_title")
+                           + f"\n\n{error}")
+        on_fail()
+
+    worker.finished_ok.connect(safe_slot(fetched))
+    worker.failed.connect(safe_slot(failed))
+    worker.start()
 
 
 def loader_cache_dir():
@@ -993,13 +1122,43 @@ def fetch_loader(gui):
     update_fetch_loader_state(gui)
 
 
+def loader_to_flash_command(loader_path, tmp_dir):
+    """The command that writes a Loader into the flash's boot area: `ul`
+    for an old-format Loader, or `wl 0x40` with the bootloader image for a
+    NEWIDB one, which ul writes in a layout the boot ROM rejects. Raises
+    LoaderMergeError / OSError when the Loader can't be used."""
+    from . import loader_merge
+    with open(loader_path, "rb") as f:
+        idb = loader_merge.idblock_from_loader(f.read())
+    if idb is None:
+        return [RKTOOL, "ul", loader_path]
+    path = os.path.join(tmp_dir, "idblock.img")
+    with open(path, "wb") as f:
+        f.write(idb)
+    return [RKTOOL, "wl", hex(loader_merge.IDB_SECTOR), path]
+
+
 def _start_loader(gui, cmd_type, loader_path):
     """Run db/ul with the loader and record whether it actually loaded."""
-    gui.run_command([RKTOOL, cmd_type, loader_path], "loading_loader")
+    cmd = [RKTOOL, cmd_type, loader_path]
+    idb_dir = None
+    if cmd_type == "ul":
+        from .loader_merge import LoaderMergeError
+        idb_dir = tempfile.mkdtemp(prefix="rkdevtool_idb_")
+        try:
+            cmd = loader_to_flash_command(loader_path, idb_dir)
+        except (LoaderMergeError, OSError) as e:
+            shutil.rmtree(idb_dir, ignore_errors=True)
+            gui.log_message(f"[ERROR] {e}")
+            _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
+            return
+    gui.run_command(cmd, "loading_loader")
 
     # Mark that we're attempting to load loader and wrap the finished signal
     if gui.command_worker:
         def on_loader_finished(success, error_msg):
+            if idb_dir:
+                shutil.rmtree(idb_dir, ignore_errors=True)
             if success:
                 gui.loader_loaded = True
                 gui.log_message("[OK] " + gui.tr("loader_loaded_success"))
@@ -1079,7 +1238,13 @@ def preflight_checks(gui, file_path, address, capacity):
     else:
         checks.append((PASS, tr("pf_device").format(mode)))
         if 'Maskrom' in mode and not getattr(gui, 'loader_loaded', False):
-            checks.append((FAIL, tr("pf_need_loader")))
+            plan = loader_plan(gui)
+            if plan is None:
+                checks.append((FAIL, tr("pf_need_loader")))
+            elif plan[0] == "file":
+                checks.append((WARN, tr("pf_loader_first").format(os.path.basename(plan[1]))))
+            else:
+                checks.append((WARN, tr("pf_loader_first_rkbin").format(plan[1])))
         else:
             checks.append((PASS, tr("pf_loader_ready")))
 
@@ -1190,6 +1355,35 @@ def _burn_file(gui, file_path, address, make_cmd):
     lba = _sector_address(address)
 
     def start(path, cleanup):
+        if 'Maskrom' in (getattr(gui, 'device_mode', '') or '') and not gui.loader_loaded:
+            _load_loader_then(gui, lambda: check_size(path, cleanup), cleanup)
+            return
+        write(path, cleanup)
+
+    def check_size(path, cleanup):
+        # The confirmation couldn't read the storage size without a Loader.
+        if lba is None:
+            write(path, cleanup)
+            return
+        query = CallWorker(lambda: get_flash_capacity_bytes(gui)[0])
+        gui._capacity_worker = query
+
+        def got(capacity):
+            gui._capacity_worker = None
+            end = lba * SECTOR_SIZE + os.path.getsize(path)
+            if isinstance(capacity, int) and end > capacity:
+                cleanup()
+                text = gui.tr("pf_capacity_too_big").format(format_file_size(end),
+                                                            format_file_size(capacity))
+                gui.log_message(f"[ERROR] {text}")
+                _show_rkfw_message(gui, "pf_title", text)
+                return
+            write(path, cleanup)
+
+        query.finished.connect(safe_slot(got))
+        query.start()
+
+    def write(path, cleanup):
         size = os.path.getsize(path)
         verify = (lba is not None and getattr(gui, '_verify_after_write', False)
                   and getattr(gui, '_last_burn_md5', ''))
@@ -1201,8 +1395,13 @@ def _burn_file(gui, file_path, address, make_cmd):
         def after_write(success, output):
             if success and verify:
                 _verify_written(gui, path, address, size, expected, cleanup)
-            else:
-                cleanup()
+                return
+            cleanup()
+            if success and lba == 0:
+                # A whole image: the board boots it once reset.
+                _show_rkfw_message(gui, "write_done_title",
+                                   gui.tr("write_done_message").format(os.path.basename(path)),
+                                   "Information", offer_reset=True)
 
         gui.run_command(make_cmd(path), "burning", after_write)
 
@@ -1249,7 +1448,8 @@ def _verify_written(gui, path, address, size, expected_md5, cleanup):
                 finish()
                 gui.log_message(f"[OK] {gui.tr('verify_ok').format(name)}")
                 _show_rkfw_message(gui, "verify_ok_title",
-                                   gui.tr("verify_ok").format(name), "Information")
+                                   gui.tr("verify_ok").format(name), "Information",
+                                   offer_reset=_sector_address(address) == 0)
                 return
             # A mismatch may only mean the loader can't read part of the
             # storage back; look for its filler before calling the write bad.

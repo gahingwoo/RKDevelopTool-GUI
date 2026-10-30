@@ -15,6 +15,8 @@ and CRC, and checks the layout those three files have:
 - "BOOT" Loaders: 471/472 data RC4'd as a whole, loader data per 512 bytes,
   names cut at the last dot to 19 characters, BCD version.
 - Both end in Rockchip's CRC-32 of everything before it.
+- The bootloader a NEWIDB Loader puts at sector 0x40 (what rkdeveloptool's
+  ul gets wrong on an RK3576) is FlashHead + Boost + Data + Boot, decrypted.
 
 It also builds a Loader through loader_fetch from a file:// copy of rkbin.
 
@@ -302,9 +304,39 @@ def check_fetch():
     del os.environ[loader_fetch.URL_ENV]
 
 
+def check_idblock():
+    """The bootloader a NEWIDB Loader puts at sector 0x40 is its FlashHead
+    and loader entries, decrypted, with every RKNS hash right; an old BOOT
+    Loader has none (ul writes it); a damaged one is refused."""
+    built = loader_merge.merge(loader_merge.parse_ini(NEW_INI), NEW_BLOBS.__getitem__, WHEN)
+    idb = loader_merge.idblock_from_loader(built)
+    ddr, boost, spl = (pad(NEW_BLOBS[p], 4096) for p in (
+        "bin/rk35/rk3576_ddr_lp4_2112MHz_lp5_2736MHz_v1.09.bin",
+        "bin/rk35/rk3576_boost_v1.03.bin", "bin/rk35/rk3576_spl_v1.07.bin"))
+    check(idb is not None and idb[0x1000:] == boost + ddr + spl,
+          "idblock isn't FlashHead + boost + ddr + spl")
+    if idb is not None:
+        check_rkns(idb[:0x1000], [(boost, 0x3FFC0000), (ddr, 0x3FF81000), (spl, 0xFFFFFFFF)],
+                   [0, 0, 0x100], "idblock header")
+    old = loader_merge.merge(loader_merge.parse_ini(OLD_INI), OLD_BLOBS.__getitem__, WHEN)
+    check(loader_merge.idblock_from_loader(old) is None, "a BOOT Loader got an idblock")
+    # A Loader whose FlashBoot was cut or changed doesn't verify.
+    info = read_loader(built)
+    boot_at = info["entries"][-1][4]
+    broken = bytearray(built)
+    broken[boot_at + 600] ^= 0xFF
+    try:
+        loader_merge.idblock_from_loader(bytes(broken))
+    except loader_merge.LoaderMergeError:
+        pass
+    else:
+        errors.append("a Loader with a damaged FlashBoot gave an idblock")
+
+
 check_new()
 check_old()
 check_bad_ini()
+check_idblock()
 check_fetch()
 
 if errors:
