@@ -326,8 +326,11 @@ class SettingsPage(QWidget):
         save.clicked.connect(safe_slot(lambda: save_log(self.gui)))
         export = QPushButton(self.tr("settings_export_diagnostics"))
         export.clicked.connect(safe_slot(lambda: export_system_log(self.gui)))
+        report = QPushButton(self.tr("report_button_long"))
+        report.clicked.connect(safe_slot(self.gui.report_problem))
         row.addWidget(save)
         row.addWidget(export)
+        row.addWidget(report)
         row.addStretch(1)
         v.addLayout(row)
         return box
