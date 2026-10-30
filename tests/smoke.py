@@ -2144,6 +2144,35 @@ def check_idb_command():
         errors.append("an old-format Loader isn't written with ul")
 
 
+def check_rkfw_loader_once(app):
+    """A Loader loaded on connect isn't downloaded again by a full flash
+    (a second db is refused and failed the flash on an RK3576)."""
+    from rkdeveloptool_gui import operations as ops
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    paths = {"loader": os.path.join(work, "loader.bin"), "parameter": os.path.join(work, "parameter.txt"),
+             "parts": [("uboot", os.path.join(work, "uboot.img"))]}
+    for p in (paths["loader"], paths["parameter"], paths["parts"][0][1]):
+        open(p, "wb").close()
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()), settings=AppSettings())
+    window.stop_device_detection()
+    ran = []
+    real = (ops.loader_to_flash_command, ops._run_rkfw_steps)
+    ops.loader_to_flash_command = lambda loader, tmp: [ops.RKTOOL, "ul", loader]
+    ops._run_rkfw_steps = lambda gui, steps, index, tmp: ran.append([c[1] for c, _, _ in steps])
+    try:
+        for loaded in (False, True):
+            window.loader_loaded = loaded
+            ops._start_rkfw_steps(window, paths, work)
+        if ran != [["db", "gpt", "ul", "wlx"], ["gpt", "ul", "wlx"]]:
+            errors.append(f"full flash steps with and without a running Loader: {ran}")
+    finally:
+        ops.loader_to_flash_command, ops._run_rkfw_steps = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def check_command_chain(app):
     """A callback that starts the next command right away (its worker
     already gone) keeps that command's callback, and the window stays busy
@@ -3008,6 +3037,7 @@ def main():
     check_loader_before_write(app)
     check_rfi_capacity(app)
     check_idb_command()
+    check_rkfw_loader_once(app)
     check_command_chain(app)
     check_production_line(app)
     check_production_line_real_commands(app)

@@ -716,7 +716,14 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
         _show_rkfw_message(gui, "idb_bad_loader_title", gui.tr("idb_bad_loader").format(e))
         return
 
-    steps = [([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader"))]
+    steps = []
+    if getattr(gui, 'loader_loaded', False):
+        # A Loader already runs (loaded on connect): a second db is refused
+        # and would fail the flash. The image's own Loader still goes into
+        # the idb below.
+        gui.log_message(f"[INFO] {gui.tr('rkfw_loader_running')}")
+    else:
+        steps.append(([RKTOOL, "db", paths['loader']], "loading_loader", gui.tr("rkfw_step_loader")))
     if _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
         steps.append(([RKTOOL, "ef"], "erase_flash", gui.tr("rkfw_step_erase")))
     steps += [
