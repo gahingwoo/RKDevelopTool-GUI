@@ -753,6 +753,8 @@ class RKDevToolGUI(QMainWindow):
             self.help_menu = self.menuBar().addMenu("")
             self.check_updates_action = self.help_menu.addAction("")
             self.check_updates_action.triggered.connect(safe_slot(self.check_for_updates))
+            self.report_action = self.help_menu.addAction("")
+            self.report_action.triggered.connect(safe_slot(self.report_problem))
             self.release_page_action = self.help_menu.addAction("")
             self.release_page_action.triggered.connect(safe_slot(
                 lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))))
@@ -1384,6 +1386,10 @@ class RKDevToolGUI(QMainWindow):
         self.retry_count_spinbox.valueChanged.connect(safe_slot(
             lambda v: s.set(app_settings.KEY_STEP_RETRIES, str(v))))
 
+    def report_problem(self):
+        from .feedback import report_problem
+        report_problem(self)
+
     def explain_failure(self, output):
         """(title, body) with the likely cause of an rkdeveloptool failure
         and what to try, or None when the output isn't recognised."""
@@ -1402,7 +1408,12 @@ class RKDevToolGUI(QMainWindow):
         tail = "\n".join((output or "").strip().splitlines()[-40:])
         if tail:
             msg.setDetailedText(tail)
+        report = msg.addButton(self.tr("report_button"), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Close)
         msg.exec()
+        if msg.clickedButton() is report:
+            from .feedback import report_problem
+            report_problem(self, f"{self.tr(description_key)}: {title}", f"{title}\n\n{body}")
 
     # Write progress: overall percent, speed and time left for a write that
     # may span several rkdeveloptool commands (a full RKFW flash).
