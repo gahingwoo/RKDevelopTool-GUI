@@ -1754,7 +1754,8 @@ def check_production_line(app):
         window.on_device_lost()
         ran.clear()
         answers["wl"] = (True, "")
-        answers["readback"] = data[:-1] + b"\x01"
+        # Flip the last byte: a fixed value matched the random image 1 time in 256.
+        answers["readback"] = data[:-1] + bytes([data[-1] ^ 0xFF])
         plug()
         pump(lambda: line.state == production.UNPLUG)
         if ran != ["db", "rfi", "wl", "rl"] or line.failed != 2:
