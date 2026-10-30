@@ -421,8 +421,11 @@ class RKDevToolGUI(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        # Tab widget
+        # Tab widget, with the search field in its corner
         self.tab_widget = CurrentPageTabWidget()
+        from .search import SearchBox
+        self.search_box = SearchBox(self)
+        self.tab_widget.setCornerWidget(self.search_box, Qt.Corner.TopRightCorner)
 
         # Home tab (task-oriented landing page)
         self.home_tab, home_widgets = create_home_tab(self)
@@ -1082,6 +1085,12 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.selectAll()
 
         QShortcut(QKeySequence("Ctrl+L"), self, activated=safe_slot(focus_command))
+
+        def focus_search():
+            self.search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            self.search_box.selectAll()
+
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=safe_slot(focus_search))
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=safe_slot(self.cancel_current))
 
     def apply_status_colors(self):

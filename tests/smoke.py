@@ -2559,6 +2559,58 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_search(app):
+    """Search finds controls by their text in either language and by
+    everyday words; opening a result goes to its page and highlights it,
+    and never presses it."""
+    from rkdeveloptool_gui import search
+
+    window = RKDevToolGUI(TranslationManager(lang="zh", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window.resize(1300, 800)
+    window.show()
+    for _ in range(10):
+        app.processEvents()
+    ran = []
+    real_run = window.run_command
+    window.run_command = lambda cmd, key, cb=None: ran.append(cmd)
+    try:
+        index = search.build_index(window)
+        labels = lambda q: [e.label for e in search.search(index, q)]
+        erase = window.erase_flash_btn.text().replace("&", "")
+        for query in ("擦除", "erase", "wipe"):           # own word, other language, synonym
+            if erase not in labels(query):
+                errors.append(f"search {query!r} didn't find {erase!r}: {labels(query)[:5]}")
+        if not labels("救砖") or "Maskrom" not in labels("救砖")[0]:
+            errors.append(f"search 救砖: {labels('救砖')[:3]}")
+        if search.search(index, "zzzz-nothing"):
+            errors.append("search matched nonsense")
+
+        # Through the box: type, Enter, land on the page with it highlighted.
+        window.tab_widget.setCurrentIndex(0)
+        box = window.search_box
+        box.setFocus()
+        box.setText(erase)
+        app.processEvents()
+        if box.results.count() == 0:
+            errors.append("the search box listed nothing")
+        box.returnPressed.emit()
+        app.processEvents()
+        page = window.tab_widget.currentWidget()
+        if not page.isAncestorOf(window.erase_flash_btn):
+            errors.append(f"opening the result went to tab {window.tab_widget.currentIndex()}")
+        if "palette(highlight)" not in window.erase_flash_btn.styleSheet():
+            errors.append("the result wasn't highlighted")
+        if ran:
+            errors.append(f"opening a search result ran {ran}")
+    finally:
+        window.run_command = real_run
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2585,6 +2637,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_search(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)

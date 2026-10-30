@@ -41,6 +41,10 @@ def update_window_and_device_texts(gui):
 def update_home_tab_texts(gui):
     """Update home tab texts and the equivalent-command bar."""
     gui.tab_widget.setTabText(0, gui.tr("home_tab"))
+    if hasattr(gui, 'search_box'):
+        import sys
+        gui.search_box.setPlaceholderText(gui.tr("search_placeholder").format(
+            "⌘K" if sys.platform == "darwin" else "Ctrl+K"))
 
     gui.home_cards_label.setText(gui.tr("home_tasks_label"))
     gui.home_flash_card.setText(gui.tr("home_card_flash"))
