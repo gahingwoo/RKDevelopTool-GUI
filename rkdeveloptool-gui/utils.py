@@ -478,6 +478,48 @@ def find_readback_filler(readback, image, size, chunk=4 << 20):
     return None
 
 
+def compare_readback(readback, image, size, chunk=4 << 20):
+    """Compare the first `size` bytes read back with the image.
+
+    Returns ("ok", None), ("mismatch", offset) or ("unverified", offset),
+    the last when the first difference is loader filler (see
+    find_readback_filler): nothing can be said from there on.
+    """
+    with open(readback, "rb") as rb, open(image, "rb") as im:
+        offset = 0
+        while offset < size:
+            b = im.read(min(chunk, size - offset))
+            a = rb.read(len(b))
+            if not b:
+                break
+            if a != b:
+                for i in range(0, len(b), 512):
+                    got = a[i:i + 512]
+                    if got != b[i:i + 512]:
+                        filler = bool(got) and got == READBACK_FILLER[:len(got)]
+                        return ("unverified" if filler else "mismatch"), offset + i
+            offset += len(b)
+    return "ok", None
+
+
+def parameter_partitions(path):
+    """{name: (start, size)} in 512-byte sectors from a parameter file's
+    mtdparts ("0x2000@0x4000(uboot),-@0x40000(rootfs:grow)"); size is None
+    for a partition that grows to the end."""
+    parts = {}
+    try:
+        with open(path, "r", errors="replace") as f:
+            text = f.read(1 << 20)
+    except OSError:
+        return parts
+    for line in text.splitlines():
+        if line.lstrip().startswith("#") or "mtdparts" not in line:
+            continue
+        for size, start, name in re.findall(r'(-|0x[0-9A-Fa-f]+)@(0x[0-9A-Fa-f]+)\(([^)]+)\)', line):
+            parts[name.split(":")[0]] = (int(start, 16), None if size == "-" else int(size, 16))
+    return parts
+
+
 def calculate_file_md5(file_path):
     """Calculate MD5 hash of a file"""
     try:

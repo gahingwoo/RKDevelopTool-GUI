@@ -1687,6 +1687,12 @@ def check_fetch_loader(app):
         app.processEvents()
 
 
+def check_rkfw_read_back(app):
+    """After a full flash, each partition is read back at its offset from
+    the parameter file and compared; filler is "couldn't verify", a real
+    difference is reported by name."""
+
+
 def check_reset_after_write(app):
     """A whole image written at 0x0 ends with a Reset Board button that
     runs rd; a write elsewhere doesn't ask."""
@@ -1699,6 +1705,21 @@ def check_loader_before_write(app):
     from PySide6.QtWidgets import QMessageBox
 
     from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui import utils
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    param = os.path.join(work, "parameter.txt")
+    with open(param, "w") as f:
+        f.write("FIRMWARE_VER: 1.0\nCMDLINE: console=ttyS0 mtdparts=rk29xxnand:"
+                "0x00002000@0x00004000(uboot),-@0x00008000(rootfs:grow)\n")
+    if utils.parameter_partitions(param) != {"uboot": (0x4000, 0x2000), "rootfs": (0x8000, None)}:
+        errors.append(f"parameter_partitions: {utils.parameter_partitions(param)}")
+    parts = {}
+    for name, size in (("uboot", 3000), ("rootfs", 5000), ("misc", 700)):
+        parts[name] = os.path.join(work, name + ".img")
+        with open(parts[name], "wb") as f:
+            f.write(os.urandom(size))
+
 
     work = tempfile.mkdtemp(dir=_tmp)
     disk = os.path.join(work, "disk.img")
@@ -1715,6 +1736,60 @@ def check_loader_before_write(app):
                           settings=AppSettings())
     window.stop_device_detection()
     ran, shown = [], []
+
+    def run(readbacks):
+        def fake_run(cmd, key, callback=None):
+            ran.append((cmd[1], cmd[2], cmd[3]))
+            name = {hex(0x4000): "uboot", hex(0x8000): "rootfs"}[cmd[2]]
+            with open(cmd[-1], "wb") as f:
+                f.write(readbacks[name])
+            QTimer.singleShot(0, lambda: callback(True, ""))
+        ran.clear()
+        shown.clear()
+        window.run_command = fake_run
+        window.command_worker = None
+        window._rkfw_read_back = True
+        window._rkfw_written = [("uboot", parts["uboot"]), ("rootfs", parts["rootfs"]),
+                                ("misc", parts["misc"])]
+        window._rkfw_parameter = param
+        window._rkfw_flashing = True
+        tmp = tempfile.mkdtemp(dir=work)
+        ops._verify_rkfw_parts(window, tmp)
+        end = time.time() + 10
+        while window._rkfw_flashing and time.time() < end:
+            app.processEvents()
+            time.sleep(0.005)
+
+    def data(name, pad=0):
+        with open(parts[name], "rb") as f:
+            return f.read() + b"\0" * pad
+
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: shown.append((self.windowTitle(), self.text())) or 0
+    try:
+        # uboot matches (the read is rounded up to whole sectors); rootfs
+        # reads back only filler; misc isn't in the table.
+        rootfs = b"\xcc" * 5120     # past the Loader's read limit from its start
+        run({"uboot": data("uboot", 72), "rootfs": rootfs})
+        if ran != [("rl", hex(0x4000), hex(6)), ("rl", hex(0x8000), hex(10))]:
+            errors.append(f"read back with {ran}")
+        text = shown[-1][1] if shown else ""
+        if not ("1 partition(s)" in text and "misc" in text
+                and f"rootfs ({window.tr('rkfw_read_back_filler_all')})" in text):
+            errors.append(f"read-back report: {shown}")
+
+        # A real difference names the partition.
+        bad = bytearray(data("uboot"))
+        bad[100] ^= 0xFF
+        run({"uboot": bytes(bad), "rootfs": data("rootfs")})
+        want = window.tr("rkfw_read_back_mismatch_message").format("uboot")
+        if not shown or not shown[-1][1].startswith(want):
+            errors.append(f"mismatch report: {shown}")
+        if window._rkfw_flashing or getattr(window, '_rkfw_verifying', False):
+            errors.append("the flash stays busy after reading back")
+    finally:
+        QMessageBox.exec = real_exec
+
 
     def fake_run(cmd, key, callback=None):
         ran.append(cmd[1])
@@ -1926,6 +2001,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_rkfw_read_back(app)
     check_reset_after_write(app)
     check_loader_before_write(app)
     check_rfi_capacity(app)

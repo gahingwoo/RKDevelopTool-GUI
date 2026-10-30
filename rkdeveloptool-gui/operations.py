@@ -502,7 +502,9 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     (update.img) flash - this rewrites the GPT and every partition.
 
     Also asks whether to CRC-verify the firmware package before unpacking
-    (default on). Returns (accepted, verify_crc)."""
+    (default on) and whether to read every partition back afterwards
+    (remembered with the single-image read-back choice). Returns
+    (accepted, verify_crc, read_back)."""
     version = rkaf_info.version
     version_str = f"{(version >> 24) & 0xFF}.{(version >> 16) & 0xFF}.{version & 0xFFFF}"
     file_size = format_file_size(os.path.getsize(firmware_path))
@@ -527,11 +529,19 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     verify_check = QCheckBox(gui.tr("rkfw_verify_crc_checkbox"))
     verify_check.setChecked(True)
     msg.setCheckBox(verify_check)
+    # QMessageBox holds one checkbox; the second goes into its grid below it.
+    read_back = QCheckBox(gui.tr("rkfw_read_back_checkbox"))
+    read_back.setChecked(gui.settings.get_str(app_settings.KEY_VERIFY_AFTER_WRITE, "0") == "1")
+    grid = msg.layout()
+    grid.addWidget(read_back, grid.rowCount(), 0, 1, grid.columnCount())
     msg.setStandardButtons(QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes)
     msg.setDefaultButton(QMessageBox.StandardButton.No)
     msg.setMinimumWidth(600)
     accepted = msg.exec() == QMessageBox.StandardButton.Yes
-    return accepted, verify_check.isChecked()
+    if accepted:
+        gui.settings.set(app_settings.KEY_VERIFY_AFTER_WRITE,
+                         "1" if read_back.isChecked() else "0")
+    return accepted, verify_check.isChecked(), read_back.isChecked()
 
 
 def _flash_rkfw_firmware(gui, firmware_path):
@@ -577,9 +587,11 @@ def _flash_rkfw_firmware(gui, firmware_path):
         gui.show_message("rkfw_requires_maskrom_title", "rkfw_requires_maskrom_message", "Warning")
         return
 
-    confirmed, verify_crc = _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts)
+    confirmed, verify_crc, read_back = _confirm_rkfw_flash(gui, firmware_path, rkaf_info,
+                                                           real_parts)
     if not confirmed:
         return
+    gui._rkfw_read_back = read_back
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
     _set_rkfw_busy(gui, True)
@@ -687,6 +699,9 @@ def _start_rkfw_steps(gui, paths, tmp_dir):
         steps.append(([RKTOOL, "wlx", name, part_path], "burning",
                       gui.tr("rkfw_step_partition").format(name)))
 
+    # What to read back afterwards: each partition written by name.
+    gui._rkfw_written = [(cmd[2], cmd[3]) for cmd, key, _ in steps if cmd[1] == "wlx"]
+    gui._rkfw_parameter = paths['parameter']
     gui.log_message(f"[INFO] {gui.tr('rkfw_flash_starting').format(len(steps))}")
     # Weight each step by the file it writes (every step's last argument),
     # so the bar shows the whole flash rather than restarting per step.
@@ -709,8 +724,11 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
     max_attempts = 2  # extra attempts after the first failure
 
     if index >= len(steps):
-        _finish_rkfw_flow(gui, tmp_dir)
         gui.log_message(f"[OK] {gui.tr('rkfw_flash_complete_title')}")
+        if getattr(gui, '_rkfw_read_back', False) and getattr(gui, '_rkfw_written', None):
+            _verify_rkfw_parts(gui, tmp_dir)
+            return
+        _finish_rkfw_flow(gui, tmp_dir)
         _show_rkfw_message(gui, "rkfw_flash_complete_title",
                             gui.tr("rkfw_flash_complete_message"), "Information",
                             offer_reset=True)
@@ -775,6 +793,102 @@ def _run_rkfw_steps(gui, steps, index, tmp_dir, attempts=0):
             lambda: _run_rkfw_steps(gui, steps, index + 1, tmp_dir)))
 
     _run_when_idle(gui, cmd, description_key, on_step_done)
+
+
+def _verify_rkfw_parts(gui, tmp_dir):
+    """Read every partition the flash wrote back from the board and compare
+    it with the file written there, then report all of them at once."""
+    from .utils import compare_readback, parameter_partitions
+    layout = parameter_partitions(gui._rkfw_parameter) if gui._rkfw_parameter else {}
+    items = list(gui._rkfw_written)
+    sizes = [os.path.getsize(path) for _, path in items]
+    results = []        # (name, status, detail)
+    gui._rkfw_verifying = True
+    if hasattr(gui, 'begin_job'):
+        gui.begin_job(sum(sizes))
+
+    def report():
+        gui._rkfw_verifying = False
+        _finish_rkfw_flow(gui, tmp_dir)
+        bad = [n for n, status, _ in results if status == "mismatch"]
+        unsure = [f"{n} ({detail})" for n, status, detail in results
+                  if status not in ("ok", "mismatch")]
+        ok = sum(1 for _, status, _ in results if status == "ok")
+        if bad:
+            gui.log_message(f"[ERROR] {gui.tr('rkfw_read_back_mismatch_title')}: {', '.join(bad)}")
+            text = gui.tr("rkfw_read_back_mismatch_message").format(", ".join(bad))
+            if unsure:
+                text += "\n\n" + gui.tr("rkfw_read_back_unsure").format("\n".join(unsure))
+            _show_rkfw_message(gui, "rkfw_read_back_mismatch_title", text)
+            return
+        text = gui.tr("rkfw_read_back_ok").format(ok)
+        if unsure:
+            gui.log_message(f"[WARNING] {gui.tr('rkfw_read_back_unsure').format(', '.join(unsure))}")
+            text += "\n\n" + gui.tr("rkfw_read_back_unsure").format("\n".join(unsure))
+        gui.log_message(f"[OK] {gui.tr('rkfw_read_back_ok').format(ok)}")
+        _show_rkfw_message(gui, "rkfw_flash_complete_title",
+                           gui.tr("rkfw_flash_complete_message") + "\n\n" + text,
+                           "Warning" if unsure else "Information")
+
+    def check(index):
+        if getattr(gui, '_cancel_requested', False):
+            # Everything is written; only the check stops.
+            gui._cancel_requested = False
+            gui._rkfw_verifying = False
+            _finish_rkfw_flow(gui, tmp_dir)
+            gui.log_message(f"[WARNING] {gui.tr('cancelled_log')}")
+            return
+        if index >= len(items):
+            report()
+            return
+        name, path = items[index]
+        size = sizes[index]
+        if name not in layout:
+            results.append((name, "skipped", gui.tr("rkfw_read_back_not_in_table")))
+            check(index + 1)
+            return
+        label = gui.tr("rkfw_step_read_back").format(name)
+        gui.log_message(f"[{index + 1}/{len(items)}] {label}")
+        if hasattr(gui, 'job_stage'):
+            gui.job_stage(f"[{index + 1}/{len(items)}] {label}", sum(sizes[:index]), size)
+        readback = os.path.join(tmp_dir, "readback.bin")
+
+        def read(success, output):
+            if not success:
+                if getattr(gui, '_cancel_requested', False):
+                    check(index)
+                    return
+                results.append((name, "unverified", gui.tr("rkfw_read_back_read_failed")))
+                QTimer.singleShot(0, safe_slot(lambda: check(index + 1)))
+                return
+            compare = CallWorker(lambda: compare_readback(readback, path, size))
+            gui._verify_hash_worker = compare
+
+            def compared(result):
+                gui._verify_hash_worker = None
+                status, offset = result if isinstance(result, tuple) else ("unverified", None)
+                detail = ""
+                if status == "unverified" and offset == 0:
+                    detail = gui.tr("rkfw_read_back_filler_all")
+                elif status == "unverified" and offset is not None:
+                    detail = gui.tr("rkfw_read_back_filler").format(format_file_size(offset))
+                elif status == "mismatch":
+                    detail = format_file_size(offset)
+                results.append((name, status, detail))
+                try:
+                    os.remove(readback)
+                except OSError:
+                    pass
+                check(index + 1)
+
+            compare.finished.connect(safe_slot(compared))
+            compare.start()
+
+        sectors = -(-size // SECTOR_SIZE)
+        _run_when_idle(gui, [RKTOOL, "rl", hex(layout[name][0]), hex(sectors), readback],
+                       "verifying", read)
+
+    check(0)
 
 
 def _run_when_idle(gui, cmd, description_key, callback, waited_ms=0):
