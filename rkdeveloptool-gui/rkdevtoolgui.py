@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 # Import our modularized components
 from .utils import (
     RKTOOL, ToolValidator, parse_flash_info, calculate_file_md5,
-    format_file_size, parse_partition_info, safe_slot, parse_chip_info,
+    format_file_size, parse_partition_info, safe_slot, parse_chip_info, chip_from_device,
     classify_image_file, WHOLE_IMAGE_KINDS
 )
 from .workers import DeviceWorker, PartitionPPTWorker, CommandWorker
@@ -1041,7 +1041,9 @@ class RKDevToolGUI(QMainWindow):
         if self.current_device:
             mode_text = self.tr(f"connected_{self.device_mode.lower()}")
             # Parse chip info to show readable chip name
-            chip_text = parse_chip_info(self.chip_info) if self.chip_info else self.tr('unknown_chip')
+            chip_text = (parse_chip_info(self.chip_info)
+                         if self.chip_info and self.chip_info != "unknown_chip"
+                         else chip_from_device(self.current_device) or self.tr('unknown_chip'))
             self.device_status_label.setText(mode_text)
             self.device_status_label.setStyleSheet("QLabel { color: #28a745; padding: 5px; font-weight: bold; }")
             self.chip_info_label.setText(f"{self.tr('chip')}: {chip_text}")
