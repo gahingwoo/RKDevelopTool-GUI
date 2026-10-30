@@ -425,11 +425,10 @@ class RKDevToolGUI(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        # Tab widget, with the search field in its corner
+        # Tab widget
         self.tab_widget = CurrentPageTabWidget()
-        from .search import SearchBox
-        self.search_box = SearchBox(self)
-        self.tab_widget.setCornerWidget(self.search_box, Qt.Corner.TopRightCorner)
+        from .search import SearchPalette
+        self.search_palette = SearchPalette(self)
 
         # Home tab (task-oriented landing page)
         self.home_tab, home_widgets = create_home_tab(self)
@@ -730,6 +729,13 @@ class RKDevToolGUI(QMainWindow):
         # Connection status
         self.connection_status = QLabel()
         self.statusBar().addPermanentWidget(self.connection_status)
+
+        # Search (Ctrl/Cmd+K), for anyone who doesn't know the shortcut.
+        self.search_button = QPushButton()
+        self.search_button.setFlat(True)
+        self.search_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_button.clicked.connect(safe_slot(self.search_palette.open))
+        self.statusBar().addPermanentWidget(self.search_button)
 
         # Version; click to check for updates. Turns into "update available"
         # when a newer release is found.
@@ -1092,11 +1098,7 @@ class RKDevToolGUI(QMainWindow):
 
         QShortcut(QKeySequence("Ctrl+L"), self, activated=safe_slot(focus_command))
 
-        def focus_search():
-            self.search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            self.search_box.selectAll()
-
-        QShortcut(QKeySequence("Ctrl+K"), self, activated=safe_slot(focus_search))
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=safe_slot(self.search_palette.open))
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=safe_slot(self.cancel_current))
 
     def apply_status_colors(self):

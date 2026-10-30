@@ -26,6 +26,20 @@ class CurrentPageTabWidget(QTabWidget):
             return hint
         return QSize(hint.width(), page.sizeHint().height() + self._chrome(page)[1])
 
+    def minimumSizeHint(self):
+        # Likewise the width: the widest page (Settings, two columns) made
+        # every tab that wide, and the right panel scrolled sideways at the
+        # default window size.
+        hint = super().minimumSizeHint()
+        page = self.currentWidget()
+        if page is None:
+            return hint
+        # The frame's share: the stock minimum less its widest page's.
+        widest = max(self.widget(i).minimumSizeHint().width() for i in range(self.count()))
+        frame = max(hint.width() - widest, 0)
+        width = max(page.minimumSizeHint().width() + frame, self.tabBar().minimumSizeHint().width())
+        return QSize(width, hint.height())
+
     def heightForWidth(self, width):
         # Pages with word-wrapped labels make the whole column height-for-
         # width, and then the scroll area sizes it from this - which Qt also
