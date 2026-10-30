@@ -348,6 +348,15 @@ def on_partition_ppt_finished(gui, out, code):
         gui._partition_refresh_lock = False
 
 
+def _partition_size_text(gui, size):
+    """'4.00 MB' for a partition size given in sectors ("0x2000"); the last
+    partition, whose size `ppt` doesn't give, runs to the end."""
+    try:
+        return format_file_size(int(size, 16) * SECTOR_SIZE)
+    except (TypeError, ValueError):
+        return gui.tr("partition_to_end")
+
+
 def populate_partition_table(gui):
     """Populate partition table widget"""
     gui.partition_table.setRowCount(0)
@@ -361,7 +370,7 @@ def populate_partition_table(gui):
 
     for row, (name, info) in enumerate(items):
         addr = info.get('address', '')
-        size = info.get('size', '')
+        size = _partition_size_text(gui, info.get('size', ''))
 
         from PySide6.QtWidgets import QTableWidgetItem, QWidget, QHBoxLayout, QPushButton
 
@@ -521,9 +530,10 @@ def _confirm_rkfw_flash(gui, firmware_path, rkaf_info, real_parts):
     msg.setText(
         f"{gui.tr('rkfw_confirm_intro')}\n\n"
         f"{gui.tr('file_name')}: {os.path.basename(firmware_path)} ({file_size})\n"
-        f"Model: {rkaf_info.model}  Manufacturer: {rkaf_info.manufacturer}  "
-        f"Version: {version_str}\n\n"
-        f"Partitions ({len(real_parts)}):\n{part_lines}\n\n"
+        f"{gui.tr('rkfw_model')}: {rkaf_info.model}  "
+        f"{gui.tr('rkfw_manufacturer')}: {rkaf_info.manufacturer}  "
+        f"{gui.tr('rkfw_version')}: {version_str}\n\n"
+        f"{gui.tr('rkfw_partitions').format(len(real_parts))}\n{part_lines}\n\n"
         f"{gui.tr('rkfw_confirm_warning')}\n\n"
         f"{gui.tr('rkfw_confirm_proceed')}"
     )
