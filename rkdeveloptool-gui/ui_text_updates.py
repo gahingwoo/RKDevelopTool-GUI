@@ -41,6 +41,12 @@ def update_window_and_device_texts(gui):
 def update_home_tab_texts(gui):
     """Update home tab texts and the equivalent-command bar."""
     gui.tab_widget.setTabText(0, gui.tr("home_tab"))
+    if hasattr(gui, 'maskrom_help_btn'):
+        gui.maskrom_help_btn.setText(gui.tr("maskrom_help_link"))
+    if hasattr(gui, 'search_box'):
+        import sys
+        gui.search_box.setPlaceholderText(gui.tr("search_placeholder").format(
+            "⌘K" if sys.platform == "darwin" else "Ctrl+K"))
 
     gui.home_cards_label.setText(gui.tr("home_tasks_label"))
     gui.home_flash_card.setText(gui.tr("home_card_flash"))
@@ -64,6 +70,7 @@ def update_home_tab_texts(gui):
         gui.help_menu.setTitle(gui.tr("help_menu"))
         gui.check_updates_action.setText(gui.tr("check_updates_label") + "…")
         gui.release_page_action.setText(gui.tr("update_release_page"))
+        gui.report_action.setText(gui.tr("report_button_long"))
 
     # Reflect current connection state in the banner
     gui.update_device_status()

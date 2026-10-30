@@ -39,6 +39,7 @@ KEY_RESET_AFTER_WRITE = "flash/reset_after_write"
 KEY_IDLE_TIMEOUT = "flash/idle_timeout"     # seconds without output
 KEY_STEP_RETRIES = "flash/step_retries"     # per step of a full flash
 KEY_FIRST_RUN_DONE = "ui/first_run_done"    # the first-run wizard was shown
+KEY_NOTIFY = "ui/notify"                    # desktop notification when done
 
 DEFAULT_IDLE_TIMEOUT_S = 60
 DEFAULT_STEP_RETRIES = 2
