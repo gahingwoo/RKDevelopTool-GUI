@@ -68,6 +68,7 @@ def update_home_tab_texts(gui):
         gui.help_menu.setTitle(gui.tr("help_menu"))
         gui.check_updates_action.setText(gui.tr("check_updates_label") + "…")
         gui.release_page_action.setText(gui.tr("update_release_page"))
+        gui.report_action.setText(gui.tr("report_button_long"))
 
     # Reflect current connection state in the banner
     gui.update_device_status()
