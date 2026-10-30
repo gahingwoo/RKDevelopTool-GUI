@@ -469,18 +469,9 @@ class RKDevToolGUI(QMainWindow):
         self.partition_list_group = partition_widgets['list_group']
         self.partition_table = partition_widgets['table']
         self.refresh_partitions_btn = partition_widgets['refresh_btn']
-        self.partition_ops_group = partition_widgets['ops_group']
-        self.partition_combo = partition_widgets['combo']
-        self.partition_file_path = partition_widgets['file_path']
-        self.partition_file_browse_btn = partition_widgets['file_browse']
-        self.burn_partition_btn = partition_widgets['burn_btn']
-        self.backup_partition_btn = partition_widgets['backup_btn']
-        self.erase_partition_btn = partition_widgets['erase_partition_btn']
         self.erase_all_btn = partition_widgets['erase_all_btn']
         self.manual_address_enable = partition_widgets['manual_enable']
         self.manual_address = partition_widgets['manual_address']
-        self.select_partition_label = partition_widgets.get('select_label')
-        self.partition_file_label = partition_widgets.get('file_label')
         self.danger_group = partition_widgets.get('danger_group')
         self.danger_label = partition_widgets.get('danger_label')
 
@@ -493,6 +484,7 @@ class RKDevToolGUI(QMainWindow):
         self.advanced_params_group = param_widgets['advanced_group']
         self.timeout_spinbox = param_widgets['timeout']
         self.retry_count_spinbox = param_widgets['retry']
+        self._bind_flash_options()
         self.device_info_group = param_widgets['info_group']
         self.device_info_text = param_widgets['info_text']
         self.get_device_info_btn = param_widgets['info_btn']
@@ -865,7 +857,7 @@ class RKDevToolGUI(QMainWindow):
     # Disconnect during a write
     # Commands that change what's on the storage: losing the device during
     # one can leave it partly written.
-    _WRITE_KEYS = {"burning", "erase_flash", "erasing_all_storage", "importing_gpt",
+    _WRITE_KEYS = {"burning", "erase_flash", "erase_partition", "erasing_all_storage", "importing_gpt",
                    "writing_idb"}
     # Polls (2 s apart) without the device before it counts as gone: a full
     # RKFW flash makes the board re-enumerate after db and ul.
@@ -979,8 +971,7 @@ class RKDevToolGUI(QMainWindow):
         'read_flash_id_btn', 'read_flash_info_btn',
         'onekey_burn_btn', 'load_loader_btn', 'burn_image_btn',
         'change_storage_btn', 'erase_flash_btn', 'test_device_btn',
-        'refresh_partitions_btn', 'burn_partition_btn', 'backup_partition_btn',
-        'erase_partition_btn', 'erase_all_btn',
+        'refresh_partitions_btn', 'erase_all_btn',
         'get_device_info_btn', 'get_security_info_btn',
         'gpt_btn', 'gpt_export_btn', 'prm_btn',
         'read_flash_btn', 'verify_btn',
@@ -993,8 +984,7 @@ class RKDevToolGUI(QMainWindow):
     # applied on top of the list above rather than as a subset of it.
     _FLASH_BUSY_WIDGETS = frozenset({
         'onekey_burn_btn', 'burn_image_btn', 'home_flash_card',
-        'burn_partition_btn', 'erase_flash_btn', 'erase_all_btn',
-        'erase_partition_btn', 'load_loader_btn',
+        'erase_flash_btn', 'erase_all_btn', 'load_loader_btn',
         'enter_maskrom_btn', 'home_maskrom_card', 'enter_loader_btn',
         'reset_device_btn',
     })
@@ -1134,6 +1124,8 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.setText(' '.join(str(c) for c in cmd))
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
+        self.command_worker.idle_timeout = self.settings.get_int(
+            app_settings.KEY_IDLE_TIMEOUT, app_settings.DEFAULT_IDLE_TIMEOUT_S)
         self._command_active = True
         self._cancel_requested = False
         self._lost_during_write = False
@@ -1163,6 +1155,30 @@ class RKDevToolGUI(QMainWindow):
 
         self.command_worker.finished_signal.connect(safe_slot(self.on_command_finished))
         self.command_worker.start()
+
+    def _bind_flash_options(self):
+        """Load the Parameter tab's flash options from the settings and save
+        every change. Verify after burn is the same setting the burn
+        confirmation offers."""
+        s = self.settings
+        pairs = (
+            (self.verify_after_burn, app_settings.KEY_VERIFY_AFTER_WRITE, False),
+            (self.erase_before_burn, app_settings.KEY_ERASE_BEFORE_WRITE, False),
+            (self.reset_after_burn, app_settings.KEY_RESET_AFTER_WRITE, True),
+        )
+        for box, key, default in pairs:
+            box.setChecked(s.get_flag(key, default))
+            box.toggled.connect(safe_slot(
+                lambda on, k=key: s.set(k, "1" if on else "0")))
+        self.timeout_spinbox.setRange(10, 600)
+        self.timeout_spinbox.setValue(s.get_int(app_settings.KEY_IDLE_TIMEOUT,
+                                                app_settings.DEFAULT_IDLE_TIMEOUT_S))
+        self.timeout_spinbox.valueChanged.connect(safe_slot(
+            lambda v: s.set(app_settings.KEY_IDLE_TIMEOUT, str(v))))
+        self.retry_count_spinbox.setValue(s.get_int(app_settings.KEY_STEP_RETRIES,
+                                                    app_settings.DEFAULT_STEP_RETRIES))
+        self.retry_count_spinbox.valueChanged.connect(safe_slot(
+            lambda v: s.set(app_settings.KEY_STEP_RETRIES, str(v))))
 
     def explain_failure(self, output):
         """(title, body) with the likely cause of an rkdeveloptool failure

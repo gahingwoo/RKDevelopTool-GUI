@@ -34,6 +34,13 @@ KEY_UNPACK_MODE = "images/unpack_mode"      # "beside" | "temp" | "custom"
 KEY_UNPACK_DIR = "images/unpack_dir"
 KEY_DEBUG_LOG = "logs/debug"
 KEY_VERIFY_AFTER_WRITE = "flash/verify_after_write"
+KEY_ERASE_BEFORE_WRITE = "flash/erase_before_write"
+KEY_RESET_AFTER_WRITE = "flash/reset_after_write"
+KEY_IDLE_TIMEOUT = "flash/idle_timeout"     # seconds without output
+KEY_STEP_RETRIES = "flash/step_retries"     # per step of a full flash
+
+DEFAULT_IDLE_TIMEOUT_S = 60
+DEFAULT_STEP_RETRIES = 2
 KEY_UI_FONT_SIZE = "ui/font_size"           # points
 KEY_LOG_FONT_SIZE = "ui/log_font_size"      # points, log and command line
 
@@ -90,6 +97,16 @@ class AppSettings:
         if isinstance(value, str):
             return value
         return default
+
+    def get_int(self, key, default=0):
+        """Read a whole number, falling back to default for anything else."""
+        try:
+            return int(str(self.get(key, default)).strip())
+        except (TypeError, ValueError):
+            return default
+
+    def get_flag(self, key, default=False):
+        return self.get_str(key, "1" if default else "0") == "1"
 
     def get_bytes(self, key):
         """Read a QByteArray value (window geometry and friends)."""
