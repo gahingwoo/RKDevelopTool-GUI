@@ -672,19 +672,20 @@ class RKDevToolGUI(QMainWindow):
         return panel
 
     def _resize_tabs_to_current(self, index):
-        """Make the tab widget take the height of the current tab only.
+        """Make the tab widget take the size of the current tab only.
 
-        Non-current pages get an Ignored vertical size policy so they don't
-        inflate the tab widget's size hint; the current page uses its natural
-        height. This keeps short tabs compact and lets the log panel fill the
-        rest of the column.
+        Non-current pages get Ignored size policies so they don't inflate
+        the tab widget: in height, short tabs stay compact and the log panel
+        fills the rest of the column; in width, the two-column Settings page
+        no longer makes every tab wider than the panel at the default
+        window size.
         """
         for i in range(self.tab_widget.count()):
             page = self.tab_widget.widget(i)
             if page is None:
                 continue
-            vpol = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
-            page.setSizePolicy(QSizePolicy.Policy.Preferred, vpol)
+            policy = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
+            page.setSizePolicy(policy, policy)
         # CurrentPageTabWidget sizes itself from the current page; let the
         # layout re-ask. (No adjustSize() on the page: that shrank it to its
         # size hint for a frame before the layout stretched it back, which
