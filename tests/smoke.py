@@ -2559,6 +2559,49 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_notifications(app):
+    """The end of a flash goes out as a notification only while the app is
+    in the background and notifications are on; the Dock badge follows a
+    write and clears at the end."""
+    from PySide6.QtWidgets import QMessageBox
+
+    from rkdeveloptool_gui import notify
+    from rkdeveloptool_gui import operations as ops
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    sent, badges, active = [], [], [False]
+    real = (notify._send, notify._app_active, notify.set_progress, QMessageBox.exec)
+    notify._send = lambda title, text, gui=None: sent.append(title)
+    notify._app_active = lambda: active[0]
+    notify.set_progress = lambda p: badges.append(p)
+    QMessageBox.exec = lambda self: 0
+    window.settings.set(app_settings.KEY_NOTIFY, "1")
+    try:
+        ops._show_rkfw_message(window, "rkfw_flash_complete_title", "done", "Information")
+        ops._show_rkfw_message(window, "pf_title", "not a finish", "Information")
+        active[0] = True
+        ops._show_rkfw_message(window, "rkfw_flash_failed_title", "seen already")
+        active[0] = False
+        window.settings.set(app_settings.KEY_NOTIFY, "0")
+        ops._show_rkfw_message(window, "rkfw_flash_failed_title", "turned off")
+        if sent != [window.tr("rkfw_flash_complete_title")]:
+            errors.append(f"notifications sent: {sent}")
+
+        window.begin_job(1000)
+        window.job_stage("writing", 0, 1000)
+        window._on_command_progress(50)
+        window.end_job()
+        if not badges or badges[-1] is not None or 50 not in badges:
+            errors.append(f"Dock badge went {badges}")
+    finally:
+        notify._send, notify._app_active, notify.set_progress, QMessageBox.exec = real
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2585,6 +2628,9 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    # No real desktop notifications from the other tests.
+    AppSettings().set(app_settings.KEY_NOTIFY, "0")
+    check_notifications(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
