@@ -899,10 +899,28 @@ def check_preflight(app):
         window.current_device, window.device_mode, window.loader_loaded = device, mode, loaded
         return [status for status, _ in ops.preflight_checks(window, path, address, capacity)]
 
+    def with_loader_field(fn):
+        window.loader_path.setText(loader)
+        try:
+            return fn()
+        finally:
+            window.loader_path.setText("")
+
+    def with_chip(fn):
+        window.chip_info = "RK3576"
+        try:
+            return fn()
+        finally:
+            window.chip_info = "unknown_chip"
+
     P, W, F, U = ops.PASS, ops.WARN, ops.FAIL, ops.UNKNOWN
     cases = {
         "no device": (statuses(disk, "0x0", 1 << 20, device=None), [F, P, P]),
         "maskrom, no loader": (statuses(disk, "0x0", None, mode="Maskrom"), [P, F, P, U]),
+        "maskrom, Loader in the field": (with_loader_field(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
+        "maskrom, chip known": (with_chip(
+            lambda: statuses(disk, "0x0", None, mode="Maskrom")), [P, W, P, U]),
         "maskrom, loader loaded": (statuses(disk, "0x0", 1 << 20, mode="Maskrom", loaded=True),
                                    [P, P, P, P]),
         "loader at 0x0": (statuses(loader, "0x0", 1 << 20), [P, P, F, P]),
@@ -1384,6 +1402,10 @@ def check_chip_and_device_lock(app):
 
     for text, want in (("Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3576"),  # a real RK3576
                        ("Chip Info: 38 38 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3588"),
+                       # "330A" and "330C" are RK3368's and RK3399's numbers.
+                       ("Chip Info: 41 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3368"),
+                       ("Chip Info: 43 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3399"),
+                       ("0x330A", "RK3368"),
                        ("36 37 35 33 0 0", "RK3576"),
                        ("RK3399", "RK3399"),
                        ("", "Unknown Chip")):
@@ -1623,20 +1645,31 @@ def check_fetch_loader(app):
     os.environ[loader_fetch.URL_ENV] = "file://" + rkbin + "/"
     real_cache = ops.loader_cache_dir
     ops.loader_cache_dir = lambda: cache
+    from PySide6.QtWidgets import QMessageBox
+
     window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                           settings=AppSettings())
     window.stop_device_detection()
+    # A board in Maskrom without chip info gets the "load a Loader?" hint.
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.No
     try:
         window.update_device_status()
         if window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader is enabled with no board connected")
+        # In Maskrom before a Loader runs rci can't answer: the USB ID tells.
         window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
-                               "Maskrom", "Chip Info: 36 37 35 33 0 0 0 0")
+                               "Maskrom", "unknown_chip")
         if not window.fetch_loader_btn.isEnabled():
-            errors.append("Get Loader is disabled for a recognised RK3576")
+            errors.append("Get Loader is disabled for an RK3576 known only by its USB ID")
+        if "RK3576" not in window.chip_info_label.text():
+            errors.append(f"chip shown as {window.chip_info_label.text()!r} for Pid 0x350e")
         window.loader_path.setText("")
         window.fetch_loader_btn.click()
-        worker = window._loader_fetch_worker
+        worker = getattr(window, '_loader_fetch_worker', None)
+        if worker is None:
+            errors.append("Get Loader didn't start")
+            return
         worker.wait(10000)
         for _ in range(20):
             app.processEvents()
@@ -1646,6 +1679,7 @@ def check_fetch_loader(app):
         if not window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader stays disabled after it finished")
     finally:
+        QMessageBox.exec = real_exec
         del os.environ[loader_fetch.URL_ENV]
         ops.loader_cache_dir = real_cache
         window.cleanup()
@@ -1656,6 +1690,11 @@ def check_fetch_loader(app):
 def check_reset_after_write(app):
     """A whole image written at 0x0 ends with a Reset Board button that
     runs rd; a write elsewhere doesn't ask."""
+
+
+def check_loader_before_write(app):
+    """Writing in Maskrom without a Loader loads the one in the Loader
+    field first, re-checks the storage size, then writes."""
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QMessageBox
 
@@ -1669,6 +1708,13 @@ def check_reset_after_write(app):
                           settings=AppSettings())
     window.stop_device_detection()
     ran, offered = [], []
+    loader = os.path.join(work, "loader.bin")
+    with open(loader, "wb") as f:
+        f.write(b"LDR " + b"\0" * 600)
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    ran, shown = [], []
 
     def fake_run(cmd, key, callback=None):
         ran.append(cmd[1])
@@ -1704,6 +1750,151 @@ def check_reset_after_write(app):
                 errors.append(f"write at {address}: ran {ran}, reset offered {offered}")
     finally:
         window.run_command, QMessageBox.exec = real
+
+
+    real = (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+            ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS)
+    answers = [True]
+    ops._board_answers = lambda: answers.pop(0) if len(answers) > 1 else answers[0]
+    ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS = 3, 10
+    window.run_command = fake_run
+    window.command_worker = None
+    QMessageBox.exec = lambda self: shown.append(self.text()) or QMessageBox.StandardButton.Yes
+
+    def write_once(capacity):
+        ran.clear()
+        window.current_device, window.device_mode = "DevNo=1\tMaskrom", "Maskrom"
+        window.loader_loaded = False
+        window.loader_path.setText(loader)
+        ops.get_flash_capacity_bytes = lambda gui: (capacity, "test")
+        ops._burn_file(window, disk, "0x0", lambda p: [ops.RKTOOL, "wl", "0x0", p])
+        end = time.time() + 10
+        while time.time() < end and not ("wl" in ran or any("too big" in t for t in shown)):
+            app.processEvents()
+            time.sleep(0.01)
+        for _ in range(20):
+            app.processEvents()
+
+    try:
+        write_once(1 << 30)
+        if ran != ["db", "wl"] or not window.loader_loaded:
+            errors.append(f"write in Maskrom ran {ran}, loader_loaded {window.loader_loaded}")
+        write_once(1024)
+        if ran != ["db"]:
+            errors.append(f"an image too big once the size was known still ran {ran}")
+        # Refused right after db, answering on the next try (as an RK3576
+        # does): written. Never answering: not written.
+        answers[:] = [False, True]
+        write_once(1 << 30)
+        if ran != ["db", "wl"]:
+            errors.append(f"a board answering on the second try: ran {ran}")
+        answers[:] = [False]
+        shown.clear()
+        write_once(1 << 30)
+        end = time.time() + 3
+        while time.time() < end and not shown:
+            app.processEvents()
+            time.sleep(0.01)
+        if ran != ["db"] or not any(window.tr("loader_no_answer") in t for t in shown):
+            errors.append(f"a board that never answers: ran {ran}, said {shown}")
+    finally:
+        (window.run_command, QMessageBox.exec, ops.get_flash_capacity_bytes,
+         ops._board_answers, ops.READY_ATTEMPTS, ops.READY_INTERVAL_MS) = real
+
+
+def check_rfi_capacity(app):
+    """The pre-flight storage size comes from real rfi output, exactly."""
+    import subprocess as sp
+
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.utils import flash_capacity_bytes
+
+    out = ("Flash Info:\n\tManufacturer: SAMSUNG, value=00\n\tFlash Size: 29824 MB\n"
+           "\tFlash Size: 61079552 Sectors\n\tBlock Size: 512 KB\n")
+    if flash_capacity_bytes(out) != 61079552 * 512:
+        errors.append(f"flash_capacity_bytes: {flash_capacity_bytes(out)}")
+    if flash_capacity_bytes("Flash Size: 29824 MB") != 29824 * 1024 ** 2:
+        errors.append("flash_capacity_bytes ignores the MB line")
+    if flash_capacity_bytes("Read Flash Info failed!") is not None:
+        errors.append("flash_capacity_bytes found a size in a failure")
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    window._cached_flash_info = None
+    calls = []
+    real_run = ops.subprocess.run
+    ops.subprocess.run = lambda cmd, *a, **k: calls.append(cmd) or sp.CompletedProcess(cmd, 0, out, "")
+    try:
+        first = ops.get_flash_capacity_bytes(window)[0]
+        second = ops.get_flash_capacity_bytes(window)[0]
+    finally:
+        ops.subprocess.run = real_run
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+    if (first, second, len(calls)) != (61079552 * 512, 61079552 * 512, 1):
+        errors.append(f"capacity {first}, then cached {second}, {len(calls)} rfi call(s)")
+
+
+def check_idb_command():
+    """A NEWIDB Loader goes into the boot area as a verified bootloader
+    image at sector 0x40 (ul writes it in a layout an RK3576 rejects); an
+    old-format Loader still uses ul."""
+    import importlib.util
+    import time as _time
+
+    from rkdeveloptool_gui import operations as ops
+
+    spec = importlib.util.spec_from_file_location(
+        "loader_tests", os.path.join(os.path.dirname(os.path.abspath(__file__)), "loader_merge.py"))
+    source = open(spec.origin).read().split("\ncheck_new()\n")[0]
+    scope = {"__name__": "loader_tests"}
+    exec(compile(source, spec.origin, "exec"), scope)
+    lm = scope["loader_merge"]
+    work = tempfile.mkdtemp(dir=_tmp)
+    new = os.path.join(work, "new.bin")
+    old = os.path.join(work, "old.bin")
+    with open(new, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["NEW_INI"]), scope["NEW_BLOBS"].__getitem__, _time.localtime()))
+    with open(old, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["OLD_INI"]), scope["OLD_BLOBS"].__getitem__, _time.localtime()))
+    cmd = ops.loader_to_flash_command(new, work)
+    if cmd[1:3] != ["wl", "0x40"] or not os.path.isfile(cmd[3]):
+        errors.append(f"NEWIDB Loader written with {cmd}")
+    if ops.loader_to_flash_command(old, work)[1:] != ["ul", old]:
+        errors.append("an old-format Loader isn't written with ul")
+
+
+def check_command_chain(app):
+    """A callback that starts the next command right away (its worker
+    already gone) keeps that command's callback, and the window stays busy
+    while it runs."""
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    seen = []
+
+    def second(success, output):
+        seen.append("second")
+
+    def first(success, output):
+        seen.append("first")
+        window.command_worker.wait(5000)       # the worker has exited
+        window.run_command([RKTOOL, "rfi"], "reading_flash_info", second)
+        seen.append(("busy", window._command_active))
+
+    try:
+        window.run_command([RKTOOL, "ld"], "reading_flash_info", first)
+        end = time.time() + 10
+        while "second" not in seen and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        if seen[:3] != ["first", ("busy", True), "second"]:
+            errors.append(f"chained commands: {seen}")
+        if window._command_active:
+            errors.append("the window stays busy after the chain finished")
+    finally:
         window.cleanup()
         window.deleteLater()
         app.processEvents()
@@ -1736,6 +1927,10 @@ def main():
 
     check_translations()
     check_reset_after_write(app)
+    check_loader_before_write(app)
+    check_rfi_capacity(app)
+    check_idb_command()
+    check_command_chain(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)

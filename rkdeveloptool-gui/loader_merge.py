@@ -266,3 +266,68 @@ def merge(options, read, when=None):
 
     out = bytes(header) + bytes(table) + b"".join(e[3] for e in entries)
     return out + struct.pack("<I", rkcrc32(out))
+
+
+# The boot ROM of a NEWIDB chip reads its bootloader from this sector.
+IDB_SECTOR = 0x40
+
+
+def loader_entries(data):
+    """[(type, name, bytes)] of a Loader file, in file order."""
+    if len(data) < HEADER_SIZE or data[:4] not in (TAG_BOOT, TAG_LDR):
+        raise LoaderMergeError("not a Rockchip Loader")
+    entries = []
+    at = 25
+    for _ in range(3):
+        count, offset, size = struct.unpack_from("<BIB", data, at)
+        at += 6
+        for i in range(count):
+            entry = data[offset + i * size:offset + (i + 1) * size]
+            if len(entry) < ENTRY_SIZE:
+                raise LoaderMergeError("Loader entry table is cut short")
+            kind, = struct.unpack_from("<I", entry, 1)
+            name = entry[5:45].decode("utf-16-le", "replace").split("\0")[0]
+            data_at, data_size, _ = struct.unpack_from("<III", entry, 45)
+            if data_at + data_size > len(data):
+                raise LoaderMergeError(f"Loader entry {name} runs past the end")
+            entries.append((kind, name, data[data_at:data_at + data_size]))
+    return entries
+
+
+def _check_rkns(idb):
+    if idb[:4] != RKNS_MAGIC:
+        return False
+    if hashlib.sha256(idb[:RKNS_HASH_AT]).digest() != idb[RKNS_HASH_AT:RKNS_HASH_AT + 32]:
+        return False
+    for i in range(RKNS_MAX_IMAGES):
+        at = RKNS_IMAGES_AT + i * RKNS_IMAGE_SIZE
+        size_and_off, = struct.unpack_from("<I", idb, at)
+        if not size_and_off:
+            continue
+        start, count = (size_and_off & 0xFFFF) * SECTOR, (size_and_off >> 16) * SECTOR
+        image = idb[start:start + count]
+        if len(image) != count or hashlib.sha256(image).digest() != idb[at + 24:at + 56]:
+            return False
+    return True
+
+
+def idblock_from_loader(data):
+    """The bootloader image a NEWIDB ("LDR ") Loader puts at IDB_SECTOR:
+    its FlashHead and the loader entries after it, decrypted, which is what
+    rkbin's *_idblock_*.img holds. None for an old "BOOT" Loader, whose IDB
+    rkdeveloptool's ul writes correctly. Raises LoaderMergeError when the
+    result doesn't verify, so nothing broken gets written.
+
+    rkdeveloptool 1.32's ul doesn't know the NEWIDB layout: on an RK3576 it
+    wrote an RKNS header whose image hashes didn't match what followed, the
+    boot ROM rejected it and the board came back in Maskrom.
+    """
+    if data[:4] != TAG_LDR:
+        return None
+    flash = [rc4_sectors(blob) for kind, _, blob in loader_entries(data) if kind == ENTRY_LOADER]
+    if not flash or flash[0][:4] != RKNS_MAGIC:
+        raise LoaderMergeError("the Loader has no FlashHead")
+    idb = b"".join(flash)
+    if not _check_rkns(idb):
+        raise LoaderMergeError("the Loader's bootloader image doesn't verify")
+    return idb
