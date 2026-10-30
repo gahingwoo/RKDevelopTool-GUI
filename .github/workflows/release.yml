@@ -48,6 +48,11 @@ jobs:
           [ "$SRC_APP" = "$APP" ] || mv "$SRC_APP" "$APP"
           cp dist/rkdeveloptool "$APP/Contents/MacOS/rkdeveloptool"
           chmod +x "$APP/Contents/MacOS/rkdeveloptool"
+          # Adding a file breaks the bundle's ad-hoc seal; sign it again so
+          # codesign --verify passes (and the in-app updater installs a
+          # valid bundle).
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
 
       - name: Create DMG
         run: |
@@ -301,6 +306,11 @@ jobs:
           [ "$SRC_APP" = "$APP" ] || mv "$SRC_APP" "$APP"
           cp dist/rkdeveloptool "$APP/Contents/MacOS/rkdeveloptool"
           chmod +x "$APP/Contents/MacOS/rkdeveloptool"
+          # Adding a file breaks the bundle's ad-hoc seal; sign it again so
+          # codesign --verify passes (and the in-app updater installs a
+          # valid bundle).
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
 
       - name: Confirm x86_64 architecture
         run: |
