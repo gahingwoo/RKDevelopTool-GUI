@@ -581,6 +581,17 @@ def check_layout(app):
             bar = _window_rect(window, window.progress_bar)
             if bar.top() <= area.bottom():
                 errors.append(f"tab {tabs.tabText(i)!r}: progress row overlaps the log")
+        # At the default width every tab's content fits beside the left
+        # panel: the widest page sets the width of all of them, and a page
+        # wider than the panel pushed the search field past the edge.
+        for i in range(tabs.count()):
+            tabs.setCurrentIndex(i)
+            for _ in range(5):
+                app.processEvents()
+            if i != tabs.indexOf(window.settings_page) and \
+                    right_area.widget().width() > right_area.viewport().width():
+                errors.append(f"tab {tabs.tabText(i)!r} is wider than the panel at 1300 px")
+        tabs.setCurrentIndex(0)
         # A window too short for the tab plus the log scrolls the right panel,
         # but the progress row sits outside the scroll area and stays in view.
         window.resize(1300, 420)
@@ -2794,16 +2805,24 @@ def check_search(app):
         if search.search(index, "zzzz-nothing"):
             errors.append("search matched nonsense")
 
-        # Through the box: type, Enter, land on the page with it highlighted.
+        # Through the window: Ctrl/Cmd+K or the status-bar button opens it;
+        # type, Enter, land on the page with the control highlighted.
         window.tab_widget.setCurrentIndex(0)
-        box = window.search_box
-        box.setFocus()
-        box.setText(erase)
+        palette = window.search_palette
+        if not window.search_button.text() or not window.statusBar().isAncestorOf(window.search_button):
+            errors.append("no search button in the status bar")
+        window.search_button.click()
         app.processEvents()
-        if box.results.count() == 0:
-            errors.append("the search box listed nothing")
-        box.returnPressed.emit()
+        if not palette.isVisible() or palette.field.text():
+            errors.append("the search button didn't open an empty search")
+        palette.field.setText(erase)
         app.processEvents()
+        if palette.results.count() == 0:
+            errors.append("the search window listed nothing")
+        palette.field.returnPressed.emit()
+        app.processEvents()
+        if palette.isVisible():
+            errors.append("the search window stayed open after opening a result")
         page = window.tab_widget.currentWidget()
         if not page.isAncestorOf(window.erase_flash_btn):
             errors.append(f"opening the result went to tab {window.tab_widget.currentIndex()}")

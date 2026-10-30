@@ -349,6 +349,9 @@ class SettingsPage(QWidget):
             lambda on: self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if on else "0")))
         v.addWidget(auto)
         notify_box = QCheckBox(self.tr("settings_notify"))
+        # Short: a checkbox doesn't wrap, and the widest page sets the
+        # width of every tab. The details are in the tooltip.
+        notify_box.setToolTip(self.tr("settings_notify_tip"))
         notify_box.setChecked(self.settings.get_flag(app_settings.KEY_NOTIFY, True))
         notify_box.toggled.connect(safe_slot(
             lambda on: self.settings.set(app_settings.KEY_NOTIFY, "1" if on else "0")))

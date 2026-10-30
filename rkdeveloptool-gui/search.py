@@ -9,9 +9,10 @@ tooltip, and a few everyday words a newcomer might use instead of the
 app's own. Choosing a result switches to its page, scrolls it into view and
 flashes it; it never presses anything.
 """
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
 from PySide6.QtWidgets import (
-    QAbstractButton, QGroupBox, QLineEdit, QListWidget, QListWidgetItem, QScrollArea,
+    QAbstractButton, QFrame, QGroupBox, QLineEdit, QListWidget, QListWidgetItem, QScrollArea,
+    QVBoxLayout,
 )
 
 from .i18n import TRANSLATIONS
@@ -145,42 +146,51 @@ def reveal(gui, entry):
         widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
 
-class SearchBox(QLineEdit):
-    """The search field, with its results listed underneath."""
+class SearchPalette(QFrame):
+    """The search window: opened with Ctrl/Cmd+K or the status-bar button,
+    over the top of the window, with the results listed under the field.
+    Enter or a click opens a result; Escape or a click elsewhere closes it."""
+
+    WIDTH = 520
 
     def __init__(self, gui):
-        super().__init__()
+        super().__init__(gui, Qt.WindowType.Popup)
         self.gui = gui
-        self.setClearButtonEnabled(True)
-        self.setMinimumWidth(200)
-        self.results = QListWidget(gui)
-        self.results.setWindowFlags(Qt.WindowType.ToolTip)    # floats above, no focus
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        self.field = QLineEdit()
+        self.field.setClearButtonEnabled(True)
+        self.results = QListWidget()
+        self.results.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # typing stays in the field
         self.results.hide()
+        layout.addWidget(self.field)
+        layout.addWidget(self.results)
         self.results.itemClicked.connect(self._open)
-        self.textChanged.connect(self._update)
-        self.returnPressed.connect(lambda: self._open(self.results.currentItem()))
-        self.installEventFilter(self)
+        self.field.textChanged.connect(self._update)
+        self.field.returnPressed.connect(lambda: self._open(self.results.currentItem()))
+        self.field.installEventFilter(self)
         self._index = None
 
-    def focusInEvent(self, event):
+    def open(self):
         self._index = None              # the window may have changed
-        super().focusInEvent(event)
-        self._update(self.text())
-
-    def focusOutEvent(self, event):
-        super().focusOutEvent(event)
-        QTimer.singleShot(150, self, self.results.hide)   # after a click lands
+        self.field.clear()
+        self._update("")
+        top_left = self.gui.mapToGlobal(QPoint((self.gui.width() - self.WIDTH) // 2, 60))
+        self.move(top_left)
+        self.show()
+        self.activateWindow()
+        self.field.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def eventFilter(self, obj, event):
-        if obj is self and event.type() == QEvent.Type.KeyPress and self.results.isVisible():
+        if obj is self.field and event.type() == QEvent.Type.KeyPress:
             key = event.key()
-            if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+            if key in (Qt.Key.Key_Down, Qt.Key.Key_Up) and self.results.count():
                 row = self.results.currentRow() + (1 if key == Qt.Key.Key_Down else -1)
                 self.results.setCurrentRow(max(0, min(row, self.results.count() - 1)))
                 return True
             if key == Qt.Key.Key_Escape:
-                self.clear()
-                self.results.hide()
+                self.hide()
                 return True
         return QObject.eventFilter(self, obj, event)
 
@@ -197,25 +207,20 @@ class SearchBox(QLineEdit):
             item = QListWidgetItem(self.gui.tr("search_result").format(entry.label, where))
             item.setData(Qt.ItemDataRole.UserRole, entry)
             self.results.addItem(item)
-        if not found:
-            if text.strip():
-                self.results.addItem(self.gui.tr("search_nothing"))
-                self.results.item(0).setFlags(Qt.ItemFlag.NoItemFlags)
-            else:
-                self.results.hide()
-                return
-        self.results.setCurrentRow(0)
-        rows = min(self.results.count(), MAX_RESULTS)
-        width = max(self.width(), 360)
-        self.results.setFixedSize(width, rows * self.results.sizeHintForRow(0) + 6)
-        corner = self.mapToGlobal(self.rect().bottomRight())
-        self.results.move(corner.x() - width, corner.y() + 2)
-        self.results.show()
+        if not found and text.strip():
+            self.results.addItem(self.gui.tr("search_nothing"))
+            self.results.item(0).setFlags(Qt.ItemFlag.NoItemFlags)
+        self.results.setVisible(self.results.count() > 0)
+        if self.results.count():
+            self.results.setCurrentRow(0)
+            rows = min(self.results.count(), MAX_RESULTS)
+            self.results.setFixedHeight(rows * self.results.sizeHintForRow(0) + 6)
+        self.setFixedWidth(self.WIDTH)
+        self.adjustSize()
 
     def _open(self, item):
         entry = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         if entry is None:
             return
-        self.results.hide()
-        self.clear()
+        self.hide()
         reveal(self.gui, entry)

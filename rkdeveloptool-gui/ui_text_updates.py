@@ -43,9 +43,10 @@ def update_home_tab_texts(gui):
     gui.tab_widget.setTabText(0, gui.tr("home_tab"))
     if hasattr(gui, 'maskrom_help_btn'):
         gui.maskrom_help_btn.setText(gui.tr("maskrom_help_link"))
-    if hasattr(gui, 'search_box'):
+    if hasattr(gui, 'search_palette'):
         import sys
-        gui.search_box.setPlaceholderText(gui.tr("search_placeholder").format(
+        gui.search_palette.field.setPlaceholderText(gui.tr("search_placeholder"))
+        gui.search_button.setText(gui.tr("search_button").format(
             "⌘K" if sys.platform == "darwin" else "Ctrl+K"))
 
     gui.home_cards_label.setText(gui.tr("home_tasks_label"))
