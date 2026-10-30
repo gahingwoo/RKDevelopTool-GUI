@@ -10,9 +10,10 @@ app's own. Choosing a result switches to its page, scrolls it into view and
 flashes it; it never presses anything.
 """
 from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
+from PySide6.QtGui import QColor, QPainter, QPalette, QPen
 from PySide6.QtWidgets import (
     QAbstractButton, QFrame, QGroupBox, QLineEdit, QListWidget, QListWidgetItem, QScrollArea,
-    QVBoxLayout,
+    QVBoxLayout, QWidget,
 )
 
 from .i18n import TRANSLATIONS
@@ -43,7 +44,7 @@ SYNONYMS = [
 ]
 
 MAX_RESULTS = 12
-FLASH_MS = 1200
+FLASH_MS = 1800
 
 
 def _clean(text):
@@ -129,19 +130,71 @@ def search(entries, query):
     return [entry for _, _, entry in scored[:MAX_RESULTS]]
 
 
+class Flash(QWidget):
+    """A highlight drawn over a control: an accent-coloured frame and a
+    light fill that blink a few times and go. Painted on top rather than
+    set as a style sheet, which native macOS buttons barely show."""
+
+    BLINKS = 3
+
+    def __init__(self, target):
+        super().__init__(target.parentWidget())
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._target = target
+        self._ticks = 0
+        # The page may still be laying out after the tab switch: follow it.
+        target.installEventFilter(self)
+        self._place()
+        self.show()
+        timer = QTimer(self)
+        timer.timeout.connect(self._tick)
+        timer.start(FLASH_MS // (self.BLINKS * 2))
+
+    def _place(self):
+        self.setGeometry(self._target.geometry().adjusted(-5, -5, 5, 5))
+        self.raise_()
+
+    def eventFilter(self, obj, event):
+        if obj is self._target and event.type() in (QEvent.Type.Move, QEvent.Type.Resize):
+            self._place()
+        return False
+
+    def _tick(self):
+        self._ticks += 1
+        if self._ticks >= self.BLINKS * 2:
+            self.deleteLater()
+            return
+        self.setVisible(self._ticks % 2 == 0)
+
+    def paintEvent(self, event):
+        color = self.palette().color(QPalette.ColorRole.Highlight)
+        if self.palette().color(QPalette.ColorRole.Window).lightness() < 128:
+            color = color.lighter(170)      # dark themes use a deep blue
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = QColor(color)
+        fill.setAlpha(60)
+        painter.setBrush(fill)
+        painter.setPen(QPen(color, 3))
+        painter.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 6, 6)
+
+
 def reveal(gui, entry):
     """Go to the entry's page, scroll it into view and flash it."""
     widget = entry.widget
     if entry.page_index is not None:
         gui.tab_widget.setCurrentIndex(entry.page_index)
-    parent = widget.parentWidget()
-    while parent is not None:
-        if isinstance(parent, QScrollArea):
-            parent.ensureWidgetVisible(widget)
-        parent = parent.parentWidget()
-    old = widget.styleSheet()
-    widget.setStyleSheet(old + "\n* { border: 2px solid palette(highlight); border-radius: 4px; }")
-    QTimer.singleShot(FLASH_MS, widget, lambda: widget.setStyleSheet(old))
+    Flash(widget)
+
+    def scroll():
+        # Once the new page has its layout, or it scrolls to stale places.
+        parent = widget.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.ensureWidgetVisible(widget, 50, 80)
+            parent = parent.parentWidget()
+
+    QTimer.singleShot(0, widget, scroll)
     if widget.isEnabled() and widget.focusPolicy() != Qt.FocusPolicy.NoFocus:
         widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
