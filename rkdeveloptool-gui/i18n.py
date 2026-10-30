@@ -300,7 +300,7 @@ TRANSLATIONS = {
             "<li>状态栏显示找到设备后，在“固件下载”页选择镜像（update.img、.img、.img.xz 都可以），点“开始一键烧录”。</li>"
             "<li>刷完会自动重启开发板。刷过的镜像记在“烧录历史”页，可以一键重刷。</li>"
             "</ol>{search}"),
-        "wizard_search_tip": "<p>找不到某个功能？按 <b>Ctrl+K</b>（macOS 上是 <b>⌘K</b>）搜索。</p>",
+        "wizard_search_tip": "<p>找不到某个功能？按 <b>{key}</b> 搜索。</p>",
         "wizard_maskrom_link": "<a href=\"maskrom\">怎么进 Maskrom？</a>",
         "settings_title": "设置",
         "settings_menu": "设置…",
@@ -977,7 +977,7 @@ TRANSLATIONS = {
             "<li>The board restarts when it's done. Flashed images are kept on the History tab, "
             "ready to flash again.</li>"
             "</ol>{search}"),
-        "wizard_search_tip": "<p>Can't find something? Press <b>Ctrl+K</b> (<b>⌘K</b> on macOS) to search.</p>",
+        "wizard_search_tip": "<p>Can't find something? Press <b>{key}</b> to search.</p>",
         "wizard_maskrom_link": "<a href=\"maskrom\">How do I enter Maskrom?</a>",
         "settings_title": "Settings",
         "settings_menu": "Settings…",

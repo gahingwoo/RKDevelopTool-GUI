@@ -2592,7 +2592,8 @@ def check_first_run_wizard(app):
         shown.language.setCurrentIndex(shown.language.findData("en"))
         app.processEvents()
         text = shown.start_text.text()
-        if "{" in text or "Firmware Download" not in text:
+        if "{" in text or "Firmware Download" not in text or \
+                ("⌘" in text) != (sys.platform == "darwin"):
             errors.append(f"wizard start page: {text!r}")
         shown.reject()
         app.processEvents()

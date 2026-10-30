@@ -18,6 +18,8 @@ from .utils import safe_slot
 
 # Set (to anything) to keep the wizard from opening by itself (tests).
 NO_WIZARD_ENV = "RKDEVELOPTOOL_GUI_NO_WIZARD"
+# Only the platform's own key: Linux and Windows keyboards have no ⌘.
+SEARCH_KEY = "⌘K" if sys.platform == "darwin" else "Ctrl+K"
 
 
 def udev_rule_installed():
@@ -152,7 +154,7 @@ class FirstRunWizard(QWizard):
         # only when they're in this build.
         self.start_text.setText(tr("wizard_start_html").format(
             maskrom=tr("wizard_maskrom_link") if _has_module("maskrom_help") else "",
-            search=tr("wizard_search_tip") if _has_module("search") else ""))
+            search=tr("wizard_search_tip").format(key=SEARCH_KEY) if _has_module("search") else ""))
 
     def _maskrom_help(self):
         from .maskrom_help import show_maskrom_help
