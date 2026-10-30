@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication
 from .utils import safe_slot
 from .widgets import AutoLoadCombo
 from . import operations
+from .maskrom_help import show_maskrom_help
 from . import settings as app_settings
 
 
@@ -34,6 +35,9 @@ def create_home_tab(gui):
     status_banner.setObjectName("home_status_banner")
     status_banner.setWordWrap(True)
     status_banner.setStyleSheet("QLabel { padding: 4px 2px; font-weight: bold; }")
+    # Disconnected, it links to the Maskrom guide.
+    status_banner.setTextFormat(Qt.TextFormat.RichText)
+    status_banner.linkActivated.connect(safe_slot(lambda _link: show_maskrom_help(gui)))
     layout.addWidget(status_banner)
 
     # Task cards
@@ -148,13 +152,20 @@ def create_mode_panel(gui):
     reset_btn = QPushButton()
     reset_btn.clicked.connect(safe_slot(lambda: operations.reset_device(gui)))
 
+    # How to get a board that isn't connected yet into Maskrom.
+    help_btn = QPushButton()
+    help_btn.setProperty("class", "link")
+    help_btn.clicked.connect(safe_slot(lambda: show_maskrom_help(gui)))
+
     layout.addWidget(maskrom_btn)
     layout.addWidget(loader_btn)
     layout.addWidget(reset_btn)
+    layout.addWidget(help_btn)
 
     group.setLayout(layout)
 
     widgets = {
+        'help': help_btn,
         'maskrom': maskrom_btn,
         'loader': loader_btn,
         'reset': reset_btn

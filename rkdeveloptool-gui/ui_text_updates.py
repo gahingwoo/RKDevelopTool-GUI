@@ -41,6 +41,8 @@ def update_window_and_device_texts(gui):
 def update_home_tab_texts(gui):
     """Update home tab texts and the equivalent-command bar."""
     gui.tab_widget.setTabText(0, gui.tr("home_tab"))
+    if hasattr(gui, 'maskrom_help_btn'):
+        gui.maskrom_help_btn.setText(gui.tr("maskrom_help_link"))
 
     gui.home_cards_label.setText(gui.tr("home_tasks_label"))
     gui.home_flash_card.setText(gui.tr("home_card_flash"))

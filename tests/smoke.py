@@ -2559,6 +2559,42 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_maskrom_help(app):
+    """With no board, the Home banner links to the Maskrom guide; the
+    guide and the left panel's button open it."""
+    from PySide6.QtWidgets import QDialog
+
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    try:
+        window.on_device_lost()
+        if 'href="maskrom"' not in window.home_status_banner.text():
+            errors.append(f"disconnected banner: {window.home_status_banner.text()!r}")
+        window.home_status_banner.linkActivated.emit("maskrom")
+        app.processEvents()
+        dialogs = [d for d in window.findChildren(QDialog) if d.isVisible()
+                   and d.windowTitle() == window.tr("maskrom_help_title")]
+        if not dialogs or "reboot loader" not in window.tr("maskrom_help_html"):
+            errors.append("the Maskrom guide didn't open from the banner")
+        for d in dialogs:
+            d.close()
+        window.maskrom_help_btn.click()
+        app.processEvents()
+        if not any(d.isVisible() for d in window.findChildren(QDialog)):
+            errors.append("the left panel's button didn't open the guide")
+        for d in window.findChildren(QDialog):
+            d.close()
+        window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tLoader"],
+                               "Loader", "RK3576")
+        if "href" in window.home_status_banner.text():
+            errors.append("the connected banner still links to the guide")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2585,6 +2621,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_maskrom_help(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
