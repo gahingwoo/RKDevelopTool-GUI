@@ -607,6 +607,10 @@ def _flash_rkfw_firmware(gui, firmware_path):
     gui._rkfw_read_back = read_back
 
     tmp_dir = tempfile.mkdtemp(prefix="rkdevtool_rkfw_")
+    # Unpacking writes about the whole archive out again.
+    if not _enough_space(gui, tmp_dir, rkfw_info.fw_size + rkfw_info.boot_size, True):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
     _set_rkfw_busy(gui, True)
     gui.progress_bar.setValue(0)
     gui.progress_label.setText(gui.tr("preparing_firmware"))
@@ -1596,6 +1600,11 @@ def _with_plain_image(gui, file_path, on_ready):
         return
 
     tmp_dir = _make_unpack_dir(gui, file_path)
+    from .utils import uncompressed_size
+    needed, exact = uncompressed_size(file_path, kind)
+    if not _enough_space(gui, tmp_dir, needed, exact):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
     dest = os.path.join(tmp_dir, decompressed_name(file_path))
 
     def cleanup():
@@ -1647,6 +1656,29 @@ def _with_plain_image(gui, file_path, on_ready):
     worker.finished.connect(safe_slot(done))
     worker.failed.connect(safe_slot(failed))
     worker.start()
+
+
+# Room left over on top of what an unpacked image takes.
+SPACE_MARGIN = 64 << 20
+
+
+def _enough_space(gui, directory, needed, exact):
+    """Whether `directory` has room for `needed` bytes; if not, say how much
+    is missing and where to change it. `exact` False means `needed` is only
+    a lower bound (gzip, bzip2): the message says "at least"."""
+    try:
+        free = shutil.disk_usage(directory).free
+    except OSError:
+        return True
+    if free >= needed + SPACE_MARGIN:
+        return True
+    size = format_file_size(needed)
+    text = gui.tr("space_short_message").format(
+        size if exact else gui.tr("space_at_least").format(size),
+        os.path.dirname(directory), format_file_size(free))     # the folder, not our temp dir
+    gui.log_message(f"[ERROR] {gui.tr('space_short_title')}: {text}")
+    _show_rkfw_message(gui, "space_short_title", text)
+    return False
 
 
 def _make_unpack_dir(gui, file_path):

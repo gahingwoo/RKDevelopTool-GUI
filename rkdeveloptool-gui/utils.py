@@ -413,6 +413,72 @@ def detect_compression(file_path):
     return None
 
 
+def _xz_index_size(f, end):
+    """Uncompressed size of the .xz stream ending at `end`, from its index,
+    and where the stream starts; (None, None) if it isn't readable."""
+    f.seek(end - 12)
+    footer = f.read(12)
+    if len(footer) != 12 or footer[10:12] != b"YZ":
+        return None, None
+    index_size = (int.from_bytes(footer[4:8], "little") + 1) * 4
+    f.seek(end - 12 - index_size)
+    index = f.read(index_size)
+    if not index or index[0] != 0:
+        return None, None
+
+    def varint(buf, at):
+        value = shift = 0
+        while at < len(buf):
+            byte = buf[at]
+            value |= (byte & 0x7F) << shift
+            at += 1
+            if not byte & 0x80:
+                return value, at
+            shift += 7
+        raise ValueError("cut-off varint")
+
+    count, at = varint(index, 1)
+    unpadded = uncompressed = 0
+    for _ in range(count):
+        size, at = varint(index, at)
+        unpadded += (size + 3) // 4 * 4
+        out, at = varint(index, at)
+        uncompressed += out
+    return uncompressed, end - 12 - index_size - unpadded - 12
+
+
+def uncompressed_size(file_path, kind):
+    """(bytes, exact) a compressed image will take once unpacked: exact for
+    .xz (from its index, all streams), a lower bound for gzip and bzip2."""
+    size = os.path.getsize(file_path)
+    if kind == "xz":
+        try:
+            total, end = 0, size
+            with open(file_path, "rb") as f:
+                while end > 0:
+                    f.seek(max(end - 4, 0))
+                    while end > 0 and f.read(4) == b"\0\0\0\0":      # stream padding
+                        end -= 4
+                        f.seek(max(end - 4, 0))
+                    part, start = _xz_index_size(f, end)
+                    if part is None or start < 0:
+                        raise ValueError("unreadable xz index")
+                    total += part
+                    end = start
+            return total, True
+        except (OSError, ValueError):
+            return size, False
+    if kind == "gzip":
+        # The trailer holds the size modulo 4 GiB; it can't be less than that.
+        try:
+            with open(file_path, "rb") as f:
+                f.seek(-4, os.SEEK_END)
+                return max(int.from_bytes(f.read(4), "little"), size), False
+        except OSError:
+            return size, False
+    return size, False
+
+
 def decompressed_name(file_path):
     """File name for the decompressed copy: 'Armbian.img.xz' -> 'Armbian.img'."""
     name = os.path.basename(file_path)
