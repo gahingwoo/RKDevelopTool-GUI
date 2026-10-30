@@ -1824,7 +1824,11 @@ def check_production_line_real_commands(app):
             # -v (version at start-up) and a device poll (ld, rci) that may
             # slip in before detection stops aren't the line's.
             ran = [c for c in f.read().split() if c not in ("-v", "ld", "rci")]
-        if ran != ["db", "rfi", "wl", "rd"] or line.ok != 1:
+        # Such a poll can also make the first rfi fail; the line retries
+        # it (RFI_ATTEMPTS), which is what it's for.
+        steps = [c for i, c in enumerate(ran) if not (c == "rfi" and i and ran[i - 1] == "rfi")]
+        if steps != ["db", "rfi", "wl", "rd"] or ran.count("rfi") > production.RFI_ATTEMPTS \
+                or line.ok != 1:
             errors.append(f"line with real commands ran {ran}, ok {line.ok}, state {line.state}")
     finally:
         production.AFTER_DB_MS = real_delay
