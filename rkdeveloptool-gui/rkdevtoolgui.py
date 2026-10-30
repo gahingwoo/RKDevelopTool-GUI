@@ -49,6 +49,7 @@ from .production import ProductionLine
 from .log_widget import RealtimeLogWidget
 from . import settings as app_settings
 from . import updater
+from . import wizard
 from . import __version__
 from .settings import AppSettings
 
@@ -264,6 +265,8 @@ class RKDevToolGUI(QMainWindow):
 
         # Look for a newer release once the window is up (at most daily).
         QTimer.singleShot(3000, safe_slot(self._auto_check_for_updates))
+        # After the window is shown, so the wizard sheets onto it.
+        QTimer.singleShot(0, self, safe_slot(lambda: wizard.maybe_show(self)))
 
     def _persisted_path_fields(self):
         """Map settings key -> the QLineEdit whose contents should survive a

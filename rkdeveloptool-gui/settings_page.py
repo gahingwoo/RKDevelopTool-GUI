@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from . import settings as app_settings
 from . import utils
+from . import wizard
 from .utils import safe_slot
 
 UNPACK_BESIDE, UNPACK_TEMP, UNPACK_CUSTOM = "beside", "temp", "custom"
@@ -143,6 +144,9 @@ class SettingsPage(QWidget):
         form.addRow(self.tr("settings_ui_font"), self.ui_font)
         form.addRow(self.tr("settings_log_font"), self.log_font)
         form.addRow("", reset)
+        guide = QPushButton(self.tr("wizard_reopen"))
+        guide.clicked.connect(safe_slot(lambda: wizard.show(self.gui)))
+        form.addRow("", guide)
         return box
 
     def _font_spin(self, key, default):
