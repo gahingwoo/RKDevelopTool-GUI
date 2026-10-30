@@ -1,0 +1,50 @@
+name: Something went wrong
+description: A flash, a read or the app itself didn't do what it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: board
+    attributes:
+      label: Board
+      placeholder: ArmSoM CM5, Radxa ROCK 5B, ...
+  - type: input
+    id: chip
+    attributes:
+      label: Chip
+      placeholder: RK3576
+  - type: input
+    id: image
+    attributes:
+      label: Image
+      description: The file name, and where it came from if it isn't obvious.
+  - type: input
+    id: app-version
+    attributes:
+      label: RKDevelopTool GUI version
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.5 (arm64), Ubuntu 24.04 (x86_64), ...
+  - type: input
+    id: install
+    attributes:
+      label: Installed from
+      placeholder: DMG, AppImage, deb, rpm, pip
+  - type: input
+    id: rkdeveloptool
+    attributes:
+      label: rkdeveloptool version
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The end of the app's log. Settings → Export Diagnostics gives the full one; attach it here if you can.
+      render: text

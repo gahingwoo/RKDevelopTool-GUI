@@ -481,11 +481,23 @@ def onekey_burn(gui):
     _burn_file(gui, firmware_path, "0x0", lambda path: [RKTOOL, "wl", "0x0", path])
 
 
+# The messages that end something long; worth a notification.
+_NOTIFY_TITLES = {
+    "rkfw_flash_complete_title", "rkfw_flash_failed_title", "write_done_title",
+    "verify_ok_title", "verify_mismatch_title", "verify_unreliable_title",
+    "rkfw_read_back_mismatch_title",
+}
+
+
 def _show_rkfw_message(gui, title_key, text, icon="Critical", offer_reset=False):
     """Show a QMessageBox for RKFW flashing errors/status with dynamic text
     that gui.show_message()'s static-key-only signature can't express.
     offer_reset adds a button that resets the board (rd) so the new
-    firmware boots."""
+    firmware boots. The end of a flash or a check also goes out as a
+    desktop notification when the app is in the background."""
+    if title_key in _NOTIFY_TITLES:
+        from .notify import notify
+        notify(gui, gui.tr(title_key), text)
     msg = QMessageBox()
     style_messagebox(msg)
     msg.setWindowTitle(gui.tr(title_key))
@@ -1470,6 +1482,10 @@ def _burn_file(gui, file_path, address, make_cmd):
                     _show_rkfw_message(gui, "write_done_title",
                                        gui.tr("write_done_message").format(os.path.basename(path)),
                                        "Information", offer_reset=True)
+                else:
+                    from .notify import notify
+                    notify(gui, gui.tr("write_done_title"),
+                           gui.tr("notify_written_resetting").format(os.path.basename(path)))
 
         if lba == 0 and _flag(gui, app_settings.KEY_ERASE_BEFORE_WRITE):
             gui.log_message(f"[INFO] {gui.tr('erasing_before_write')}")

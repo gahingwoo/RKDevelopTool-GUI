@@ -421,8 +421,11 @@ class RKDevToolGUI(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        # Tab widget
+        # Tab widget, with the search field in its corner
         self.tab_widget = CurrentPageTabWidget()
+        from .search import SearchBox
+        self.search_box = SearchBox(self)
+        self.tab_widget.setCornerWidget(self.search_box, Qt.Corner.TopRightCorner)
 
         # Home tab (task-oriented landing page)
         self.home_tab, home_widgets = create_home_tab(self)
@@ -753,6 +756,8 @@ class RKDevToolGUI(QMainWindow):
             self.help_menu = self.menuBar().addMenu("")
             self.check_updates_action = self.help_menu.addAction("")
             self.check_updates_action.triggered.connect(safe_slot(self.check_for_updates))
+            self.report_action = self.help_menu.addAction("")
+            self.report_action.triggered.connect(safe_slot(self.report_problem))
             self.release_page_action = self.help_menu.addAction("")
             self.release_page_action.triggered.connect(safe_slot(
                 lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))))
@@ -1082,6 +1087,12 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.selectAll()
 
         QShortcut(QKeySequence("Ctrl+L"), self, activated=safe_slot(focus_command))
+
+        def focus_search():
+            self.search_box.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            self.search_box.selectAll()
+
+        QShortcut(QKeySequence("Ctrl+K"), self, activated=safe_slot(focus_search))
         QShortcut(QKeySequence(Qt.Key.Key_Escape), self, activated=safe_slot(self.cancel_current))
 
     def apply_status_colors(self):
@@ -1095,7 +1106,9 @@ class RKDevToolGUI(QMainWindow):
     def changeEvent(self, event):
         # A theme switch (by the app or the system) changes the palette.
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
-            QTimer.singleShot(0, safe_slot(self.apply_status_colors))
+            # With the window as context, Qt drops the call if the window is
+            # destroyed first (it touched a deleted label on Linux CI).
+            QTimer.singleShot(0, self, safe_slot(self.apply_status_colors))
         super().changeEvent(event)
 
     def _update_home_banner(self, connected, text):
@@ -1226,6 +1239,8 @@ class RKDevToolGUI(QMainWindow):
                                + (f"  ({note})" if note else ""))
         self.line_results.insertItem(0, item)
         self.update_production_status()
+        from .notify import notify
+        notify(self, self.tr("line_group"), text)
 
     # Flash history
     def refresh_history(self):
@@ -1382,6 +1397,10 @@ class RKDevToolGUI(QMainWindow):
         self.retry_count_spinbox.valueChanged.connect(safe_slot(
             lambda v: s.set(app_settings.KEY_STEP_RETRIES, str(v))))
 
+    def report_problem(self):
+        from .feedback import report_problem
+        report_problem(self)
+
     def explain_failure(self, output):
         """(title, body) with the likely cause of an rkdeveloptool failure
         and what to try, or None when the output isn't recognised."""
@@ -1393,14 +1412,20 @@ class RKDevToolGUI(QMainWindow):
         msg = QMessageBox(self)
         style_messagebox(msg)
         msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle(f"{self.tr(description_key)} — {self.tr('failure').rstrip(': ')}")
+        # The text below says what failed; the title just says that it did.
+        msg.setWindowTitle(self.tr('failure').rstrip(': ：'))
         msg.setText(title)
         msg.setInformativeText(body)
         msg.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         tail = "\n".join((output or "").strip().splitlines()[-40:])
         if tail:
             msg.setDetailedText(tail)
+        report = msg.addButton(self.tr("report_button"), QMessageBox.ButtonRole.ActionRole)
+        msg.addButton(QMessageBox.StandardButton.Close)
         msg.exec()
+        if msg.clickedButton() is report:
+            from .feedback import report_problem
+            report_problem(self, f"{self.tr(description_key)}: {title}", f"{title}\n\n{body}")
 
     # Write progress: overall percent, speed and time left for a write that
     # may span several rkdeveloptool commands (a full RKFW flash).
@@ -1422,6 +1447,8 @@ class RKDevToolGUI(QMainWindow):
     def end_job(self):
         self._job = None
         self.log_widget.follow_log_progress = True
+        from .notify import set_progress
+        set_progress(None)
 
     def _on_command_progress(self, percent):
         job = getattr(self, '_job', None)
@@ -1443,6 +1470,8 @@ class RKDevToolGUI(QMainWindow):
         if eta is not None:
             parts.append(format_eta(self.tr, eta))
         self.progress_label.setText(" · ".join(parts))
+        from .notify import set_progress
+        set_progress(tracker.percent())
 
     def on_command_finished(self, success, error_msg):
         """Handle command completion"""
@@ -1837,14 +1866,84 @@ class RKDevToolGUI(QMainWindow):
         text = self.tr("update_found_message").format(release["version"], __version__)
         if not release.get("download"):
             text += "\n\n" + self.tr("update_no_package_hint")
+        install = updater.can_self_update(release)
         self._update_message(text, QMessageBox.Icon.Information,
                              download=release.get("download") or release["page"],
-                             page=release["page"], notes=release.get("notes"))
+                             page=release["page"], notes=release.get("notes"),
+                             install=release if install else None)
+
+    def install_update(self, release):
+        """Download, check and install an update, then offer to restart."""
+        from PySide6.QtWidgets import QProgressDialog
+        line = getattr(self, 'production', None)
+        if self._device_busy() or (line is not None and line.active) or \
+                getattr(self, '_rkfw_flashing', False):
+            self._update_message(self.tr("update_busy"), QMessageBox.Icon.Warning)
+            return
+        dest = os.path.join(operations.loader_cache_dir().rsplit(os.sep, 1)[0], "updates")
+        worker = updater.UpdateInstallWorker(release, dest)
+        self._update_install_worker = worker
+        # No parent, like the app's message boxes: it outlives nothing.
+        dialog = QProgressDialog(self.tr("update_downloading").format(release["version"]),
+                                 self.tr("cancel_btn"), 0, 100)
+        self._update_progress = dialog
+        dialog.setWindowTitle(self.tr("update_title"))
+        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dialog.setMinimumDuration(0)
+        dialog.setAutoClose(False)
+        dialog.setAutoReset(False)
+        dialog.canceled.connect(worker.cancel)
+        worker.progress.connect(safe_slot(dialog.setValue))
+
+        def installing():
+            dialog.setLabelText(self.tr("update_installing"))
+            dialog.setCancelButton(None)        # too late to stop half-way
+
+        def done_with_dialog():
+            dialog.close()
+            dialog.deleteLater()
+            self._update_progress = None
+
+        def installed(restart):
+            done_with_dialog()
+            self.log_message(f"[OK] {self.tr('update_installed').format(release['version'])}")
+            msg = QMessageBox()
+            style_messagebox(msg)
+            msg.setWindowTitle(self.tr("update_title"))
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setText(self.tr("update_installed_restart").format(release["version"]))
+            now = msg.addButton(self.tr("update_restart_now"), QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton(self.tr("later_btn"), QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+            if msg.clickedButton() is now:
+                self.restart_into(restart)
+
+        def failed(error):
+            done_with_dialog()
+            if error == "cancelled":
+                return
+            self.log_message(f"[ERROR] {self.tr('update_install_failed')}: {error}")
+            self._update_message(self.tr("update_install_failed_message"), QMessageBox.Icon.Warning,
+                                 download=release.get("download"), page=release.get("page"),
+                                 details=error)
+
+        worker.installing.connect(safe_slot(installing))
+        worker.installed.connect(safe_slot(installed))
+        worker.failed.connect(safe_slot(failed))
+        worker.start()
+
+    def restart_into(self, command):
+        """Start the new version once this one has quit."""
+        from PySide6.QtCore import QProcess
+        import shlex
+        QProcess.startDetached("/bin/sh", ["-c", "sleep 1; exec " + " ".join(
+            shlex.quote(c) for c in command)])
+        self.close()
 
     def _update_message(self, text, icon, download=None, page=None, notes=None,
-                        details=None):
+                        details=None, install=None):
         """Update result dialog with an 'automatically check' checkbox."""
-        msg = QMessageBox(self)
+        msg = QMessageBox()
         style_messagebox(msg)
         msg.setWindowTitle(self.tr("update_title"))
         msg.setIcon(icon)
@@ -1854,7 +1953,11 @@ class RKDevToolGUI(QMainWindow):
         auto = QCheckBox(self.tr("update_auto_check"))
         auto.setChecked(self.settings.get_str(app_settings.KEY_UPDATE_AUTO, "1") == "1")
         msg.setCheckBox(auto)
-        download_btn = page_btn = None
+        download_btn = page_btn = install_btn = None
+        if install:
+            install_btn = msg.addButton(self.tr("update_install"),
+                                        QMessageBox.ButtonRole.AcceptRole)
+            msg.setDefaultButton(install_btn)
         if download:
             download_btn = msg.addButton(self.tr("update_download"),
                                          QMessageBox.ButtonRole.AcceptRole)
@@ -1865,7 +1968,9 @@ class RKDevToolGUI(QMainWindow):
         msg.exec()
         self.settings.set(app_settings.KEY_UPDATE_AUTO, "1" if auto.isChecked() else "0")
         clicked = msg.clickedButton()
-        if download_btn is not None and clicked is download_btn:
+        if install_btn is not None and clicked is install_btn:
+            self.install_update(install)
+        elif download_btn is not None and clicked is download_btn:
             QDesktopServices.openUrl(QUrl(download))
         elif page_btn is not None and clicked is page_btn:
             QDesktopServices.openUrl(QUrl(page))

@@ -1,0 +1,29 @@
+RKDevelopTool GUI
+
+安装：把 RKDevelopTool-GUI 拖到“应用程序”文件夹。
+
+第一次打开时，macOS 可能提示“无法打开”或“无法验证开发者”。这是因为这个应用还没有经过 Apple 公证，不是文件有问题。
+- macOS 15（Sequoia）及以后：先双击一次应用，在提示里点“完成”；然后打开“系统设置 → 隐私与安全性”，往下拉到“安全性”，点“仍要打开”，再输入密码确认。
+- macOS 14 及更早：在“应用程序”里右键（或按住 Control 点按）应用，选“打开”，再点“打开”。
+- 或者在“终端”里执行：xattr -cr /Applications/RKDevelopTool-GUI.app
+
+只需要第一次这样做。之后在应用里点右下角的“检查更新”就能直接更新，不会再出现这个提示。
+
+不想处理这个提示的话，也可以在“终端”里用一行命令安装（会校验下载的文件）：
+curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
+
+------------------------------------------------------------
+
+Install: drag RKDevelopTool-GUI onto the Applications folder.
+
+On first launch macOS may say the app "can't be opened" or that the developer "can't be verified". That's because the app isn't notarized by Apple yet, not because anything is wrong with it.
+- macOS 15 (Sequoia) and later: double-click the app once and click Done; then open System Settings → Privacy & Security, scroll down to Security, click "Open Anyway" and confirm with your password.
+- macOS 14 and earlier: in Applications, right-click (or Control-click) the app, choose Open, then Open.
+- Or run in Terminal: xattr -cr /Applications/RKDevelopTool-GUI.app
+
+This is needed only once. After that, "Check for updates" in the bottom-right corner of the app updates it in place, without this prompt.
+
+To skip this altogether, install from Terminal in one line (the download is checksummed):
+curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
+
+https://github.com/gahingwoo/RKDevelopTool-GUI
