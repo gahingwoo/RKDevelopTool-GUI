@@ -2826,8 +2826,16 @@ def check_search(app):
         page = window.tab_widget.currentWidget()
         if not page.isAncestorOf(window.erase_flash_btn):
             errors.append(f"opening the result went to tab {window.tab_widget.currentIndex()}")
-        if "palette(highlight)" not in window.erase_flash_btn.styleSheet():
+        flashes = [f for f in window.erase_flash_btn.parentWidget().findChildren(search.Flash)
+                   if f.geometry().contains(window.erase_flash_btn.geometry())]
+        if not flashes or not flashes[0].isVisible():
             errors.append("the result wasn't highlighted")
+        end = time.time() + search.FLASH_MS / 1000 + 1
+        while time.time() < end and window.erase_flash_btn.parentWidget().findChildren(search.Flash):
+            app.processEvents()
+            time.sleep(0.02)
+        if window.erase_flash_btn.parentWidget().findChildren(search.Flash):
+            errors.append("the highlight didn't go away")
         if ran:
             errors.append(f"opening a search result ran {ran}")
     finally:
