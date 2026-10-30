@@ -1303,3 +1303,36 @@ def start_production_line(gui):
         return
     gui.line_results.clear()
     gui.production.start(firmware, gui.line_verify.isChecked())
+
+
+def create_history_tab(gui):
+    """Past flashes, newest first, with a way to flash one again."""
+    widget = QWidget()
+    layout = QVBoxLayout(widget)
+    table = QTableWidget()
+    table.setColumnCount(5)
+    table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+    table.verticalHeader().setVisible(False)
+    header = table.horizontalHeader()
+    for column in (0, 1, 3, 4):
+        header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+    header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+    table.cellDoubleClicked.connect(safe_slot(lambda row, col: gui.flash_again()))
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    table.customContextMenuRequested.connect(safe_slot(gui.show_history_menu))
+
+    buttons = QHBoxLayout()
+    again_btn = QPushButton()
+    again_btn.setProperty("class", "primary")
+    again_btn.clicked.connect(safe_slot(lambda: gui.flash_again()))
+    clear_btn = QPushButton()
+    clear_btn.clicked.connect(safe_slot(lambda: gui.clear_history()))
+    buttons.addWidget(again_btn)
+    buttons.addStretch()
+    buttons.addWidget(clear_btn)
+
+    layout.addWidget(table, 1)
+    layout.addLayout(buttons)
+    return widget, {'table': table, 'again_btn': again_btn, 'clear_btn': clear_btn}
