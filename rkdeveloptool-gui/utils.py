@@ -110,7 +110,8 @@ def rkdeveloptool_version(path):
 
 # Chip ID mapping (common Rockchip IDs)
 CHIP_ID_MAP = {
-    "0x330A": "RK3588",
+    "0x330A": "RK3368",
+    "0x330C": "RK3399",
     "0x3588": "RK3588",
     "0x3568": "RK3568",
     "0x3566": "RK3566",
@@ -122,11 +123,21 @@ CHIP_ID_MAP = {
     "0x3066": "RK3066",
 }
 
-ASCII_CHIP_MAP = {
-    "6753": "RK3576",
-    "330A": "RK3588",
-    "3368": "RK3368",
-    "3399": "RK3399",
+# Older chips report an internal number instead of the product's. These
+# pairs come from the [CHIP_NAME] in each chip's RKBOOT ini in rkbin.
+INTERNAL_CHIP_NAMES = {
+    "330A": "RK3368",
+    "330B": "RK3366",
+    "330C": "RK3399",
+    "322H": "RK3328",
+    "322A": "RK322X",
+    "320A": "RK3288",
+    "312A": "RK3128",
+    "303A": "RK3036",
+    "180A": "RK1808",
+    "350F": "RK3506",
+    "351A": "RK3572",
+    "351B": "RK3538",
 }
 
 # Flash ID mapping (common manufacturers)
@@ -174,7 +185,7 @@ def parse_chip_info(chip_text):
     Handles multiple formats:
     - rkdeveloptool rci output: "Chip Info: 36 37 35 33 ..." (hex ASCII bytes,
       little-endian) -> "6753" reversed -> "RK3576"
-    - Hex IDs: "0x330A" -> "RK3588"
+    - Hex IDs: "0x330A" -> "RK3368"
     - Direct names: "RK3399" -> "RK3399"
     """
     if not chip_text:
@@ -193,16 +204,16 @@ def parse_chip_info(chip_text):
             raw = "".join(chr(int(b, 16)) for b in byte_parts[:4])
         except ValueError:
             raw = ""
-        if raw in ASCII_CHIP_MAP:
-            return ASCII_CHIP_MAP[raw]
-        number = raw[::-1]
-        if re.fullmatch(r'[0-9A-Za-z]{4}', number):
-            return f"RK{number.upper()}"
+        number = raw[::-1].upper()
+        if number in INTERNAL_CHIP_NAMES:
+            return INTERNAL_CHIP_NAMES[number]
+        if re.fullmatch(r'[0-9A-Z]{4}', number):
+            return f"RK{number}"
 
     # Try to extract chip ID in hex format
     match = re.search(r'0x[0-9A-Fa-f]+', chip_text)
     if match:
-        chip_id = match.group(0).upper()
+        chip_id = "0x" + match.group(0)[2:].upper()
         if chip_id in CHIP_ID_MAP:
             return CHIP_ID_MAP[chip_id]
 
@@ -212,6 +223,46 @@ def parse_chip_info(chip_text):
             return chip_name
 
     return chip_text
+
+
+def flash_capacity_bytes(rfi_text):
+    """Storage size in bytes from `rkdeveloptool rfi` output, or None.
+
+    rfi prints the size twice, "Flash Size: 29824 MB" and "Flash Size:
+    61079552 Sectors"; the sector count is exact, the MB figure rounded.
+    """
+    text = rfi_text or ""
+    match = re.search(r'Flash\s+Size\s*:\s*(\d+)\s*Sectors', text, re.I)
+    if match:
+        return int(match.group(1)) * 512
+    match = re.search(r'Flash\s+Size\s*:\s*([0-9.]+)\s*(MB|GB)', text, re.I)
+    if match:
+        return int(float(match.group(1)) * 1024 ** (3 if match.group(2).upper() == 'GB' else 2))
+    return None
+
+
+# The chip behind a Rockchip USB product ID in Maskrom, where rci can't
+# answer until a Loader runs. From rkdeveloptool's 99-rk-rockusb.rules, plus
+# 0x350b (RK3588, Radxa's and MNT's Maskrom docs) and 0x350e (an RK3576
+# seen here). 0x350a is listed as RK3566; the RK3568 shares it and its Loader.
+MASKROM_PID_CHIP = {
+    0x301A: "RK3036",
+    0x310C: "RK3128",
+    0x320B: "RK3229",
+    0x320A: "RK3288",
+    0x320C: "RK3328",
+    0x330A: "RK3368",
+    0x330C: "RK3399",
+    0x350A: "RK3568",
+    0x350B: "RK3588",
+    0x350E: "RK3576",
+}
+
+
+def chip_from_device(device_line):
+    """The chip for an `rkdeveloptool ld` line ("... Pid=0x350e ..."), or None."""
+    match = re.search(r'Pid=0x([0-9A-Fa-f]{4})', device_line or "")
+    return MASKROM_PID_CHIP.get(int(match.group(1), 16)) if match else None
 
 
 def parse_flash_info(flash_text):
