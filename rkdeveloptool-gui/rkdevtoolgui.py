@@ -21,7 +21,9 @@ import warnings
 if "__compiled__" in globals():
     warnings.simplefilter("ignore")
 
-from PySide6.QtCore import Qt, QTimer, QUrl, QEvent
+from PySide6.QtCore import (
+    QCoreApplication, QEvent, QLibraryInfo, Qt, QTimer, QTranslator, QUrl,
+)
 from PySide6.QtGui import (
     QFont, QFontDatabase, QIcon, QDesktopServices, QAction, QKeySequence, QShortcut
 )
@@ -129,6 +131,32 @@ class TranslationManager:
         else:
             self.auto_mode = False
             self.lang = lang
+        self._apply_qt_translation()
+
+    # Qt's own strings (Yes/No/Cancel on message boxes, Qt's dialogs) come
+    # from its .qm files, not from TRANSLATIONS. The packaged app carries
+    # its copy in qt_translations (build_nuitka.py); a pip install has
+    # PySide6's.
+    QT_TRANSLATIONS = {"zh": "qtbase_zh_CN"}
+    _qt_translator = None
+
+    def _apply_qt_translation(self):
+        app = QCoreApplication.instance()
+        if app is None:
+            return
+        if TranslationManager._qt_translator is not None:
+            app.removeTranslator(TranslationManager._qt_translator)
+            TranslationManager._qt_translator = None
+        name = self.QT_TRANSLATIONS.get(self.lang)
+        if not name:
+            return
+        translator = QTranslator(app)
+        for folder in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "qt_translations"),
+                       QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+            if translator.load(name, folder):
+                app.installTranslator(translator)
+                TranslationManager._qt_translator = translator
+                return
 
     def tr(self, key):
         """Returns the translated string for a given key."""
@@ -145,6 +173,7 @@ class TranslationManager:
         else:
             return
 
+        self._apply_qt_translation()
         if self.settings is not None:
             self.settings.set(app_settings.KEY_LANGUAGE, lang)
 

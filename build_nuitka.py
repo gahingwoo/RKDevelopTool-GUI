@@ -167,6 +167,18 @@ def build_with_nuitka():
         if os.path.isdir(assets_dir) and os.listdir(assets_dir):
             cmd.append(f"--include-data-dir={assets_dir}=rkdeveloptool_gui/assets")
 
+        # Qt's own Chinese strings (Yes/No/Cancel and Qt's dialogs); Nuitka
+        # leaves PySide6's translations out. Read at run time from
+        # rkdeveloptool_gui/qt_translations.
+        from PySide6.QtCore import QLibraryInfo
+        qt_translations = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        for name in ("qtbase_zh_CN.qm",):
+            source = os.path.join(qt_translations, name)
+            if os.path.isfile(source):
+                cmd.append(f"--include-data-files={source}=rkdeveloptool_gui/qt_translations/{name}")
+            else:
+                print(f"Warning: {source} not found; dialog buttons stay in English")
+
         # Compile the thin launcher; --follow-imports pulls in the staged
         # rkdeveloptool_gui package with its relative imports intact.
         cmd.append(entry_script)
