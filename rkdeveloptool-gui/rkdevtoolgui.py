@@ -857,8 +857,6 @@ class RKDevToolGUI(QMainWindow):
     # Disconnect during a write
     # Commands that change what's on the storage: losing the device during
     # one can leave it partly written.
-    # Commands that may legitimately print nothing for a long time.
-    _SILENT_KEYS = {"erase_flash", "erasing_all_storage"}
     _WRITE_KEYS = {"burning", "erase_flash", "erase_partition", "erasing_all_storage", "importing_gpt",
                    "writing_idb"}
     # Polls (2 s apart) without the device before it counts as gone: a full
@@ -1122,11 +1120,8 @@ class RKDevToolGUI(QMainWindow):
             self.equiv_command_field.setText(' '.join(str(c) for c in cmd))
 
         self.command_worker = CommandWorker(cmd, description_key, self.manager)
-        # `ef` prints nothing until the whole storage is erased; everything
-        # else reports progress or finishes quickly.
-        if description_key not in self._SILENT_KEYS:
-            self.command_worker.idle_timeout = self.settings.get_int(
-                app_settings.KEY_IDLE_TIMEOUT, app_settings.DEFAULT_IDLE_TIMEOUT_S)
+        self.command_worker.idle_timeout = self.settings.get_int(
+            app_settings.KEY_IDLE_TIMEOUT, app_settings.DEFAULT_IDLE_TIMEOUT_S)
         self._command_active = True
         self._cancel_requested = False
         self._lost_during_write = False

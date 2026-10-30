@@ -339,6 +339,10 @@ class CommandWorker(QThread):
     
     def _extract_progress(self, text):
         """Extract progress percentage from text"""
+        # ef: "Erase Flash total 61079552, current 262144" (sectors).
+        match = re.search(r'total (\d+), current (\d+)', text)
+        if match and int(match.group(1)):
+            return min(int(match.group(2)) * 100 // int(match.group(1)), 99)
         match = re.search(r'(\d+)%', text)
         if match:
             try:

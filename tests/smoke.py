@@ -1657,7 +1657,7 @@ def check_flash_options(app):
     """The Parameter tab's options take effect: verify shares the burn
     confirmation's setting, erase runs ef before a whole image, reset runs
     rd after it, retries set how often a full-flash step is retried, and
-    the timeout reaches the command worker (except for ef)."""
+    the timeout reaches the command worker."""
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QMessageBox
 
@@ -1729,19 +1729,20 @@ def check_flash_options(app):
             window.erase_before_burn.setChecked(False)
             window.verify_after_burn.setChecked(False)
 
-        # The timeout reaches the worker; ef has none.
+        # The timeout reaches the worker.
         window.command_worker = None
         window.run_command([RKTOOL, "ld"], "reading_flash_info")
         timed = window.command_worker.idle_timeout
         window.command_worker.wait(5000)
         app.processEvents()
-        window.command_worker = None
-        window.run_command([RKTOOL, "ld"], "erase_flash")
-        silent = window.command_worker.idle_timeout
-        window.command_worker.wait(5000)
-        app.processEvents()
-        if (timed, silent) != (45, None):
-            errors.append(f"idle timeout {timed} for rfi and {silent} for ef")
+        if timed != 45:
+            errors.append(f"idle timeout {timed}, want 45")
+
+        # ef reports "total N, current M" (sectors): that is its progress.
+        from rkdeveloptool_gui.workers import CommandWorker
+        worker = CommandWorker(["ef"], "erase_flash", window.manager)
+        if worker._extract_progress("Erase Flash total 61079552, current 30539776") != 50:
+            errors.append("ef's progress lines aren't read as progress")
     finally:
         s.set(app_settings.KEY_IDLE_TIMEOUT, str(app_settings.DEFAULT_IDLE_TIMEOUT_S))
         s.set(app_settings.KEY_STEP_RETRIES, str(app_settings.DEFAULT_STEP_RETRIES))
