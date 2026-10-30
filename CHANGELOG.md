@@ -43,6 +43,7 @@ Releases before 5.5.0 are listed on the GitHub releases page.
 - Dialog titles, the `update.img` details and the Yes/No buttons are translated in the Chinese UI.
 - Buttons whose name doesn't say what they do, or what they risk, have tooltips. Status colours suit light and dark themes. Ctrl+1…9 switch tabs.
 - At the default window size, every tab fits beside the left panel again.
+- With the theme on Auto, the app no longer restyles the whole window every 2 seconds; it does so only when the system's theme changes.
 
 **Full Changelog**: https://github.com/gahingwoo/RKDevelopTool-GUI/compare/5.6.1...5.7.0
 
