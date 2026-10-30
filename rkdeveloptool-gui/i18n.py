@@ -278,6 +278,30 @@ TRANSLATIONS = {
         "pf_capacity_fits": "容量：需要 {}，存储共 {}",
         "pf_capacity_too_big": "容量：需要 {}，但存储只有 {}，放不下",
         "pf_blocked": "有检查未通过，不能开始烧录。",
+        # First-run wizard
+        "wizard_title": "新手向导",
+        "wizard_next": "下一步",
+        "wizard_back": "上一步",
+        "wizard_finish": "开始使用",
+        "wizard_skip": "跳过",
+        "wizard_reopen": "重新打开新手向导",
+        "wizard_check_title": "检查环境",
+        "wizard_check_intro": "刷机需要 rkdeveloptool，Linux 上还需要访问 USB 设备的权限。",
+        "wizard_tool_ok": "已找到 rkdeveloptool {}",
+        "wizard_tool_missing": "找不到可用的 rkdeveloptool（{}）。可以在设置里指定它的位置，或者按 README 安装。",
+        "wizard_usb_ok": "已有 Rockchip 设备的 udev 规则",
+        "wizard_usb_missing": "还没有 Rockchip 设备的 udev 规则，普通用户可能打不开开发板。在终端运行下面这条命令（需要 sudo）：",
+        "wizard_look_title": "语言和外观",
+        "wizard_look_note": "马上生效，之后也可以在设置或状态栏里改。",
+        "wizard_start_title": "刷机怎么走",
+        "wizard_start_html": (
+            "<ol>"
+            "<li>让开发板进入 Maskrom 或 Loader 模式，用 USB 线连到电脑。{maskrom}</li>"
+            "<li>状态栏显示找到设备后，在“固件下载”页选择镜像（update.img、.img、.img.xz 都可以），点“开始一键烧录”。</li>"
+            "<li>刷完会自动重启开发板。刷过的镜像记在“烧录历史”页，可以一键重刷。</li>"
+            "</ol>{search}"),
+        "wizard_search_tip": "<p>找不到某个功能？按 <b>Ctrl+K</b>（macOS 上是 <b>⌘K</b>）搜索。</p>",
+        "wizard_maskrom_link": "<a href=\"maskrom\">怎么进 Maskrom？</a>",
         "settings_title": "设置",
         "settings_menu": "设置…",
         "help_menu": "帮助",
@@ -929,6 +953,32 @@ TRANSLATIONS = {
         "pf_capacity_fits": "Capacity: needs {} of {}",
         "pf_capacity_too_big": "Capacity: needs {} but the storage is only {}; it won't fit",
         "pf_blocked": "A check failed, so the write can't start.",
+        # First-run wizard
+        "wizard_title": "Getting Started",
+        "wizard_next": "Next",
+        "wizard_back": "Back",
+        "wizard_finish": "Start",
+        "wizard_skip": "Skip",
+        "wizard_reopen": "Show the Getting Started Guide",
+        "wizard_check_title": "Setup Check",
+        "wizard_check_intro": "Flashing needs rkdeveloptool and, on Linux, permission to open the board's USB device.",
+        "wizard_tool_ok": "Found rkdeveloptool {}",
+        "wizard_tool_missing": "No working rkdeveloptool ({}). Point to it in Settings, or install it as the README describes.",
+        "wizard_usb_ok": "A udev rule for Rockchip devices is installed",
+        "wizard_usb_missing": "No udev rule for Rockchip devices yet, so a normal user may not be able to open the board. Run this in a terminal (needs sudo):",
+        "wizard_look_title": "Language and Look",
+        "wizard_look_note": "Applies right away. You can change it later in Settings or the status bar.",
+        "wizard_start_title": "How a Flash Goes",
+        "wizard_start_html": (
+            "<ol>"
+            "<li>Put the board into Maskrom or Loader mode and connect it over USB. {maskrom}</li>"
+            "<li>When the status bar shows the device, pick an image on the Firmware Download tab "
+            "(update.img, .img and .img.xz all work) and press Start One-Click Burn.</li>"
+            "<li>The board restarts when it's done. Flashed images are kept on the History tab, "
+            "ready to flash again.</li>"
+            "</ol>{search}"),
+        "wizard_search_tip": "<p>Can't find something? Press <b>Ctrl+K</b> (<b>⌘K</b> on macOS) to search.</p>",
+        "wizard_maskrom_link": "<a href=\"maskrom\">How do I enter Maskrom?</a>",
         "settings_title": "Settings",
         "settings_menu": "Settings…",
         "help_menu": "Help",

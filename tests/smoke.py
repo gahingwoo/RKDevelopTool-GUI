@@ -41,6 +41,8 @@ os.environ["HOME"] = _tmp
 # No network in CI: the startup update check reads this (missing) file and
 # fails quietly; check_updates() points it at real JSON.
 os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + os.path.join(_tmp, "none.json")
+# Test windows come and go; check_first_run_wizard opens the wizard itself.
+os.environ["RKDEVELOPTOOL_GUI_NO_WIZARD"] = "1"
 
 errors = []
 
@@ -2559,6 +2561,55 @@ def check_flash_history(app):
         app.processEvents()
 
 
+def check_first_run_wizard(app):
+    """The wizard opens on the first run only, reports the stub tool,
+    switches the language live, and Settings can bring it back."""
+    from rkdeveloptool_gui import wizard
+
+    settings = AppSettings()
+    settings.set(app_settings.KEY_FIRST_RUN_DONE, "0")
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=settings), settings=settings)
+    window.stop_device_detection()
+    del os.environ[wizard.NO_WIZARD_ENV]
+    try:
+        shown = wizard.maybe_show(window)
+        if shown is None:
+            errors.append("the wizard didn't open on the first run")
+            return
+        app.processEvents()
+        lines = [line.text() for line, *_ in shown.check_lines]
+        if not lines or "rkdeveloptool" not in lines[0] or "✗" in lines[0]:
+            errors.append(f"wizard setup check: {lines}")
+        if sys.platform.startswith("linux") and len(lines) != 2:
+            errors.append("the wizard didn't check USB access on Linux")
+        if shown.button(shown.WizardButton.CancelButton).text() != "Skip":
+            errors.append("wizard buttons aren't translated")
+        shown.language.setCurrentIndex(shown.language.findData("zh"))
+        app.processEvents()
+        if window.manager.lang != "zh" or shown.windowTitle() != window.tr("wizard_title") \
+                or shown.button(shown.WizardButton.CancelButton).text() != "跳过":
+            errors.append("the wizard's language picker didn't switch the language live")
+        shown.language.setCurrentIndex(shown.language.findData("en"))
+        app.processEvents()
+        text = shown.start_text.text()
+        if "{" in text or "Firmware Download" not in text:
+            errors.append(f"wizard start page: {text!r}")
+        shown.reject()
+        app.processEvents()
+        if not settings.get_flag(app_settings.KEY_FIRST_RUN_DONE):
+            errors.append("skipping the wizard didn't mark the first run done")
+        if wizard.maybe_show(window) is not None:
+            errors.append("the wizard opened again after the first run")
+        again = wizard.show(window)
+        again.accept()
+        app.processEvents()
+    finally:
+        os.environ[wizard.NO_WIZARD_ENV] = "1"
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -2585,6 +2636,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_first_run_wizard(app)
     check_flash_history(app)
     check_tooltips_colors_shortcuts(app)
     check_translations_and_sizes(app)
