@@ -41,7 +41,13 @@ RKDevelopTool GUI 是 Rockchip rkdeveloptool 的图形界面，适用于 Linux �
 curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
 ```
 
-它会下载适合这台电脑的最新版本，用 GitHub 公布的 SHA-256 校验后安装：macOS 上装到 `/Applications`（用这种方式不会出现「无法打开」的提示），Linux 上把 AppImage 放到 `~/.local/bin` 并加进应用菜单。想先看看脚本内容可以[打开 install.sh](install.sh)。
+它会自动识别系统，下载合适的安装包，用 GitHub 公布的 SHA-256 校验后安装：
+
+- macOS：装到 `/Applications`（用这种方式不会出现「无法打开」的提示）。
+- Debian/Ubuntu、Fedora/openSUSE：通过 apt、dnf 或 zypper 安装 `.deb` / `.rpm`（会要求输入密码），自带 udev 规则，之后不用 sudo 也能找到板子。
+- 其他 Linux，或者设置 `PACKAGE=appimage`：把 AppImage 放到 `~/.local/bin` 并加进应用菜单，不需要 root。
+
+想先看看脚本内容可以[打开 install.sh](install.sh)。
 
 ## 下载
 

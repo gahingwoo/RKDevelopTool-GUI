@@ -2,13 +2,19 @@
 # Install the latest RKDevelopTool GUI:
 #   curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
 #
-# macOS: the .app goes to /Applications (~/Applications if that isn't
-# writable). Files curl downloads aren't quarantined, so the first launch
-# isn't blocked by Gatekeeper the way a DMG opened from a browser is.
-# Linux: the AppImage goes to ~/.local/bin, with a launcher menu entry.
+# It picks the package for the system:
+# - macOS: the .app goes to /Applications (~/Applications if that isn't
+#   writable). Files curl downloads aren't quarantined, so the first launch
+#   isn't blocked by Gatekeeper the way a DMG opened from a browser is.
+# - Debian/Ubuntu (apt) and Fedora/openSUSE (dnf/zypper): the .deb or .rpm,
+#   installed with sudo; it brings the udev rule, so the board shows up
+#   without sudo afterwards.
+# - Any other Linux, or without sudo: the AppImage, in ~/.local/bin with a
+#   launcher menu entry.
 #
 # The download is checked against the SHA-256 digest GitHub publishes for
-# the release asset. INSTALL_DIR overrides where it goes.
+# the release asset. PACKAGE=appimage|deb|rpm overrides the choice on Linux;
+# INSTALL_DIR overrides where the .app or AppImage goes.
 set -eu
 
 REPO="gahingwoo/RKDevelopTool-GUI"
@@ -23,12 +29,35 @@ trap 'rm -rf "$tmp"' EXIT
 
 os=$(uname -s)
 arch=$(uname -m)
-case "$os/$arch" in
-  Darwin/arm64)          pattern='-arm64\.dmg$' ;;
-  Darwin/x86_64)         pattern='-x86_64\.dmg$' ;;
-  Linux/x86_64)          pattern='-x86_64\.AppImage$' ;;
-  Linux/aarch64|Linux/arm64) pattern='-aarch64\.AppImage$' ;;
+case "$arch" in
+  x86_64|amd64) arch=x86_64 ;;
+  aarch64|arm64) arch=arm64 ;;
   *) die "no package for $os $arch; see https://github.com/$REPO/releases" ;;
+esac
+
+# Root commands: directly as root, through sudo otherwise.
+if [ "$(id -u)" = 0 ]; then as_root=""; elif command -v sudo >/dev/null; then as_root="sudo"; else as_root="none"; fi
+
+kind=${PACKAGE:-}
+if [ "$os" = Darwin ]; then
+  kind=dmg
+elif [ "$os" = Linux ] && [ -z "$kind" ]; then
+  if [ "$as_root" != none ] && command -v apt-get >/dev/null; then kind=deb
+  elif [ "$as_root" != none ] && { command -v dnf >/dev/null || command -v zypper >/dev/null; }; then kind=rpm
+  else kind=appimage; fi
+elif [ "$os" != Linux ]; then
+  die "no package for $os; see https://github.com/$REPO/releases"
+fi
+case "$kind/$arch" in
+  dmg/arm64)         pattern='-arm64\.dmg$' ;;
+  dmg/x86_64)        pattern='-x86_64\.dmg$' ;;
+  appimage/x86_64)   pattern='-x86_64\.AppImage$' ;;
+  appimage/arm64)    pattern='-aarch64\.AppImage$' ;;
+  deb/x86_64)        pattern='_amd64\.deb$' ;;
+  deb/arm64)         pattern='_arm64\.deb$' ;;
+  rpm/x86_64)        pattern='\.x86_64\.rpm$' ;;
+  rpm/arm64)         pattern='\.aarch64\.rpm$' ;;
+  *) die "unknown PACKAGE=$kind (use appimage, deb or rpm)" ;;
 esac
 
 say "Looking up the latest release..."
@@ -74,6 +103,17 @@ if [ "$os" = Darwin ]; then
   xattr -dr com.apple.quarantine "$dest/$app" 2>/dev/null || true
   say "Installed $dest/$app"
   [ -n "${NO_LAUNCH:-}" ] || open "$dest/$app"
+elif [ "$kind" = deb ] || [ "$kind" = rpm ]; then
+  [ "$as_root" != none ] || die "installing a .$kind needs root or sudo (PACKAGE=appimage needs neither)"
+  say "Installing with the package manager (it may ask for your password)..."
+  if [ "$kind" = deb ]; then
+    $as_root apt-get install -y "$tmp/$name"
+  elif command -v dnf >/dev/null; then
+    $as_root dnf install -y "$tmp/$name"
+  else
+    $as_root zypper --non-interactive install --allow-unsigned-rpm "$tmp/$name"
+  fi
+  say "Installed. Start it from your applications menu or run: rkdeveloptool-gui"
 else
   dest=${INSTALL_DIR:-$HOME/.local/bin}
   mkdir -p "$dest"

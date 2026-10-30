@@ -41,11 +41,17 @@ RKDevelopTool GUI is a graphical front-end for Rockchip's rkdeveloptool, for Lin
 curl -fsSL https://raw.githubusercontent.com/gahingwoo/RKDevelopTool-GUI/main/install.sh | sh
 ```
 
-It downloads the latest release for your machine, checks it against the
-SHA-256 checksum GitHub publishes, and installs it: the app into
-`/Applications` on macOS (no "cannot be opened" prompt this way), the AppImage
-into `~/.local/bin` with a menu entry on Linux. [Read the script](install.sh)
-first if you like.
+It picks the right package for your system, checks it against the SHA-256
+checksum GitHub publishes, and installs it:
+
+- macOS: the app into `/Applications` (no "cannot be opened" prompt this way).
+- Debian/Ubuntu, Fedora/openSUSE: the `.deb` or `.rpm` through apt, dnf or
+  zypper (asks for your password); it includes the udev rule, so the board
+  shows up without sudo.
+- Other Linux, or with `PACKAGE=appimage`: the AppImage into `~/.local/bin`
+  with a menu entry, no root needed.
+
+[Read the script](install.sh) first if you like.
 
 ## Download
 
