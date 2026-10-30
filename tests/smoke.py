@@ -14,6 +14,7 @@ wrong answer, or settings / manual commands that don't take effect.
 
     pip install . && python tests/smoke.py
 """
+import faulthandler
 import os
 import stat
 import sys
@@ -3128,7 +3129,26 @@ def run_window(app, lang):
     app.processEvents()
 
 
+def _timed(check):
+    """Log each check and how long it took to stderr, which CI shows as it
+    happens (stdout is buffered until the end)."""
+    def run(*args):
+        start = time.monotonic()
+        try:
+            return check(*args)
+        finally:
+            print(f"[smoke] {check.__name__} {time.monotonic() - start:.1f}s", file=sys.stderr, flush=True)
+    run.__name__ = check.__name__
+    return run
+
+
 def main():
+    # CI stops the job at 15 minutes with no clue where it hung: dump every
+    # thread's stack before that and exit.
+    faulthandler.dump_traceback_later(13 * 60, exit=True)
+    for name, value in list(globals().items()):
+        if name.startswith("check_") and callable(value):
+            globals()[name] = _timed(value)
     app = QApplication(sys.argv)
     app.setOrganizationName(app_settings.ORGANIZATION)
     app.setApplicationName(app_settings.APPLICATION)
