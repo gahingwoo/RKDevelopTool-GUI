@@ -3093,6 +3093,27 @@ def check_partition_backup(app):
         app.processEvents()
 
 
+def check_qt_translation(app):
+    """Qt's own buttons (Yes/No) follow the language: they come from Qt's
+    .qm files, which the Chinese UI used to leave in English."""
+    from PySide6.QtWidgets import QMessageBox
+
+    def yes_text():
+        box = QMessageBox()
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        text = box.button(QMessageBox.StandardButton.Yes).text().replace("&", "")
+        box.deleteLater()
+        return text
+
+    settings = AppSettings()
+    manager = TranslationManager(lang="zh", settings=settings)
+    zh = yes_text()
+    manager.set_language("en")
+    en = yes_text()
+    if zh == en or "是" not in zh:
+        errors.append(f"Qt's Yes button in Chinese reads {zh!r} (English {en!r})")
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -3119,6 +3140,7 @@ def main():
         errors.append("app icon is empty: assets/icons missing from the installed package")
 
     check_translations()
+    check_qt_translation(app)
     check_partition_backup(app)
     check_first_run_wizard(app)
     check_maskrom_help(app)
