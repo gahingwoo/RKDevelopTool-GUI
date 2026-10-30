@@ -184,6 +184,14 @@ def update_upgrade_tab_texts(gui):
 def update_advanced_tab_texts(gui):
     """Update advanced tab texts"""
     gui.tab_widget.setTabText(5, gui.tr("advanced_tab"))
+    if hasattr(gui, 'history_tab'):
+        gui.tab_widget.setTabText(gui.tab_widget.indexOf(gui.history_tab), gui.tr("history_tab"))
+        gui.history_table.setHorizontalHeaderLabels([
+            gui.tr("history_time"), gui.tr("chip"), gui.tr("history_image"),
+            gui.tr("history_result"), gui.tr("history_duration")])
+        gui.history_again_btn.setText(gui.tr("history_again"))
+        gui.history_clear_btn.setText(gui.tr("history_clear"))
+        gui.refresh_history()
 
     gui.flash_ops_group.setTitle(gui.tr("flash_ops_group"))
 
