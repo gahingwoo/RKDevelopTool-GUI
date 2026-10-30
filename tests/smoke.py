@@ -41,6 +41,8 @@ os.environ["HOME"] = _tmp
 # No network in CI: the startup update check reads this (missing) file and
 # fails quietly; check_updates() points it at real JSON.
 os.environ["RKDEVELOPTOOL_GUI_UPDATE_URL"] = "file://" + os.path.join(_tmp, "none.json")
+# Test windows come and go; check_first_run_wizard opens the wizard itself.
+os.environ["RKDEVELOPTOOL_GUI_NO_WIZARD"] = "1"
 
 errors = []
 
