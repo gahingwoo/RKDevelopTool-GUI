@@ -1384,6 +1384,10 @@ def check_chip_and_device_lock(app):
 
     for text, want in (("Chip Info:  36 37 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3576"),  # a real RK3576
                        ("Chip Info: 38 38 35 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3588"),
+                       # "330A" and "330C" are RK3368's and RK3399's numbers.
+                       ("Chip Info: 41 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3368"),
+                       ("Chip Info: 43 30 33 33 0 0 0 0 0 0 0 0 0 0 0 0", "RK3399"),
+                       ("0x330A", "RK3368"),
                        ("36 37 35 33 0 0", "RK3576"),
                        ("RK3399", "RK3399"),
                        ("", "Unknown Chip")):
@@ -1623,20 +1627,31 @@ def check_fetch_loader(app):
     os.environ[loader_fetch.URL_ENV] = "file://" + rkbin + "/"
     real_cache = ops.loader_cache_dir
     ops.loader_cache_dir = lambda: cache
+    from PySide6.QtWidgets import QMessageBox
+
     window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
                           settings=AppSettings())
     window.stop_device_detection()
+    # A board in Maskrom without chip info gets the "load a Loader?" hint.
+    real_exec = QMessageBox.exec
+    QMessageBox.exec = lambda self: QMessageBox.StandardButton.No
     try:
         window.update_device_status()
         if window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader is enabled with no board connected")
+        # In Maskrom before a Loader runs rci can't answer: the USB ID tells.
         window.on_device_found(["DevNo=1\tVid=0x2207,Pid=0x350e,LocationID=101\tMaskrom"],
-                               "Maskrom", "Chip Info: 36 37 35 33 0 0 0 0")
+                               "Maskrom", "unknown_chip")
         if not window.fetch_loader_btn.isEnabled():
-            errors.append("Get Loader is disabled for a recognised RK3576")
+            errors.append("Get Loader is disabled for an RK3576 known only by its USB ID")
+        if "RK3576" not in window.chip_info_label.text():
+            errors.append(f"chip shown as {window.chip_info_label.text()!r} for Pid 0x350e")
         window.loader_path.setText("")
         window.fetch_loader_btn.click()
-        worker = window._loader_fetch_worker
+        worker = getattr(window, '_loader_fetch_worker', None)
+        if worker is None:
+            errors.append("Get Loader didn't start")
+            return
         worker.wait(10000)
         for _ in range(20):
             app.processEvents()
@@ -1646,6 +1661,7 @@ def check_fetch_loader(app):
         if not window.fetch_loader_btn.isEnabled():
             errors.append("Get Loader stays disabled after it finished")
     finally:
+        QMessageBox.exec = real_exec
         del os.environ[loader_fetch.URL_ENV]
         ops.loader_cache_dir = real_cache
         window.cleanup()
@@ -1688,6 +1704,69 @@ def check_rfi_capacity(app):
         errors.append(f"capacity {first}, then cached {second}, {len(calls)} rfi call(s)")
 
 
+def check_idb_command():
+    """A NEWIDB Loader goes into the boot area as a verified bootloader
+    image at sector 0x40 (ul writes it in a layout an RK3576 rejects); an
+    old-format Loader still uses ul."""
+    import importlib.util
+    import time as _time
+
+    from rkdeveloptool_gui import operations as ops
+
+    spec = importlib.util.spec_from_file_location(
+        "loader_tests", os.path.join(os.path.dirname(os.path.abspath(__file__)), "loader_merge.py"))
+    source = open(spec.origin).read().split("\ncheck_new()\n")[0]
+    scope = {"__name__": "loader_tests"}
+    exec(compile(source, spec.origin, "exec"), scope)
+    lm = scope["loader_merge"]
+    work = tempfile.mkdtemp(dir=_tmp)
+    new = os.path.join(work, "new.bin")
+    old = os.path.join(work, "old.bin")
+    with open(new, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["NEW_INI"]), scope["NEW_BLOBS"].__getitem__, _time.localtime()))
+    with open(old, "wb") as f:
+        f.write(lm.merge(lm.parse_ini(scope["OLD_INI"]), scope["OLD_BLOBS"].__getitem__, _time.localtime()))
+    cmd = ops.loader_to_flash_command(new, work)
+    if cmd[1:3] != ["wl", "0x40"] or not os.path.isfile(cmd[3]):
+        errors.append(f"NEWIDB Loader written with {cmd}")
+    if ops.loader_to_flash_command(old, work)[1:] != ["ul", old]:
+        errors.append("an old-format Loader isn't written with ul")
+
+
+def check_command_chain(app):
+    """A callback that starts the next command right away (its worker
+    already gone) keeps that command's callback, and the window stays busy
+    while it runs."""
+    window = RKDevToolGUI(TranslationManager(lang="en", settings=AppSettings()),
+                          settings=AppSettings())
+    window.stop_device_detection()
+    seen = []
+
+    def second(success, output):
+        seen.append("second")
+
+    def first(success, output):
+        seen.append("first")
+        window.command_worker.wait(5000)       # the worker has exited
+        window.run_command([RKTOOL, "rfi"], "reading_flash_info", second)
+        seen.append(("busy", window._command_active))
+
+    try:
+        window.run_command([RKTOOL, "ld"], "reading_flash_info", first)
+        end = time.time() + 10
+        while "second" not in seen and time.time() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        if seen[:3] != ["first", ("busy", True), "second"]:
+            errors.append(f"chained commands: {seen}")
+        if window._command_active:
+            errors.append("the window stays busy after the chain finished")
+    finally:
+        window.cleanup()
+        window.deleteLater()
+        app.processEvents()
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -1715,6 +1794,8 @@ def main():
 
     check_translations()
     check_rfi_capacity(app)
+    check_idb_command()
+    check_command_chain(app)
     check_fetch_loader(app)
     check_storage_not_switched(app)
     check_gpt_import_export(app)
