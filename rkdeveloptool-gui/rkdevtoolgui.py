@@ -1095,7 +1095,9 @@ class RKDevToolGUI(QMainWindow):
     def changeEvent(self, event):
         # A theme switch (by the app or the system) changes the palette.
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
-            QTimer.singleShot(0, safe_slot(self.apply_status_colors))
+            # With the window as context, Qt drops the call if the window is
+            # destroyed first (it touched a deleted label on Linux CI).
+            QTimer.singleShot(0, self, safe_slot(self.apply_status_colors))
         super().changeEvent(event)
 
     def _update_home_banner(self, connected, text):
