@@ -3,6 +3,14 @@
 Each release's notes come from its section here (packaging/release-notes.sh).
 Releases before 5.5.0 are listed on the GitHub releases page.
 
+## 5.7.1
+
+### Fixes
+
+- **Burn Image at 0x0 works in the Chinese UI** ([#85](https://github.com/gahingwoo/RKDevelopTool-GUI/issues/85)). The address was read from the menu's label, so "0x0 (完整固件)" sent `完整固件` to rkdeveloptool, which refused it ("Begin is invalid"). Each menu item now carries its real address. A custom address is trimmed of spaces.
+
+**Full Changelog**: https://github.com/gahingwoo/RKDevelopTool-GUI/compare/5.7.0...5.7.1
+
 ## 5.7.0
 
 ### Fixes that matter for flashing
