@@ -914,11 +914,8 @@ def create_log_panel(gui):
 
 def on_address_changed(gui):
     """Handle address combo change"""
-    text = gui.address_combo.currentText()
-    if gui.tr("custom_address") in text:
-        gui.custom_address.setEnabled(True)
-    else:
-        gui.custom_address.setEnabled(False)
+    from .ui_text_updates import CUSTOM_ADDRESS
+    gui.custom_address.setEnabled(gui.address_combo.currentData() == CUSTOM_ADDRESS)
 
 
 def change_storage(gui):

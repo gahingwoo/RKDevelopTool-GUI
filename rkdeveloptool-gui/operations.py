@@ -25,7 +25,7 @@ from .workers import (
     PartitionPPTWorker, CommandWorker, RKFWPrepWorker, FileHashWorker,
     DecompressWorker, CallWorker
 )
-from .ui_text_updates import populate_address_combo
+from .ui_text_updates import CUSTOM_ADDRESS, populate_address_combo
 
 
 def _is_sector_zero(address):
@@ -1251,13 +1251,9 @@ def burn_image(gui):
         gui.show_message("Warning", "select_image_address", "Warning")
         return
 
-    address = gui.address_combo.currentText()
-    if gui.tr("custom_address") in address:
-        address = gui.custom_address.text()
-    else:
-        match = re.search(r'\((\S+)\)', address)
-        if match:
-            address = match.group(1)
+    address = gui.address_combo.currentData()
+    if address == CUSTOM_ADDRESS:
+        address = gui.custom_address.text().strip()
 
     if not address:
         gui.show_message("Warning", "select_image_address", "Warning")

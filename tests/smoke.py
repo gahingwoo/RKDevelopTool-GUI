@@ -3160,6 +3160,43 @@ def check_theme_poll(app):
         app.processEvents()
 
 
+def check_burn_address(app):
+    """Burn Image writes at the address the combo means, in every language.
+    The Chinese full-firmware label "0x0 (完整固件)" was parsed as the
+    address "完整固件" (#85)."""
+    from rkdeveloptool_gui import operations as ops
+    from rkdeveloptool_gui.ui_text_updates import populate_address_combo
+
+    work = tempfile.mkdtemp(dir=_tmp)
+    image = os.path.join(work, "disk.img")
+    with open(image, "wb") as f:
+        f.write(b"\0" * 510 + b"\x55\xaa" + b"\0" * 1536)
+    got, real = [], ops._burn_file
+    ops._burn_file = lambda gui, path, address, build: got.append(address)
+    try:
+        for lang in ("zh", "en"):
+            window = RKDevToolGUI(TranslationManager(lang=lang, settings=AppSettings()),
+                                  settings=AppSettings())
+            window.stop_device_detection()
+            window.partitions = {"boot": {"address": "0x8000"}}
+            populate_address_combo(window)
+            window.image_path.setText(image)
+            window.custom_address.setText(" 0x4000 ")
+            got.clear()
+            for index in range(3):
+                window.address_combo.setCurrentIndex(index)
+                ops.burn_image(window)
+            if got != ["0x0", "0x4000", "0x8000"]:
+                errors.append(f"Burn Image addresses in {lang}: {got}")
+            if window.custom_address.isEnabled():
+                errors.append("the custom address field stays enabled for a partition")
+            window.cleanup()
+            window.deleteLater()
+            app.processEvents()
+    finally:
+        ops._burn_file = real
+
+
 def run_window(app, lang):
     settings = AppSettings()
     manager = TranslationManager(lang=lang, settings=settings)
@@ -3206,6 +3243,7 @@ def main():
 
     check_translations()
     check_qt_translation(app)
+    check_burn_address(app)
     check_theme_poll(app)
     check_partition_backup(app)
     check_first_run_wizard(app)

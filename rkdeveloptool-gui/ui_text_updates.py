@@ -295,6 +295,10 @@ def update_statusbar_texts(gui):
     gui.update_device_status()
 
 
+# Item data of the address combo's "custom address" entry.
+CUSTOM_ADDRESS = "custom"
+
+
 def populate_address_combo(gui):
     """Populate address combo box in download tab.
 
@@ -305,14 +309,17 @@ def populate_address_combo(gui):
     try:
         current_idx = gui.address_combo.currentIndex()
         gui.address_combo.clear()
-        gui.address_combo.addItem(gui.tr("address_full_firmware"))
-        gui.address_combo.addItem(gui.tr("custom_address"))
+        # Each item carries its address as data: the labels differ by
+        # language, and parsing them sent "完整固件" to rkdeveloptool as the
+        # address (#85).
+        gui.address_combo.addItem(gui.tr("address_full_firmware"), "0x0")
+        gui.address_combo.addItem(gui.tr("custom_address"), CUSTOM_ADDRESS)
 
         # Add parsed partitions if available
         if hasattr(gui, 'partitions') and gui.partitions:
             for name, info in gui.partitions.items():
                 addr = info.get('address', '')
-                gui.address_combo.addItem(f"{name} ({addr})")
+                gui.address_combo.addItem(f"{name} ({addr})", addr)
 
         if 0 <= current_idx < gui.address_combo.count():
             gui.address_combo.setCurrentIndex(current_idx)
